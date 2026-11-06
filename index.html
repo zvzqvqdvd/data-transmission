@@ -110,6 +110,16 @@ body {
   background:#fdecec; color:#c62828; cursor:pointer;
 }
 .member-kick:hover { background:#f9d9d9; }
+/* 已踢出名单：被挡在这个房间外面的设备，房主可逐台或一键解除 */
+#kickList { margin-top:7px; display:flex; flex-direction:column; gap:3px; }
+.kick-head {
+  display:flex; align-items:center; justify-content:center; gap:8px;
+  font-size:11px; color:#9a5b00;
+}
+.member-tag.ban { background:#fdecec; color:#c62828; }
+.member-row.kicked { opacity:.85; }
+.member-kick.undo { border-color:#bfe3cd; background:#e9f8ef; color:#0a8f4a; }
+.member-kick.undo:hover { background:#d7f0e2; }
 #qrBox { padding:10px 0 2px; }
 #qrImg {
   display:inline-block; background:#fff; padding:8px; border-radius:10px;
@@ -602,7 +612,7 @@ body.no-peer #textInput { cursor:not-allowed; }
   <div id="lanHint"></div>
   <div id="lanQrBox" style="display:none;">
     <div id="lanQrImg"></div>
-    <div class="qr-tip">同一 WiFi 下的设备扫码即开，不用输房间码</div>
+    <div class="qr-tip">同一 WiFi 下的设备扫码打开即可加入，房间码已带在链接里</div>
   </div>
 </div>
 
@@ -621,6 +631,7 @@ body.no-peer #textInput { cursor:not-allowed; }
   <div id="inviteHint"></div>
   <div id="hostHint">正在连接信令服务器…</div>
   <div id="memberList" style="display:none;"></div>
+  <div id="kickList" style="display:none;"></div>
   <div id="qrBox" style="display:none;">
     <div id="qrImg"></div>
     <div style="font-size:11px;color:#6b8a78;margin-top:7px;">扫码即可直接连接，无需手输房间码</div>
@@ -756,8 +767,9 @@ let MODE = SEED_MODE;
 let API = (SEED_MODE === 'host') ? '' : HOME_API;
 let ROOM = '';
 const PROTOCOL = 3;          // v3：一个房间允许多台设备，协议带上消息 id 与发送者
-// 邀请链接用的域名：本机页面由程序按 client_url.txt 现算；在线页留的是导出时的值，
-// 点「创建房间」时会被 /api/host 返回的 client_url 覆盖，所以换地址不用重新导出静态页
+// 邀请链接用的域名：本机页面由程序每次请求时按 client_url.txt 现填；
+// 在线页（GitHub 上那份）写的是导出那一刻的值，只能靠运行时从本机接口拿最新值覆盖，
+// 见 applyClientUrl()。所以改 client_url.txt 不用重新导出、也不用重新上传静态页。
 let CLIENT_URL = 'https://zvzqvqdvd.github.io/data-transmission/';
 let lastRev = null;
 let pollTimer = null;        // 房主端的 /messages 轮询
@@ -811,7 +823,7 @@ function showGuestTip(m) {
 function hostList() {
   const out = [];
   for (const [id, x] of hostConns) {
-    if (x && x.conn && x.conn.open) out.push({ id: id, conn: x.conn, name: x.name, ip: x.ip || '' });
+    if (x && x.conn && x.conn.open) out.push({ id: id, conn: x.conn, name: x.name, ip: x.ip || '', dev: x.dev || '' });
   }
   return out;
 }
@@ -1150,6 +1162,8 @@ async function loadMessages() {
     }
     const d=await r.json();
     if (!d.ok) return;
+    // 本机 client_url.txt 改了：这份页面（尤其是线上那份）跟着换成新地址
+    if (d.client_url) applyClientUrl(d.client_url);
     // 房间已被解散：本机页面和局域网设备都退回入口页
     if (d.closed) {
       if (!dissolving) {
@@ -1294,7 +1308,16 @@ function handleData(data, ctx) {
       const i = rest.indexOf(':');
       const v = parseInt(i < 0 ? rest : rest.slice(0, i), 10);
       if (v !== PROTOCOL) { protoMismatch(v, ctx); return; }
-      if (MODE === 'host' && ctx) registerGuest(ctx, i < 0 ? '' : rest.slice(i + 1));
+      // 尾巴是「昵称」或「昵称:设备ID」：昵称里不带冒号，末段是 16 位 hex 才算设备 ID
+      // （旧客户端只有昵称，这时 dev 为空，不做黑名单判断）
+      let tail = i < 0 ? '' : rest.slice(i + 1);
+      let dev = '';
+      const j = tail.lastIndexOf(':');
+      if (j > 0 && /^[0-9a-f]{16}$/.test(tail.slice(j + 1))) {
+        dev = tail.slice(j + 1);
+        tail = tail.slice(0, j);
+      }
+      if (MODE === 'host' && ctx) registerGuest(ctx, tail, dev);
       return;
     }
     if (data.startsWith('WELCOME:')) {
@@ -1349,18 +1372,20 @@ function handleData(data, ctx) {
       gateMsg('房主已解散房间，房间码已作废。请联系房主获取新的房间码或邀请链接。', 'info');
       return;
     }
-    // 对端主动点了「断开」：只收掉这一条连接，房间还在
+    // 对端主动点了「断开」：房主端只收掉这一条连接（房间还在）；
+    // 访客端收到就是「被房主请出房间」，房间码对它已经失效，直接退回入口页。
     if (data === 'BYE') {
       if (MODE === 'host' && ctx) {
         dropHostConnById(ctx.id, true);
-      } else {
-        peerKicked = true;
-        setConn('off');
-        setStatus('已被房主请出房间，如需再次加入请点「重连」');
-        stopScreenShare();
-        refreshReady();
-        renderAll();
+      } else if (MODE === 'guest') {
+        guestReturnToGate('你已被房主请出房间。如需再次加入，请重新输入房间码。');
       }
+      return;
+    }
+    // 房主拒绝连接：这台设备在这个房间的踢出名单里（输对房间码也进不来）
+    if (data === 'KICKED') {
+      if (MODE !== 'guest') return;
+      guestReturnToGate('你已被房主请出这个房间。房主解除之前，你无法再加入。');
       return;
     }
     if (data.startsWith('TEXT:')) {
@@ -1550,6 +1575,26 @@ async function onFileReceived(blob, name, mid, from) {
 }
 
 // ===== 房主模式：生成房间码、等待外网设备、生成邀请链接 =====
+// 把「本机此刻的在线页地址」同步到这份页面里。
+// 在线页是导出的静态文件，自己不可能知道本机改了什么，只能运行时喂：
+//   /api/host  —— 点「创建房间」时拿一次
+//   /messages  —— 房主端每 2 秒轮询，顺带带回来，改完 client_url.txt 两秒内自动生效
+// 拿到后存进 localStorage，下次刷新页（哪怕本机程序还没开）也还是新地址。
+function applyClientUrl(url) {
+  const v = String(url || '').trim();
+  if (!v) return false;
+  let saved = '';
+  try { saved = localStorage.getItem('lanshare_client_url') || ''; } catch (e) {}
+  if (v === CLIENT_URL && v === saved) return false;   // 没变就别折腾
+  CLIENT_URL = v;
+  try { localStorage.setItem('lanshare_client_url', v); } catch (e) {}
+  // 已经在房间里：不重画的话链接换了域名，二维码还是上一个地址的
+  if (ROOM && !roomClosed) {
+    try { setupInvite(ROOM); } catch (e) {}
+  }
+  return true;
+}
+
 function inviteUrl(room) {
   let base = CLIENT_URL || localStorage.getItem('lanshare_client_url') || '';
   if (!base) return '';
@@ -1645,19 +1690,28 @@ function copyLanUrl() {
   });
 }
 
+// 局域网二维码：地址后面带上房间码，扫码进来房间码已经填好，不用手输
+function lanQrUrl() {
+  let base = (lanShareUrl || LAN_URL || (location.protocol + '//' + location.host))
+    .replace(/[?#].*$/, '');
+  if (!/\/$/.test(base)) base += '/';      // http://ip:8000 → http://ip:8000/
+  return ROOM ? (base + '?room=' + encodeURIComponent(ROOM)) : base;
+}
 function toggleLanQR() {
   const box = document.getElementById('lanQrBox');
   const show = !box.style.display || box.style.display === 'none';
-  if (show && !box.dataset.done) {
-    makeQR(lanShareUrl || LAN_URL || (location.protocol + '//' + location.host), 'lanQrImg');
-    box.dataset.done = '1';
+  const url = lanQrUrl();
+  // 换过房间码就要重画，否则扫出来还是旧码
+  if (show && box.dataset.url !== url) {
+    makeQR(url, 'lanQrImg');
+    box.dataset.url = url;
   }
   box.style.display = show ? 'block' : 'none';
 }
 function setupInvite(room) {
   const url = inviteUrl(room);
   if (!url) {
-    document.getElementById('inviteHint').textContent = '未配置在线地址：在程序目录新建 client_url.txt 写入在线页面网址后重启';
+    document.getElementById('inviteHint').textContent = '未配置在线地址：在程序目录的 client_url.txt 第一行写入在线页网址，保存后刷新页面即生效';
     return;
   }
   document.getElementById('inviteLink').href = url;
@@ -1773,6 +1827,11 @@ function onRoomClosed(tip) {
   seenIds = new Set();
   pushedIds = new Set();
   relaySeeded = false;
+  // 房间没了，这个房间的踢出名单也就没意义了
+  kickedList = [];
+  kickedSet.clear();
+  const kl0 = document.getElementById('kickList');
+  if (kl0) { kl0.innerHTML = ''; kl0.style.display = 'none'; }
   document.getElementById('p2pBanner').style.display = 'none';
   const lb = document.getElementById('lanBanner');
   if (lb) lb.style.display = 'none';
@@ -1832,7 +1891,7 @@ function onKicked() {
   renderAll();
   showGate();
   if (isLanClient) showLanGate();
-  gateMsg('你已被房主请出房间。如需再次加入，请重新输入房间码。', 'err');
+  gateMsg('你已被房主请出这个房间。房主解除之前，你无法再加入。', 'err');
 }
 function startHostPeer(roomCode) {
   showHostHint('正在连接信令服务器…');
@@ -1909,9 +1968,17 @@ function startHostPeer(roomCode) {
 
 // ===== 房间成员管理（房主端）=====
 // 对方 HELLO 到了才知道怎么称呼：分配一个房间里唯一的名字并告诉它
-function registerGuest(ctx, nick) {
+function registerGuest(ctx, nick, dev) {
   const e = hostConns.get(ctx.id);
   if (!e) return;
+  e.dev = dev || '';
+  // 这个房间的踢出名单里有它：不分配名字、不进房间，直接拒掉
+  if (dev && devKicked(dev)) {
+    try { e.conn.send('KICKED'); } catch (err) {}
+    setTimeout(() => dropHostConnById(ctx.id, true), 150);
+    toast('有一台被请出的设备想重新进来，已拒绝');
+    return;
+  }
   let base = String(nick || '').trim().slice(0, 12) || ('访客' + e.seq);
   const used = new Set();
   for (const x of hostConns.values()) if (x.name) used.add(x.name);
@@ -1946,6 +2013,70 @@ function sendPeers() {
 // ===== 设备通道与 IP：外网走 PeerJS 直连，局域网走本机 HTTP =====
 let roomDevices = [];        // 后端给出的房间成员（外网由房主上报、局域网由后端记录）
 let reportedDevices = '';    // 上次上报的内容，没变就不重复发
+// 当前房间的踢出名单（房主端）：只针对这一个房间，换码/解散就是新房间、名单清空
+let kickedList = [];
+const kickedSet = new Set();
+
+function devKicked(dev) {
+  return !!(dev && kickedSet.has(dev));
+}
+
+async function loadKicked() {
+  if (MODE !== 'host' || isLanClient || roomClosed) return;
+  try {
+    const r = await fetch(API + '/api/kicked', { cache: 'no-store' });
+    const d = await r.json();
+    if (!d || !d.ok) return;
+    kickedList = d.kicked || [];
+    kickedSet.clear();
+    for (const x of kickedList) if (x.cid) kickedSet.add(x.cid);
+    renderKicked();
+  } catch (e) {}
+}
+
+// 房主端「已踢出」列表：显示谁被挡在外面，并给出「解除」
+function renderKicked() {
+  const box = document.getElementById('kickList');
+  if (!box || MODE !== 'host' || isLanClient || roomClosed) return;
+  if (!kickedList.length) { box.innerHTML = ''; box.style.display = 'none'; return; }
+  box.style.display = 'block';
+  box.innerHTML =
+    '<div class="kick-head">🚫 已踢出 ' + kickedList.length + ' 台设备 · 它们进不来这个房间' +
+      '<button class="member-kick undo" onclick="unkickAll()">全部解除</button></div>' +
+    kickedList.map(x =>
+      '<div class="member-row kicked">' +
+        '<span class="member-tag ban">已踢出</span>' +
+        '<b>' + esc(x.name || String(x.cid || '').slice(0, 6)) + '</b>' +
+        '<span class="member-ip">' + esc(x.ip || 'IP 未知') + '</span>' +
+        '<button class="member-kick undo" onclick="unkickDevice(\'' +
+          esc(String(x.cid || '').replace(/'/g, '')) + '\')">解除</button>' +
+      '</div>').join('');
+}
+
+async function unkickDevice(cid) {
+  try {
+    const r = await fetch(API + '/api/unkick', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'cid=' + encodeURIComponent(cid)
+    });
+    const d = await r.json();
+    if (!d.ok) { toast(d.msg || '解除失败'); return; }
+    toast('已解除，这台设备可以重新加入');
+    loadKicked();
+  } catch (e) { toast('解除失败'); }
+}
+
+async function unkickAll() {
+  if (!confirm('清空这个房间的踢出名单？清空后这些设备可以重新输码加入。')) return;
+  try {
+    const r = await fetch(API + '/api/kicked-clear', { method: 'POST' });
+    const d = await r.json();
+    if (!d.ok) { toast(d.msg || '操作失败'); return; }
+    toast('已清空踢出名单');
+    loadKicked();
+  } catch (e) { toast('操作失败'); }
+}
 
 // 判断一个候选地址是不是真地址（浏览器会把本地地址伪装成 xxxx.local）
 function looksLikeAddr(v) {
@@ -1997,7 +2128,7 @@ function resolvePeerIp(entry, left) {
 // 房主把「外网直连的都有谁」报给后端：名字来自对方自报，IP 来自上面的 WebRTC 读取
 function reportDevices() {
   if (MODE !== 'host' || isLanClient) return;
-  const list = hostList().map(x => ({ name: x.name || '', ip: x.ip || '' }));
+  const list = hostList().map(x => ({ name: x.name || '', ip: x.ip || '', dev: x.dev || '' }));
   const sig = JSON.stringify(list);
   if (sig === reportedDevices) return;
   reportedDevices = sig;
@@ -2090,12 +2221,16 @@ function startHostUI(fromWeb, lanUrl, lanClient) {
   roomDevices = [];
   lastDevicesSig = '';
   reportedDevices = '';
+  // 刚开/刚进的房间：踢出名单以这个房间为准，马上向本机要一份
+  kickedList = [];
+  kickedSet.clear();
   renderMembers();
   // 在线页主动「创建房间」也算合法房主；局域网设备打开本机服务则不算
   const canHostP2P = P2P_ENABLED || !!fromWeb;
   document.getElementById('guestGate').style.display = 'none';
-  // 在线页跨域拿不到管理员 cookie，齿轮留着也没用
-  if (fromWeb) document.getElementById('adminBtn').style.display = 'none';
+  // 在线页跨域拿不到管理员 cookie；局域网设备更不该有管理入口——
+  // 管理/踢人只属于「跑这个程序的那台电脑」，齿轮对它们都藏起来
+  if (fromWeb || isLanClient) document.getElementById('adminBtn').style.display = 'none';
 
   if (canHostP2P) {
     document.getElementById('p2pBanner').style.display = 'block';
@@ -2122,6 +2257,7 @@ function startHostUI(fromWeb, lanUrl, lanClient) {
   }
 
   loadMessages();
+  loadKicked();      // 这个房间的踢出名单（换码/解散后是空的）
   refreshReady();
   renderAll();
   startPolling();
@@ -2168,7 +2304,7 @@ function initGuest(room, existing) {
     guestConn = existing.conn;
     wireGuestPeer(guestPeer, room, (m, t) => failGuest(m, t));
     wireGuestConn(guestConn, (m, t) => failGuest(m, t));
-    try { guestConn.send('HELLO:' + PROTOCOL + ':' + myNick()); } catch (e) {}
+    try { guestConn.send('HELLO:' + PROTOCOL + ':' + myNick() + ':' + devId()); } catch (e) {}
     markGuestConnected();
     return;
   }
@@ -2237,6 +2373,18 @@ function resetToGate() {
   showGate();
   gateShowChoices();
 }
+// 访客被房主断开 / 拒绝：清掉连接、退回入口页，并说明原因。
+// peerKicked 必须置上，否则 conn 的 close 事件会把它当成掉线、自动重连回来。
+function guestReturnToGate(msg) {
+  peerKicked = true;
+  if (guestAutoTimer) { clearTimeout(guestAutoTimer); guestAutoTimer = null; }
+  try { if (guestConn) guestConn.close(); } catch (e) {}
+  try { if (guestPeer) guestPeer.destroy(); } catch (e) {}
+  guestConn = null; guestPeer = null;
+  stopScreenShare();
+  resetToGate();
+  if (msg) gateMsg(msg, 'err');
+}
 function connectOnce(room) {
   if (guestTimer) clearTimeout(guestTimer);
   try { if (guestPeer) guestPeer.destroy(); } catch (e) {}
@@ -2304,10 +2452,22 @@ function myNick() {
   try { localStorage.setItem('lanshare_nick', n); } catch (e) {}
   return n;
 }
+// 这台设备自己的 ID：存在 localStorage 里，换房间也不变（清缓存才会变）。
+// 局域网设备后端用 lsdev cookie 认人；外网设备不经过 8000 端口，只能靠这个值——
+// HELLO 时带过去，房主的「踢出名单」按它记，所以被踢后换个昵称也躲不掉。
+function devId() {
+  let v = '';
+  try { v = localStorage.getItem('lanshare_dev_id') || ''; } catch (e) {}
+  if (/^[0-9a-f]{16}$/.test(v)) return v;
+  v = '';
+  for (let i = 0; i < 16; i++) v += '0123456789abcdef'[Math.floor(Math.random() * 16)];
+  try { localStorage.setItem('lanshare_dev_id', v); } catch (e) {}
+  return v;
+}
 // 数据通道上的事件
 function wireGuestConn(conn, onFail, onOpen) {
   conn.on('open', () => {
-    conn.send('HELLO:' + PROTOCOL + ':' + myNick());
+    conn.send('HELLO:' + PROTOCOL + ':' + myNick() + ':' + devId());
     if (onOpen) onOpen();
   });
   conn.on('data', d => handleData(d, null));
@@ -2464,8 +2624,22 @@ async function kickDevice(kind, key) {
   if (kind === 'p2p') {
     const hit = hostList().find(x => x.name === key);
     if (!hit) { toast('这台设备已经离开了'); return; }
+    // 先把它记进这个房间的黑名单，再断开：只断连接的话，它一重连就回来了
+    if (hit.dev) {
+      try {
+        await fetch(API + '/api/kick', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'dev=' + encodeURIComponent(hit.dev) +
+                '&name=' + encodeURIComponent(key) +
+                '&ip=' + encodeURIComponent(hit.ip || '')
+        });
+      } catch (e) {}
+      kickedSet.add(hit.dev);
+    }
     dropHostConnById(hit.id, false);
-    toast('已把「' + key + '」请出房间');
+    toast('已把「' + key + '」请出房间，它不能再加入这个房间');
+    loadKicked();
     setTimeout(loadDevices, 400);
     return;
   }
@@ -2477,12 +2651,15 @@ async function kickDevice(kind, key) {
     });
     const d = await r.json();
     if (!d.ok) { toast(d.msg || '操作失败'); return; }
-    toast('已把它请出房间');
+    toast('已把它请出房间，它不能再加入这个房间');
+    loadKicked();
     setTimeout(loadDevices, 400);
   } catch (e) { toast('操作失败'); }
 }
 function onAdminClick() {
   if (MODE !== 'host') return;
+  // 局域网里的设备只是房间成员，不是房主：不给管理面板（也不该在界面上看到齿轮）
+  if (isLanClient) { toast('管理入口只在房主那台电脑上'); return; }
   if (false) {
     document.getElementById('adminModal').classList.add('show');
     loadDevices();
@@ -2538,6 +2715,8 @@ async function loadDevices() {
     }
     ul.innerHTML = items.length ? items.join('') :
       '<li><span style="color:#999;font-size:14px;">暂无设备连接</span></li>';
+    // 管理面板顺带刷新踢出名单（成员清单里的「已踢出」也跟着更新）
+    loadKicked();
   } catch (e) {}
 }
 function hideLogin() { document.getElementById('loginModal').classList.remove('show'); }
@@ -2615,8 +2794,22 @@ function showLanGate() {
   if (back) back.style.display = 'none';
   gateClearMsg();
   const box = document.getElementById('gateRoom');
-  try { box.value = localStorage.getItem('lanshare_last_room') || ''; } catch (e) {}
-  setTimeout(() => { try { box.focus(); box.select(); } catch (e) {} }, 80);
+  let savedRoom = '';
+  try { savedRoom = localStorage.getItem('lanshare_last_room') || ''; } catch (e) {}
+  box.value = savedRoom;
+  // 扫的是局域网二维码：链接里已经带着房间码，填好并自动加入，不用手输
+  let scanned = '';
+  try {
+    scanned = (new URLSearchParams(location.search).get('room') || '')
+      .toUpperCase().replace(/[^A-Z2-9]/g, '');
+  } catch (e) {}
+  if (scanned.length >= 4) {
+    box.value = scanned;
+    gateMsg('正在加入房间 ' + scanned + '…', 'info');
+    setTimeout(() => { try { gateJoin(); } catch (e) {} }, 60);
+  } else {
+    setTimeout(() => { try { box.focus(); box.select(); } catch (e) {} }, 80);
+  }
 }
 // 创建房间：确认本机程序在跑，再由它当场开一个房间（房间码在这一刻才生成）
 async function gateCreate() {
@@ -2630,14 +2823,14 @@ async function gateCreate() {
     } catch (e) {
       throw new Error('没有检测到本机程序。请先在这台设备上双击运行「数据传输」程序，再回来点「创建房间」。');
     }
+    // 邀请链接以本机程序当前的 client_url.txt 为准（在线页那份是导出时的旧值）
+    applyClientUrl(info.client_url);
     gateMsg('正在创建房间…', 'info');
     const r = await fetch(HOST_API + '/api/room/create', { method: 'POST' });
     const j = await r.json();
     if (!j || !j.ok || !j.room) throw new Error((j && j.msg) || '创建房间失败');
     ROOM = j.room;
     API = HOST_API;
-    // 邀请链接以本机程序当前的 client_url.txt 为准（在线页那份是导出时的旧值）
-    if (info.client_url) CLIENT_URL = info.client_url;
     gateClearMsg();
     hideGate();
     // 记下「在在线页当房主」这件事，刷新后自动回到同一个房间
@@ -2681,6 +2874,8 @@ async function gateJoin() {
     try { localStorage.setItem('lanshare_last_room', room); } catch (e) {}
     gateClearMsg();
     hideGate();
+    // 二维码带的 ?room= 已经用掉了，清掉地址避免刷新又自动提交一次
+    try { history.replaceState(null, '', location.pathname); } catch (e) {}
     startHostUI(false, '', true);
     return;
   }
