@@ -552,7 +552,7 @@ body.no-peer #textInput { cursor:not-allowed; }
         <span class="gate-ico">＋</span>
         <span class="gate-txt"><b>创建房间</b><i>在本机开一个房间</i></span>
       </button>
-      <button class="gate-btn" onclick="gateShowJoin()">
+      <button class="gate-btn" id="gateJoinChoiceBtn" onclick="gateShowJoin()">
         <span class="gate-ico">→</span>
         <span class="gate-txt"><b>加入房间</b><i>输入对方的房间码</i></span>
       </button>
@@ -739,12 +739,17 @@ const connStatus = document.getElementById('connStatus');
 const SEED_MODE = 'guest';
 const HOST_PORT = 8000;
 const HOME_API = 'http://127.0.0.1:' + HOST_PORT;
+// 本机页面（8000）直接走同源，免得用局域网 IP 打开时被当成跨域；
+// 在线页只能访问 127.0.0.1 上的本机程序
+const HOST_API = (SEED_MODE === 'host') ? '' : HOME_API;
 // 是否能当 P2P 房主：只有本机（回环）打开、或在线页主动「创建房间」才行。
 // 别人从局域网 IP 打开本机服务时不给，否则会和本机抢同一个 Peer ID（pc-<房间码>），
 // 双方都报 unavailable-id，还会把房间码换掉。
 const P2P_ENABLED = false;
 // 局域网设备还没输入房间码：先停在入口页，输对了才进房间
 const JOIN_REQUIRED = false;
+// 本机程序里是否已经有房间：没有就先停在入口页，点「创建房间」才开房
+const HAS_ROOM = false;
 // 本机的局域网访问地址（http://192.168.x.x:8000），guest 页为空
 const LAN_URL = '';
 let MODE = SEED_MODE;
@@ -1667,7 +1672,7 @@ async function fetchHostInfo() {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), 4000);
   try {
-    const r = await fetch(HOME_API + '/api/host', { cache: 'no-store', signal: ctl.signal });
+    const r = await fetch(HOST_API + '/api/host', { cache: 'no-store', signal: ctl.signal });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
     if (!d.ok) throw new Error(d.msg || '本机程序未响应');
@@ -1729,7 +1734,7 @@ async function dissolveRoom() {
     const r = await fetch(API + '/api/room/dissolve', { method: 'POST' });
     const d = await r.json();
     if (!d.ok) throw new Error('fail');
-    ROOM = d.room;   // 服务端已换新码，旧邀请链接与二维码同时作废
+    ROOM = '';   // 服务端已经把这个房间作废，码不再有效
   } catch (e) {
     dissolving = false;
     if (btn) btn.disabled = false;
@@ -1775,6 +1780,7 @@ function onRoomClosed(tip) {
   showGate();
   // 局域网设备只有「输入房间码」这一步，不能回到「创建房间」
   if (isLanClient || JOIN_REQUIRED) showLanGate();
+  else if (SEED_MODE === 'host') showHostGate();   // 本机：房间没了，重新点「创建房间」
   else gateShowChoices();
   if (tip) gateMsg(tip, 'info');
 }
@@ -2570,8 +2576,26 @@ function gateShowJoin() {
 }
 function gateShowChoices() {
   if (JOIN_REQUIRED) return;      // 局域网设备只能加入，没有「创建房间」可选
+  const joinBtn = document.getElementById('gateJoinChoiceBtn');
+  if (joinBtn) joinBtn.style.display = '';
   document.getElementById('gateChoices').style.display = 'flex';
   document.getElementById('gateJoin').style.display = 'none';
+  gateClearMsg();
+}
+// 本机打开页面、程序里还没有房间：只留「创建房间」这一步
+function showHostGate() {
+  showGate();
+  document.getElementById('gateChoices').style.display = 'flex';
+  document.getElementById('gateJoin').style.display = 'none';
+  // 本机就是房主，「加入房间」没有意义，藏起来免得点进去连自己
+  const joinBtn = document.getElementById('gateJoinChoiceBtn');
+  if (joinBtn) joinBtn.style.display = 'none';
+  const title = document.querySelector('.gate-title');
+  if (title) title.textContent = '数据传输';
+  const sub = document.querySelector('.gate-sub');
+  if (sub) sub.textContent = '点「创建房间」开一个房间，别人用房间码加入';
+  const foot = document.querySelector('.gate-foot');
+  if (foot) foot.innerHTML = '房间只在点「创建房间」之后才存在<br>关掉程序房间就结束，聊天记录会留在本机';
   gateClearMsg();
 }
 // 局域网设备打开页面：只留「输入房间码」这一步
@@ -2592,17 +2616,24 @@ function showLanGate() {
   try { box.value = localStorage.getItem('lanshare_last_room') || ''; } catch (e) {}
   setTimeout(() => { try { box.focus(); box.select(); } catch (e) {} }, 80);
 }
-// 创建房间：先问本机程序在不在，在就接着用它的房间码
+// 创建房间：确认本机程序在跑，再由它当场开一个房间（房间码在这一刻才生成）
 async function gateCreate() {
   const btn = document.getElementById('gateCreateBtn');
   btn.disabled = true;
   gateMsg('正在检查本机程序…', 'info');
   try {
-    const d = await fetchHostInfo();
-    ROOM = d.room;
-    // 之前解散过：先把「已关闭」标记撤掉，否则其他设备打开还会看到已解散
-    try { await fetch(HOME_API + '/api/room/open', { method: 'POST' }); } catch (e) {}
-    API = HOME_API;
+    let info;
+    try {
+      info = await fetchHostInfo();     // 程序没开就直接失败，别白开一个房间
+    } catch (e) {
+      throw new Error('没有检测到本机程序。请先在这台设备上双击运行「数据传输」程序，再回来点「创建房间」。');
+    }
+    gateMsg('正在创建房间…', 'info');
+    const r = await fetch(HOST_API + '/api/room/create', { method: 'POST' });
+    const j = await r.json();
+    if (!j || !j.ok || !j.room) throw new Error((j && j.msg) || '创建房间失败');
+    ROOM = j.room;
+    API = HOST_API;
     gateClearMsg();
     hideGate();
     // 记下「在在线页当房主」这件事，刷新后自动回到同一个房间
@@ -2612,10 +2643,10 @@ async function gateCreate() {
     }
     // 顺手把局域网地址一起带进主界面：同 WiFi 的设备和本机同网段时更快
     // 本机页面（8000）不算「在线页」，否则会把齿轮和管理入口一起藏掉
-    startHostUI(SEED_MODE !== 'host', d.ip ? ('http://' + d.ip + ':' + d.port) : '');
-    if (typeof d.peers === 'number') { lanPeers = d.peers; refreshReady(); renderAll(); }
+    startHostUI(SEED_MODE !== 'host', info.ip ? ('http://' + info.ip + ':' + info.port) : '');
+    if (typeof info.peers === 'number') { lanPeers = info.peers; refreshReady(); renderAll(); }
   } catch (e) {
-    gateMsg('没有检测到本机程序。请先在这台设备上双击运行「数据传输」程序，再回来点「创建房间」。', 'err');
+    gateMsg((e && e.message) || '创建房间失败，请稍后再试。', 'err');
   } finally {
     btn.disabled = false;
   }
@@ -2689,6 +2720,8 @@ document.getElementById('gateRoom').addEventListener('keydown', e => {
 if (MODE === 'host') {
   // 局域网里其他设备打开：先输房间码，不能打开网页就直接看到聊天内容
   if (JOIN_REQUIRED) showLanGate();
+  // 本机：程序刚开，还没有房间——停在入口页，点了「创建房间」才开房
+  else if (!HAS_ROOM) showHostGate();
   // startHostUI 里已经 loadMessages + 起轮询，这里不再重复（否则每 2 秒发两次请求）
   else initHost();
 } else {
