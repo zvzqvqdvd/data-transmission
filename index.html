@@ -622,7 +622,6 @@ body.no-peer #textInput { cursor:not-allowed; }
     <b id="roomCode"></b>
     <button class="pill ghost" onclick="renewRoom()">换一个</button>
     <button class="pill danger" id="dissolveBtn" onclick="askDissolve()">解散房间</button>
-    <button class="pill danger" id="hostDropBtn" onclick="dropHostConn()" style="display:none;">断开外网设备</button>
     <span id="inviteBox" style="display:none;gap:8px;">
       <a id="inviteLink" class="pill" href="#" target="_blank" rel="noopener">打开访问链接</a>
       <button class="pill" onclick="toggleQR()">二维码</button>
@@ -945,9 +944,6 @@ function refreshReady() {
   const screenBtn = document.getElementById('screenBtn');
   if (screenBtn) screenBtn.disabled = !ok;
   fi.disabled = !ok;
-  // 房主的「断开外网设备」只在真有 P2P 连接时出现
-  const drop = document.getElementById('hostDropBtn');
-  if (drop) drop.style.display = (MODE === 'host' && canP2P()) ? '' : 'none';
   if (MODE === 'host') {
     const n = hostList().length;
     if (isLanClient) {
@@ -2149,6 +2145,8 @@ function renderMembers() {
   const seen = new Set();
   for (const x of hostList()) {
     if (!x.name) continue;
+    // 认出是被踢的设备就别再列出来：它已经被断开，只属于下面「已踢出」那一栏
+    if (x.dev && devKicked(x.dev)) continue;
     seen.add(x.name);
     rows.push({ name: x.name, channel: 'p2p', ip: x.ip || '', key: x.name });
   }
@@ -2157,6 +2155,9 @@ function renderMembers() {
     // 外网设备以本地连接为准：后端那份是上报过去的，断开时会慢一个轮询周期，
     // 直接信它会出现「设备已经走了但清单里还留着」的幽灵条目
     if (d.channel === 'p2p') continue;
+    // 局域网设备同理：刚被踢的那一下它可能还带着旧房间码在请求，
+    // 后端已经把它从成员里摘掉了，前端再兜一层，避免一闪而过的重复条目
+    if (d.cid && devKicked(d.cid)) continue;
     rows.push({ name: d.name, channel: 'lan', ip: d.ip || '', key: d.cid || '' });
   }
   if (!rows.length) { box.innerHTML = ''; box.style.display = 'none'; return; }
@@ -2190,13 +2191,7 @@ function dropHostConnById(id, byPeer) {
   refreshReady();
   renderAll();
 }
-// 房主的「断开外网设备」：把所有直连设备请出去，房间码保留，谁都能重新加入
-function dropHostConn() {
-  if (!hostConns.size) return;
-  peerKicked = true;
-  for (const id of [...hostConns.keys()]) dropHostConnById(id, false);
-  showHostHint('已断开所有外网设备；房间码不变，别人可以重新加入');
-}
+
 function startHostUI(fromWeb, lanUrl, lanClient) {
   MODE = 'host';
   // 局域网里其他设备打开的页面：同样是 host 模式（共用一套收发逻辑），
