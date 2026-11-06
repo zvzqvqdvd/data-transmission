@@ -756,7 +756,9 @@ let MODE = SEED_MODE;
 let API = (SEED_MODE === 'host') ? '' : HOME_API;
 let ROOM = '';
 const PROTOCOL = 3;          // v3：一个房间允许多台设备，协议带上消息 id 与发送者
-const CLIENT_URL = 'https://zvzqvqdvd.github.io/data-transmission/';
+// 邀请链接用的域名：本机页面由程序按 client_url.txt 现算；在线页留的是导出时的值，
+// 点「创建房间」时会被 /api/host 返回的 client_url 覆盖，所以换地址不用重新导出静态页
+let CLIENT_URL = 'https://zvzqvqdvd.github.io/data-transmission/';
 let lastRev = null;
 let pollTimer = null;        // 房主端的 /messages 轮询
 let roomClosed = false;      // 房主已解散房间，页面停在入口页
@@ -2634,6 +2636,8 @@ async function gateCreate() {
     if (!j || !j.ok || !j.room) throw new Error((j && j.msg) || '创建房间失败');
     ROOM = j.room;
     API = HOST_API;
+    // 邀请链接以本机程序当前的 client_url.txt 为准（在线页那份是导出时的旧值）
+    if (info.client_url) CLIENT_URL = info.client_url;
     gateClearMsg();
     hideGate();
     // 记下「在在线页当房主」这件事，刷新后自动回到同一个房间
