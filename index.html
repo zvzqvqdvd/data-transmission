@@ -765,7 +765,7 @@ const LAN_URL = '';
 let MODE = SEED_MODE;
 let API = (SEED_MODE === 'host') ? '' : HOME_API;
 let ROOM = '';
-const PROTOCOL = 3;          // v3：一个房间允许多台设备，协议带上消息 id 与发送者
+const PROTOCOL = 4;          // v4：身份（设备 ID）随连接元数据上报，被踢的设备在连接建立前就被掐掉
 // 邀请链接用的域名：本机页面由程序每次请求时按 client_url.txt 现填；
 // 在线页（GitHub 上那份）写的是导出那一刻的值，只能靠运行时从本机接口拿最新值覆盖，
 // 见 applyClientUrl()。所以改 client_url.txt 不用重新导出、也不用重新上传静态页。
@@ -1313,7 +1313,7 @@ function handleData(data, ctx) {
         dev = tail.slice(j + 1);
         tail = tail.slice(0, j);
       }
-      if (MODE === 'host' && ctx) registerGuest(ctx, tail, dev);
+      if (MODE === 'host' && ctx) verifyThenRegister(ctx, tail, dev);
       return;
     }
     if (data.startsWith('WELCOME:')) {
@@ -1760,6 +1760,11 @@ async function renewRoom() {
   roomDevices = [];
   lastDevicesSig = '';
   reportedDevices = '';
+  // 换码就是换房间：新房间的踢出名单是空的（旧房间的那份留在旧文件夹里）
+  kickedList = [];
+  kickedSet.clear();
+  renderKicked();
+  loadKicked();
   renderMembers();
   document.getElementById('roomCode').textContent = ROOM;
   setupInvite(ROOM);
@@ -1900,9 +1905,17 @@ function startHostPeer(roomCode) {
   });
   pcPeer.on('connection', c => {
     peerKicked = false;
+    // 连接元数据里带着对面是谁（设备 ID + 昵称）：数据通道还没开就能判黑名单，
+    // 被请出过的设备不会进房间、不会分到名字、也不会在成员清单里闪一下
+    const md = (c && c.metadata) || {};
+    const mdDev = DEV_ID_RE.test(String(md.dev || '')) ? String(md.dev) : '';
+    const mdNick = String(md.nick || '').trim().slice(0, 12);
+    if (mdDev && devKicked(mdDev)) { rejectHostConn(c, mdNick); return; }
     hostSeq++;
     const id = 'c' + hostSeq;
-    const entry = { conn: c, name: '', seq: hostSeq, peerId: c.peer || '', ip: '' };
+    const entry = { conn: c, name: '', seq: hostSeq, peerId: c.peer || '', ip: '', dev: mdDev, metaNick: mdNick };
+    // 名单可能刚被别的标签页改过：连上时再核一遍（后端才是准的）
+    loadKicked();
     hostConns.set(id, entry);
     showHostHint('有设备正在建立直连…');
     c.on('open', () => {
@@ -1964,18 +1977,51 @@ function startHostPeer(roomCode) {
 
 // ===== 房间成员管理（房主端）=====
 // 对方 HELLO 到了才知道怎么称呼：分配一个房间里唯一的名字并告诉它
-function registerGuest(ctx, nick, dev) {
+// 先跟本机后端核一遍名单：页面里的 kickedSet 可能是旧的（刚打开页面、或别的标签页踢的人），
+// 后端那份才是准的——踢出名单平时落在 数据/房间/<码>/踢出名单.json 里
+async function verifyThenRegister(ctx, nick, dev) {
   const e = hostConns.get(ctx.id);
   if (!e) return;
-  e.dev = dev || '';
+  if (e.registered) return;                 // 同一条连接重复 HELLO，别给两次名字
+  if (dev && devKicked(dev)) { rejectGuest(ctx); return; }
+  try { await loadKicked(); } catch (err) {}
+  if (dev && devKicked(dev)) { rejectGuest(ctx); return; }
+  registerGuest(ctx, nick, dev);
+}
+// 名单里的设备：不分配名字、不进房间，直接拒掉
+function rejectGuest(ctx) {
+  const e = hostConns.get(ctx.id);
+  if (e) { try { e.conn.send('KICKED'); } catch (err) {} }
+  setTimeout(() => dropHostConnById(ctx.id, true), 150);
+  toast('有一台被请出的设备想重新进来，已拒绝');
+}
+// 名单里的设备在连接元数据里就被认出来了：不进房间、不分配名字、不算成员，
+// 只把「你已被踢出」告诉它再断开（通道开了才发得出去，所以等 open；一直不开就硬掐）
+function rejectHostConn(c, nick) {
+  showHostHint('有一台被请出的设备想重新进来，已拒绝');
+  toast('「' + (nick || '被踢出的设备') + '」已被请出，本次连接已拒绝');
+  let done = false;
+  const kill = () => {
+    if (done) return;
+    done = true;
+    try { c.close(); } catch (e) {}
+  };
+  c.on('open', () => {
+    try { c.send('KICKED'); } catch (e) {}
+    setTimeout(kill, 200);
+  });
+  c.on('close', kill);
+  setTimeout(kill, 6000);
+}
+function registerGuest(ctx, nick, dev) {
+  const e = hostConns.get(ctx.id);
+  if (!e || e.registered) return;
+  const did = dev || e.dev || '';
+  e.dev = did;
   // 这个房间的踢出名单里有它：不分配名字、不进房间，直接拒掉
-  if (dev && devKicked(dev)) {
-    try { e.conn.send('KICKED'); } catch (err) {}
-    setTimeout(() => dropHostConnById(ctx.id, true), 150);
-    toast('有一台被请出的设备想重新进来，已拒绝');
-    return;
-  }
-  let base = String(nick || '').trim().slice(0, 12) || ('访客' + e.seq);
+  if (did && devKicked(did)) { rejectGuest(ctx); return; }
+  e.registered = true;
+  let base = String(nick || e.metaNick || '').trim().slice(0, 12) || ('访客' + e.seq);
   const used = new Set();
   for (const x of hostConns.values()) if (x.name) used.add(x.name);
   let name = base, i = 2;
@@ -2018,16 +2064,17 @@ function devKicked(dev) {
 }
 
 async function loadKicked() {
-  if (MODE !== 'host' || isLanClient || roomClosed) return;
+  if (MODE !== 'host' || isLanClient || roomClosed) return kickedSet;
   try {
     const r = await fetch(API + '/api/kicked', { cache: 'no-store' });
     const d = await r.json();
-    if (!d || !d.ok) return;
+    if (!d || !d.ok) return kickedSet;
     kickedList = d.kicked || [];
     kickedSet.clear();
     for (const x of kickedList) if (x.cid) kickedSet.add(x.cid);
     renderKicked();
   } catch (e) {}
+  return kickedSet;
 }
 
 // 房主端「已踢出」列表：显示谁被挡在外面，并给出「解除」
@@ -2299,8 +2346,19 @@ function initGuest(room, existing) {
     guestConn = existing.conn;
     wireGuestPeer(guestPeer, room, (m, t) => failGuest(m, t));
     wireGuestConn(guestConn, (m, t) => failGuest(m, t));
-    try { guestConn.send('HELLO:' + PROTOCOL + ':' + myNick() + ':' + devId()); } catch (e) {}
+    // 入口页那一轮已经把 HELLO 发完了，房主也回过了 WELCOME：
+    // 名字直接用探活时拿到的，别再发一遍 HELLO（房主那边会当成重复消息）
+    myName = existing.name || '';
+    if (!myName) {
+      try { guestConn.send('HELLO:' + PROTOCOL + ':' + myNick() + ':' + devId()); } catch (e) {}
+    }
+    // 探活期间先到的消息（房间历史、成员名单）补处理，别让历史记录丢掉
+    for (const d of (existing.pending || [])) {
+      try { handleData(d, null); } catch (e) {}
+    }
     markGuestConnected();
+    if (myName) setStatus('✅ 已进入房间，你的名字是「' + myName + '」', true);
+    renderAll();
     return;
   }
   guestConnect(room);
@@ -2404,7 +2462,7 @@ function connectOnce(room) {
   wireGuestPeer(guestPeer, room, (m, t, r) => fail(m, t, r));
   guestPeer.on('open', () => {
     setStatus('② 已连到信令，正在呼叫对方设备…');
-    guestConn = guestPeer.connect('pc-' + room, { reliable: true });
+    guestConn = guestPeer.connect('pc-' + room, { reliable: true, metadata: identityMeta() });
     wireGuestConn(guestConn, (msg, tip) => fail(msg, tip, true), () => {
       if (guestTimer) clearTimeout(guestTimer);
       markGuestConnected();
@@ -2449,15 +2507,46 @@ function myNick() {
 }
 // 这台设备自己的 ID：存在 localStorage 里，换房间也不变（清缓存才会变）。
 // 局域网设备后端用 lsdev cookie 认人；外网设备不经过 8000 端口，只能靠这个值——
-// HELLO 时带过去，房主的「踢出名单」按它记，所以被踢后换个昵称也躲不掉。
+// HELLO 与连接元数据都带上它，房主的「踢出名单」按它记，所以被踢后换个昵称也躲不掉。
+const DEV_ID_RE = /^[0-9a-f]{16}$/;
+let _devId = '';
+function readCookie(name) {
+  const all = String(document.cookie || '').split(';');
+  for (const s of all) {
+    const i = s.indexOf('=');
+    if (i < 0) continue;
+    if (s.slice(0, i).trim() === name) {
+      try { return decodeURIComponent(s.slice(i + 1).trim()); } catch (e) { return ''; }
+    }
+  }
+  return '';
+}
+function writeCookie(name, val) {
+  try {
+    document.cookie = name + '=' + encodeURIComponent(val) +
+      '; Max-Age=31536000; Path=/; SameSite=Lax';
+  } catch (e) {}
+}
 function devId() {
+  if (DEV_ID_RE.test(_devId)) return _devId;
   let v = '';
   try { v = localStorage.getItem('lanshare_dev_id') || ''; } catch (e) {}
-  if (/^[0-9a-f]{16}$/.test(v)) return v;
-  v = '';
-  for (let i = 0; i < 16; i++) v += '0123456789abcdef'[Math.floor(Math.random() * 16)];
+  // 微信内置浏览器 / 隐私模式下 localStorage 可能不给写：退回 cookie 再存一份，
+  // 否则每次都生成新 ID，房主踢了也认不出是同一台设备（黑名单形同虚设）
+  if (!DEV_ID_RE.test(v)) v = readCookie('lsdevp');
+  if (!DEV_ID_RE.test(v)) {
+    v = '';
+    for (let i = 0; i < 16; i++) v += '0123456789abcdef'[Math.floor(Math.random() * 16)];
+  }
   try { localStorage.setItem('lanshare_dev_id', v); } catch (e) {}
+  writeCookie('lsdevp', v);
+  _devId = v;
   return v;
+}
+// 连接元数据：PeerJS 在「发起连接」这一步就能把它交给房主，
+// 房主不用等数据通道打开、等 HELLO 才知道对面是谁，被踢的设备连门都进不来
+function identityMeta() {
+  return { v: PROTOCOL, dev: devId(), nick: myNick() };
 }
 // 数据通道上的事件
 function wireGuestConn(conn, onFail, onOpen) {
@@ -2468,6 +2557,13 @@ function wireGuestConn(conn, onFail, onOpen) {
   conn.on('data', d => handleData(d, null));
   conn.on('close', () => {
     if (peerKicked) return;                 // 主动断开的，不自动恢复
+    // 还没拿到 WELCOME 就被关掉：房主在连接元数据里认出这台设备在踢出名单里，
+    // 连数据通道都没让它进；不要自动重连，否则会一直撞门
+    if (!myName) {
+      guestReturnToGate('没进得去：房主拒绝了这台设备（大概率已被请出这个房间）。' +
+                        '请让房主在「已踢出」里点「解除」，再重新加入。');
+      return;
+    }
     setConn('off');
     refreshReady();
     renderAll();
@@ -2493,10 +2589,13 @@ function markGuestConnected() {
   renderAll();
 }
 
-// ===== 加入房间前的探活：真正建起数据通道才放行进入主页面 =====
+// ===== 加入房间前的探活：房主真的把名字分配下来才放行进入主页面 =====
+// 光「数据通道打开」不算：被请出过的设备通道也会开，紧接着就会被一句 KICKED 断掉。
+// 现在探活自己发 HELLO，等到 WELCOME 才算进得去，被踢的设备连主页面都不会闪。
 function probeRoom(room, timeoutMs) {
   return new Promise(resolve => {
-    let done = false, peer = null, conn = null, timer = null;
+    let done = false, peer = null, conn = null, timer = null, guestName = '';
+    const pending = [];      // 探活期间收到的消息（主要是房间历史），进房后补处理
     const finish = (okFlag, msg, tip) => {
       if (done) return;
       done = true;
@@ -2505,7 +2604,8 @@ function probeRoom(room, timeoutMs) {
         try { if (conn) conn.close(); } catch (e) {}
         try { if (peer) peer.destroy(); } catch (e) {}
       }
-      resolve({ ok: okFlag, msg: msg || '', tip: tip || '', peer: peer, conn: conn });
+      resolve({ ok: okFlag, msg: msg || '', tip: tip || '',
+                peer: peer, conn: conn, name: guestName, pending: pending });
     };
     timer = setTimeout(() => finish(false, '连接超时',
       '没有收到对方响应，可能是房间码不正确，或对方设备网络受限。'), timeoutMs || 12000);
@@ -2528,8 +2628,27 @@ function probeRoom(room, timeoutMs) {
       }
     });
     peer.on('open', () => {
-      conn = peer.connect('pc-' + room, { reliable: true });
-      conn.on('open', () => finish(true));
+      conn = peer.connect('pc-' + room, { reliable: true, metadata: identityMeta() });
+      conn.on('open', () => {
+        try { conn.send('HELLO:' + PROTOCOL + ':' + myNick() + ':' + devId()); } catch (e) {}
+      });
+      conn.on('data', d => {
+        if (done) return;                        // 进了房间之后由 wireGuestConn 接管
+        if (typeof d !== 'string') return;      // 探活期间不会有文件过来
+        if (d === 'KICKED') {
+          finish(false, '房主拒绝了这台设备',
+            '它已经被房主请出这个房间。请联系房主在「已踢出」那里点「解除」，再重新加入。');
+          return;
+        }
+        if (d.startsWith('WELCOME:')) {
+          try { guestName = (JSON.parse(d.slice(8)) || {}).name || ''; } catch (e) {}
+          finish(true);
+          return;
+        }
+        if (pending.length < 300) pending.push(d);
+      });
+      conn.on('close', () => finish(false, '房主拒绝了这台设备',
+        '它可能已经被房主请出这个房间。请联系房主在「已踢出」那里点「解除」，再重新加入。'));
       conn.on('error', e => finish(false, '数据通道错误', String(e && e.message ? e.message : e)));
     });
   });
@@ -2619,21 +2738,31 @@ async function kickDevice(kind, key) {
   if (kind === 'p2p') {
     const hit = hostList().find(x => x.name === key);
     if (!hit) { toast('这台设备已经离开了'); return; }
-    // 先把它记进这个房间的黑名单，再断开：只断连接的话，它一重连就回来了
-    if (hit.dev) {
-      try {
-        await fetch(API + '/api/kick', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: 'dev=' + encodeURIComponent(hit.dev) +
-                '&name=' + encodeURIComponent(key) +
-                '&ip=' + encodeURIComponent(hit.ip || '')
-        });
-      } catch (e) {}
-      kickedSet.add(hit.dev);
+    // 认不出它是谁（没上报设备 ID）就没法记黑名单：只断连接它一秒就能回来。
+    // 这种情况必须说清楚，不能弹出「不能再加入」来骗自己。
+    if (!hit.dev) {
+      dropHostConnById(hit.id, false);
+      toast('已断开，但它没上报身份（页面版本可能过旧），挡不住它重新进来；请让它刷新页面后再踢一次');
+      return;
     }
+    // 先把它记进这个房间的黑名单，再断开：只断连接的话，它一重连就回来了
+    let recorded = false;
+    try {
+      const r = await fetch(API + '/api/kick', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'dev=' + encodeURIComponent(hit.dev) +
+              '&name=' + encodeURIComponent(key) +
+              '&ip=' + encodeURIComponent(hit.ip || '')
+      });
+      const d = await r.json();
+      recorded = !!(d && d.ok);
+    } catch (e) {}
+    if (recorded) kickedSet.add(hit.dev);
     dropHostConnById(hit.id, false);
-    toast('已把「' + key + '」请出房间，它不能再加入这个房间');
+    toast(recorded
+      ? ('已把「' + key + '」请出房间，它不能再加入这个房间')
+      : ('已断开「' + key + '」，但黑名单没写进去（本机接口异常），它可能还能回来'));
     loadKicked();
     setTimeout(loadDevices, 400);
     return;
@@ -2890,7 +3019,7 @@ async function gateJoin() {
   try { localStorage.setItem('lanshare_last_room', room); } catch (e) {}
   gateClearMsg();
   hideGate();
-  initGuest(room, { peer: res.peer, conn: res.conn });
+  initGuest(room, { peer: res.peer, conn: res.conn, name: res.name, pending: res.pending });
 }
 // 局域网设备验证房间码：由本机程序判定，浏览器只负责提交
 async function verifyRoomCode(room) {
