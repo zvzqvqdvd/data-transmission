@@ -639,12 +639,6 @@ body.no-peer #textInput { cursor:not-allowed; }
 }
 .screen-bar .stop.audio { background:rgba(255,255,255,.18); }
 .member-tag.relay { background:#fff4e5; color:#c86a00; }
-.file-save {
-  display:inline-flex; align-items:center; gap:4px; margin-top:6px;
-  padding:3px 9px; border-radius:6px; border:1px solid #cfeada;
-  background:#fff; color:#0a8f4a; font-size:11px; cursor:pointer; text-decoration:none;
-}
-.file-save:hover { background:#e9f8ef; }
 </style>
 </head>
 <body>
@@ -842,11 +836,11 @@ body.no-peer #textInput { cursor:not-allowed; }
       </details>
       <details>
         <summary>收到的文件存在哪了？</summary>
-        <p>房主那台设备上：<code>数据\房间\&lt;房间码&gt;\接收文件\</code>，聊天里的文件卡片上点「在文件夹中显示」可以直接打开。访客是浏览器下载，存在系统的下载目录里。</p>
+        <p>房主那台设备上：<code>数据\房间\&lt;房间码&gt;\接收文件\</code>。其他设备不会自动下载聊天里的文件，点文件卡片上的「⬇ 点击下载」才会传过来，存在系统的下载目录里；下载过的卡片可以直接在线预览。</p>
       </details>
       <details>
         <summary>大文件能传多大？</summary>
-        <p>上传到本机最大 4 GiB；但外网直连转给其他设备时，超过 256 MB 的文件不再中转，只在房主设备上保存并在聊天里提示，让其他人到房主那台机器上下载。</p>
+        <p>上传到本机最大 4 GiB。外网设备下载文件走点对点直连，速度取决于双方网络；文件始终保存在房主设备上，其他设备按需下载。</p>
       </details>
     </div>
     <div class="modal-btns"><button class="btn-plain" onclick="hideHelp()">知道了</button></div>
@@ -945,7 +939,7 @@ const PROTOCOL = 4;          // v4：连接元数据带上昵称与设备 ID，�
 // 邀请链接用的域名：本机页面由程序每次请求时按 client_url.txt 现填；
 // 在线页（GitHub 上那份）写的是导出那一刻的值，只能靠运行时从本机接口拿最新值覆盖，
 // 见 applyClientUrl()。所以改 client_url.txt 不用重新导出、也不用重新上传静态页。
-let CLIENT_URL = '';
+let CLIENT_URL = 'https://zvzqvqdvd.github.io/data-transmission/';
 let lastRev = null;
 let pollTimer = null;        // 房主端的 /messages 轮询
 let roomClosed = false;      // 房主已解散房间，页面停在入口页
@@ -964,9 +958,7 @@ let guestPeer = null, guestConn = null;
 let myName = '';             // 本机在房间里的名字（房主为「房主」，访客由房主分配）
 let guestNames = [];         // 房间成员名单（房主广播过来的）
 let pushedIds = new Set();   // 房主端：已经转发给外网设备的消息 id
-let relayHold = new Set();   // 房主端：正在走 P2P 转发的文件名，避免轮询重复转
 let relaySeeded = false;     // 首次拉 /messages 只记 id 不转发（历史由 HISTORY 单独推）
-const RELAY_MAX_FILE = 256 * 1024 * 1024;   // 超过这个大小的文件不转发给其他外网设备
 const CHUNK_SIZE = 16 * 1024;
 const MAX_BUFFERED = 512 * 1024;
 const ICE_SERVERS = [
@@ -1489,10 +1481,10 @@ const MIME_MAP = {
   pdf:'application/pdf', txt:'text/plain'
 };
 function mimeOf(name) { return MIME_MAP[extOf(name)] || 'application/octet-stream'; }
-// 预览地址：房主走本机接口 inline（不触发下载），访客用 P2P 收到的 blob
+// 预览地址：房主/局域网走本机接口 inline（不触发下载），访客用拉取到的 blob
 function fileUrl(msg) {
   if (msg.url) return msg.url;
-  // 访客端没有后端，房主磁盘上的文件取不到（历史里的文件条目只留个记录）
+  // 访客端没有后端：文件本体要点卡片按需拉取（pullFile），卡片阶段先不给链接
   if (MODE === 'guest') return '';
   return API + '/download?name=' + encodeURIComponent(msg.name);
 }
@@ -1513,12 +1505,15 @@ function renderMsg(msg) {
     const nm = esc(msg.name), sz = esc(msg.size || '');
     const attrs = ' data-name="'+nm+'" data-url="'+esc(src)+'" data-dl="'+esc(dl)+'" data-kind="'+kind+'"';
     if (!dl) {
-      // 拿不到文件本体（访客端看到的历史记录）：只展示条目，别给死链
+      // 访客端拿不到文件本体（历史/别人传的都只收到卡片）：点卡片按需从房主拉取
       const ext=String(msg.name||'').split('.').pop().toUpperCase().slice(0,4);
-      bubble = '<div class="file-card" style="cursor:default;">'+
+      const pullable = MODE === 'guest' && msg.id;
+      bubble = '<div class="file-card"'+(pullable
+        ? ' style="cursor:pointer;" title="点击下载" onclick="pullFile(\'' + esc(msg.id) + '\')"'
+        : '') + '>'+
         '<div class="file-icon">'+esc(ext)+'</div>'+
         '<div class="file-info"><div class="file-name">'+nm+'</div>'+
-        '<div class="file-size">'+sz+' · 历史文件，请在房主设备上下载</div></div></div>';
+        '<div class="file-size">'+sz+(pullable ? ' · ⬇ 点击下载' : ' · 历史文件')+'</div></div></div>';
     } else if (kind === 'img') {
       bubble = '<div class="media-card"'+attrs+' onclick="openPreview(this)">'+
         '<img class="media-thumb" src="'+esc(src)+'" alt="'+nm+'" loading="lazy">'+
@@ -1545,25 +1540,8 @@ function renderMsg(msg) {
     }
   }
   const ip = msg.ip ? '<div class="msg-sender">'+esc(msg.ip)+'</div>' : '';
-  // 房主这台上文件是真落在磁盘里的：给一个直接打开所在文件夹的入口
-  const saveBtn = (msg.type === 'file' && MODE === 'host' && !isLanClient)
-    ? '<button class="file-save" onclick="revealFile(' + esc(JSON.stringify(String(msg.name || ''))) + ')">📂 在文件夹中显示</button>'
-    : '';
   return '<div class="msg-row"><div class="msg-avatar">🌐</div><div class="msg-side">'+
-    ip+bubble+saveBtn+'<div class="msg-time">'+esc(msg.time)+'</div></div></div>';
-}
-
-// 让后端在资源管理器里选中这个文件（只有跑程序的那台电脑能调）
-async function revealFile(name) {
-  try {
-    const r = await fetch(API + '/api/reveal', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: 'name=' + encodeURIComponent(name)
-    });
-    const d = await r.json();
-    if (!d.ok) toast(d.msg || '打不开文件夹');
-  } catch (e) { toast('打不开文件夹'); }
+    ip+bubble+'<div class="msg-time">'+esc(msg.time)+'</div></div></div>';
 }
 
 // ===== 在线预览弹层 =====
@@ -1678,28 +1656,12 @@ function relayNew(msgs) {
         t: m.content, f: m.ip || '', id: m.id, time: m.time || ''
       }), m.ip);                        // 不回给发送者本人
     } else if (m.type === 'file') {
-      if (relayHold.has(m.name)) continue;   // 这个文件正在走 P2P 转发，别重复
-      relayFileToGuests(m);                  // 局域网设备传的文件：读回来再转发
+      // 只广播一张「文件卡片」：设备看到卡片后谁需要谁点下载，不再自动推文件本体
+      broadcast('FILE_CARD:' + JSON.stringify({
+        id: m.id, name: m.name, size: m.size || '', f: m.ip || ''
+      }), m.ip);                        // 不回给发送者本人
     }
   }
-}
-
-async function relayFileToGuests(m) {
-  if (!hostList().length) return;
-  try {
-    const r = await fetch(API + '/download?name=' + encodeURIComponent(m.name));
-    if (!r.ok) return;
-    const blob = await r.blob();
-    if (blob.size > RELAY_MAX_FILE) {
-      broadcast('NOTE:' + JSON.stringify({
-        t: (m.ip || '有人') + ' 传了文件「' + m.name + '」（' + (m.size || '') + '），太大了不在外网中转，请在房主这台设备上下载'
-      }));
-      return;
-    }
-    for (const x of hostList()) {
-      try { await sendFileTo(x.conn, blob, m.name, null, m.id, m.ip); } catch (e) {}
-    }
-  } catch (e) {}
 }
 
 // ===== WebRTC P2P via PeerJS：分片 + 背压 + 完整性校验 =====
@@ -1737,22 +1699,6 @@ async function sendFileTo(c, file, name, onProgress, mid, from) {
     if (onProgress) onProgress(offset / file.size);
   }
   c.send('FILE_END:' + id);
-}
-
-// 房主端：房间里每台外网设备都发一份。串行发送，避免把上行带宽打满。
-// onProgress 由调用方给（发送队列用它更新单项卡片），转发场景不传就不显示
-async function broadcastFile(file, name, mid, from, onProgress) {
-  const list = hostList();
-  if (!list.length) throw new Error('房间里没有外网设备');
-  let ok = 0, lastErr = null;
-  for (const x of list) {
-    try {
-      await sendFileTo(x.conn, file, name, onProgress, mid, from);
-      ok++;
-    } catch (e) { lastErr = e; }
-  }
-  if (!ok) throw lastErr || new Error('发送失败');
-  return ok;
 }
 
 // ctx：房主端传 { id, conn, name }，访客端为 null
@@ -1818,6 +1764,45 @@ function handleData(data, ctx) {
     }
     if (data.startsWith('NOTE:')) {
       try { toast(JSON.parse(data.slice(5)).t || ''); } catch (e) {}
+      return;
+    }
+    // 房主广播的「文件卡片」：只有名字和大小，谁需要谁点下载，不自动传本体
+    if (data.startsWith('FILE_CARD:')) {
+      if (MODE !== 'guest') return;
+      try {
+        const c = JSON.parse(data.slice(10));
+        if (c && c.name) {
+          pushMsg({ type: 'file', name: c.name, size: c.size || '',
+                    ip: c.f || '外网设备', id: c.id || '' });
+        }
+      } catch (e) {}
+      return;
+    }
+    // 访客点了「下载」：房主从磁盘把文件读出来流式发过去
+    if (data.startsWith('FILE_PULL:')) {
+      if (MODE !== 'host' || !ctx) return;
+      let req = null;
+      try { req = JSON.parse(data.slice(10)); } catch (e) {}
+      const want = String((req && req.name) || '').replace(/\\/g, '/');
+      const safe = want.split('/').pop().slice(0, 200);   // 只取文件名，防路径穿越
+      const mid = String((req && req.mid) || '').slice(0, 32);
+      if (!safe || !ctx.conn || !ctx.conn.open) return;
+      fetch(API + '/download?name=' + encodeURIComponent(safe))
+        .then(r => { if (!r.ok) throw new Error('gone'); return r.blob(); })
+        .then(blob => sendFileTo(ctx.conn, blob, safe, null, mid || undefined, '历史文件'))
+        .catch(() => {
+          try { ctx.conn.send('FILE_PULL_ERR:' + JSON.stringify({ mid: mid, name: safe })); } catch (e) {}
+        });
+      return;
+    }
+    // 房主说文件没了：把这条下载从队列里清掉
+    if (data.startsWith('FILE_PULL_ERR:')) {
+      if (MODE !== 'guest') return;
+      let e0 = null;
+      try { e0 = JSON.parse(data.slice(16)); } catch (e) {}
+      const mid = e0 && e0.mid;
+      if (mid) { pullWanted.delete(mid); pullInFlight.delete(mid); pumpPullQueue(); }
+      notify('「' + ((e0 && e0.name) || '文件') + '」已不存在，无法下载');
       return;
     }
     if (data === 'SCREEN_END') {
@@ -2039,42 +2024,86 @@ function acceptScreenCall(call) {
   });
 }
 
-async function onFileReceived(blob, name, mid, from) {
-  if (MODE === 'guest') {
-    const url = URL.createObjectURL(blob);
-    pushMsg({ type: 'file', name: name, size: fmtSize(blob.size), url: url,
-              ip: from || '外网设备', id: mid || uid() });
-    txEnd();
-    setStatus('✅ 已收到 ' + name + '，已保存到浏览器下载目录', true);
+// ===== 按需下载（访客端）：点文件卡片 → 向房主要文件本体 → 存到下载目录 =====
+// 同一时间只拉一个文件：访客只有一条数据通道，混着收会串包
+const pullWanted = new Set();    // 用户主动点过下载的 mid（拉到后自动保存）
+const pullInFlight = new Set();  // 正在拉取的 mid
+const pullQueue = [];            // 排队中的 {mid, name}
+function pullFile(mid) {
+  const m = localMsgs.find(x => x.id === mid);
+  if (!m || m.type !== 'file') return;
+  if (m.url) {                    // 本体已经在手上：直接存
     try {
       const a = document.createElement('a');
-      a.href = url; a.download = name;
+      a.href = m.url; a.download = m.name;
       document.body.appendChild(a); a.click();
       setTimeout(() => a.remove(), 1000);
     } catch (e) {}
     return;
   }
-  // 房主：先落盘（其他局域网设备也能看到），再把文件转给房间里其他外网设备
+  if (!canP2P() || !guestConn || !guestConn.open) { notify('未连接房间，无法下载'); return; }
+  if (pullInFlight.has(mid) || pullQueue.some(x => x.mid === mid)) { notify('这个文件已在下载队列里'); return; }
+  pullWanted.add(mid);
+  pullQueue.push({ mid: mid, name: m.name });
+  pumpPullQueue();
+}
+function pumpPullQueue() {
+  if (!pullQueue.length || pullInFlight.size) return;
+  const job = pullQueue.shift();
+  if (!guestConn || !guestConn.open) {
+    pullWanted.delete(job.mid);
+    notify('连接已断开，下载中断');
+    return;
+  }
+  pullInFlight.add(job.mid);
+  try {
+    guestConn.send('FILE_PULL:' + JSON.stringify({ mid: job.mid, name: job.name }));
+    setStatus('正在请求下载: ' + job.name);
+  } catch (e) {
+    pullInFlight.delete(job.mid);
+    pullWanted.delete(job.mid);
+    notify('下载请求发送失败');
+  }
+}
+
+async function onFileReceived(blob, name, mid, from) {
+  if (MODE === 'guest') {
+    const url = URL.createObjectURL(blob);
+    const m = mid ? localMsgs.find(x => x.id === mid) : null;
+    if (m) { m.url = url; m.size = fmtSize(blob.size); renderAll(); }
+    else pushMsg({ type: 'file', name: name, size: fmtSize(blob.size), url: url,
+                   ip: from || '外网设备', id: mid || uid() });
+    txEnd();
+    // 只有用户主动点「下载」的才会落盘；卡片更新后随时可再保存
+    if (mid && pullWanted.has(mid)) {
+      pullWanted.delete(mid);
+      setStatus('✅ ' + name + ' 已下载', true);
+      try {
+        const a = document.createElement('a');
+        a.href = url; a.download = name;
+        document.body.appendChild(a); a.click();
+        setTimeout(() => a.remove(), 1000);
+      } catch (e) {}
+    } else {
+      setStatus('✅ 已收到 ' + name, true);
+    }
+    if (mid) pullInFlight.delete(mid);
+    pumpPullQueue();
+    return;
+  }
+  // 房主：把收到的文件落盘（记录进聊天后由 relayNew 给其他设备发卡片，谁需要谁拉）
   const fd = new FormData();
   fd.append('files', blob, name);
   fd.append('from', from || '外网设备');   // 标注是谁传的
   if (mid) fd.append('id', mid);            // 沿用同一条消息 id，前端才好去重
-  relayHold.add(name);            // 告诉轮询：这个文件正在 P2P 转发，别再走一遍
   try {
     const r = await fetch(API + '/upload', { method: 'POST', body: fd });
     const d = await r.json();
     if (!d.ok) throw new Error(d.msg || '保存失败');
-    const newId = (d.ids && d.ids[0]) || '';
-    const savedName = (d.names && d.names[0]) || name;
-    if (newId) pushedIds.add(newId);
-    toast('已收到 ' + savedName + '（存到 接收文件\\）' + (from ? '，来自 ' + from : ''));
-    const others = hostList().filter(x => x.name !== from);
-    for (const x of others) {
-      try { await sendFileTo(x.conn, blob, name, null, newId, from); } catch (e) {}
-    }
+    toast('已收到 ' + ((d.names && d.names[0]) || name) + '（存到 接收文件\\）' + (from ? '，来自 ' + from : ''));
     loadMessages();
   } catch (e) { toast('保存失败: ' + e.message); }
-  finally { relayHold.delete(name); updateHostRoomHint(); }
+  updateHostRoomHint();
 }
 
 // ===== 房主模式：生成房间码、等待外网设备、生成邀请链接 =====
@@ -2752,7 +2781,6 @@ function startHostUI(fromWeb, lanUrl, lanClient) {
   hostConns.clear();
   recvBuf.clear();
   pushedIds = new Set();
-  relayHold.clear();
   relaySeeded = false;
   hostSeq = 0;
   roomDevices = [];
@@ -2900,6 +2928,7 @@ function dropGuestConn() {
 function resetToGate() {
   currentRoom = '';
   guestAutoTry = 0;
+  pullWanted.clear(); pullInFlight.clear(); pullQueue.length = 0;   // 清掉没下完的下载任务
   serverMsgs = []; localMsgs = [];
   seenIds = new Set();
   guestNames = [];
@@ -3264,10 +3293,10 @@ async function sendAll() {
           const mid = (d.ids && d.ids[0]) || uid();
           it.savedName = (d.names && d.names[0]) || it.file.name;
           pushedIds.add(mid);
-          if (canP2P()) {
-            await broadcastFile(it.file, it.file.name, mid, myName || '房主',
-                                p => itemProgress(it, p));
-          }
+          // 不向其他设备推送文件本体：广播一张卡片，谁需要谁点下载
+          broadcast('FILE_CARD:' + JSON.stringify({
+            id: mid, name: it.savedName, size: fmtSize(it.file.size), f: myName || '房主'
+          }));
         } else {
           if (!canP2P()) throw new Error('还没有连上房间');
           const mid = uid();
