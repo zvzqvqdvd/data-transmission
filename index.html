@@ -82,13 +82,17 @@ body {
   font-family:Menlo,Consolas,monospace; font-size:16px; font-weight:700;
   color:#0a8f4a; letter-spacing:1.5px; background:#fff;
   padding:3px 10px; border-radius:7px; border:1px solid #cfeada;
+  cursor:pointer; transition:border-color .15s, box-shadow .15s, transform .1s;
 }
+#roomCode:hover { border-color:#07C160; box-shadow:0 0 0 2px rgba(7,193,96,.12); }
+#roomCode:active { transform:scale(.97); }
 .pill {
   border:1px solid #cfeada; background:#fff; color:#0a8f4a; font-size:12px;
   padding:4px 11px; border-radius:20px; cursor:pointer; text-decoration:none;
-  transition:background .18s, color .18s, border-color .18s; line-height:1.5;
+  transition:background .18s, color .18s, border-color .18s, transform .1s; line-height:1.5;
 }
 .pill:hover { background:#07C160; border-color:#07C160; color:#fff; }
+.pill:active { transform:scale(.96); }
 .pill.ghost { background:transparent; border-color:transparent; color:#3c7a57; }
 .pill.ghost:hover { background:#fff; color:#0a8f4a; border-color:#cfeada; }
 #inviteHint { font-size:11px; color:#6b8a78; margin-top:6px; }
@@ -182,36 +186,59 @@ body.no-peer #textInput { cursor:not-allowed; }
 }
 
 /* ===== 聊天区 ===== */
-.chat-scroll { flex:1; min-height:0; overflow-y:auto; padding:18px 16px 8px; }
+.chat-scroll { flex:1; min-height:0; overflow-y:auto; padding:18px 16px 8px; overscroll-behavior:contain; }
 .chat-inner { max-width:760px; margin:0 auto; }
-.chat-scroll::-webkit-scrollbar { width:8px; }
-.chat-scroll::-webkit-scrollbar-thumb { background:#d5d9dd; border-radius:4px; }
+.chat-scroll::-webkit-scrollbar { width:6px; }
+.chat-scroll::-webkit-scrollbar-thumb { background:#d5d9dd; border-radius:3px; }
 .chat-scroll::-webkit-scrollbar-thumb:hover { background:#bdc3c7; }
 .empty {
   display:flex; flex-direction:column; align-items:center; justify-content:center;
   min-height:44vh; padding:20px; text-align:center;
   color:#9aa0a6; font-size:13px; line-height:1.75;
 }
-.empty .e-icon { display:block; font-size:34px; margin-bottom:10px; opacity:.5; }
+.empty .e-icon {
+  display:flex; align-items:center; justify-content:center;
+  width:72px; height:72px; border-radius:50%; background:#fff;
+  font-size:32px; margin-bottom:14px; box-shadow:0 2px 10px rgba(0,0,0,.05);
+}
 .empty .e-sub { display:block; font-size:12px; color:#b0b6bb; margin-top:2px; }
 
-.msg-row { display:flex; margin-bottom:18px; align-items:flex-start; }
-.msg-avatar {
-  width:36px; height:36px; border-radius:9px; flex-shrink:0;
-  display:flex; align-items:center; justify-content:center; font-size:17px;
-  margin-right:10px; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.07);
+/* 键盘可达性：Tab 聚焦时给一圈品牌色描边（鼠标点击不出现） */
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible,
+a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
+  outline:2px solid #07C160; outline-offset:2px;
 }
+#textInput::placeholder { color:#b0b6bb; }
+
+.msg-row { display:flex; margin-bottom:16px; align-items:flex-start; }
+/* 自己发的消息：整行镜像到右边（微信习惯），头像在右 */
+.msg-row.self { flex-direction:row-reverse; }
+.msg-row.self .msg-side { display:flex; flex-direction:column; align-items:flex-end; }
+.msg-row.self .msg-time { text-align:right; }
+.msg-avatar {
+  width:36px; height:36px; border-radius:50%; flex-shrink:0;
+  display:flex; align-items:center; justify-content:center;
+  font-size:15px; font-weight:600; color:#fff;
+  margin-right:10px; background:#b9c2c9; user-select:none;
+}
+.msg-row.self .msg-avatar { margin-right:0; margin-left:10px; }
 .msg-side { flex:1; min-width:0; }
 .msg-sender { font-size:11px; color:#9aa0a6; margin-bottom:5px; }
 .bubble {
   background:#fff; padding:9px 13px; font-size:15px; line-height:1.55;
-  word-break:break-word; white-space:pre-wrap; border-radius:8px;
+  word-break:break-word; white-space:pre-wrap; border-radius:10px;
   position:relative; display:inline-block; max-width:100%;
-  box-shadow:0 1px 3px rgba(0,0,0,.06);
+  box-shadow:0 1px 2px rgba(0,0,0,.06);
 }
 .bubble::before {
   content:''; position:absolute; left:-5px; top:14px;
   border:5px solid transparent; border-right-color:#fff; border-left:0;
+}
+/* 自己的文字气泡：品牌绿底白字，小尾巴在右 */
+.bubble.me { background:#07C160; color:#fff; box-shadow:0 1px 3px rgba(7,193,96,.25); }
+.bubble.me::before {
+  left:auto; right:-5px;
+  border:5px solid transparent; border-left-color:#07C160; border-right:0;
 }
 .file-card {
   display:flex; align-items:center; background:#fff; border-radius:8px;
@@ -230,10 +257,25 @@ body.no-peer #textInput { cursor:not-allowed; }
 }
 .file-dl:hover { background:#07C160; border-color:#07C160; color:#fff; transform:scale(1.08); }
 .file-dl:active { transform:scale(.94); }
-.media-meta .file-dl { margin-left:auto; width:24px; height:24px; font-size:12px; }
+/* 文件卡片正下方的拉取进度条（访客端） */
+.pull-wrap { display:none; margin-top:6px; }
+.pull-bar {
+  height:4px; border-radius:3px; overflow:hidden;
+  background:rgba(7,193,96,.15);
+}
+.pull-bar i {
+  display:block; height:100%; width:0; border-radius:3px;
+  background:#07C160; transition:width .25s ease;
+}
+.pull-text { font-size:11px; color:#5b8a6e; margin-top:4px; font-variant-numeric:tabular-nums; }
 .file-card::before {
   content:''; position:absolute; left:-5px; top:16px;
   border:5px solid transparent; border-right-color:#fff; border-left:0;
+}
+/* 自己发的文件卡片：小尾巴翻到右侧 */
+.msg-row.self .file-card::before {
+  left:auto; right:-5px;
+  border:5px solid transparent; border-left-color:#fff; border-right:0;
 }
 .file-icon {
   width:36px; height:36px; border-radius:8px;
@@ -245,86 +287,6 @@ body.no-peer #textInput { cursor:not-allowed; }
 .file-name { font-size:14px; word-break:break-all; line-height:1.35; }
 .file-size { font-size:12px; color:#9aa0a6; margin-top:3px; }
 .msg-time { font-size:11px; color:#b0b6bb; margin-top:5px; }
-
-/* ===== 可预览的媒体消息（图片 / 视频 / 音频）===== */
-.media-card {
-  display:block; background:#fff; border-radius:10px; overflow:hidden;
-  width:min(280px,100%); position:relative; cursor:pointer;
-  box-shadow:0 1px 3px rgba(0,0,0,.06); transition:box-shadow .18s, transform .18s;
-}
-.media-card:hover { box-shadow:0 4px 14px rgba(0,0,0,.12); transform:translateY(-1px); }
-.media-card::before {
-  content:''; position:absolute; left:-5px; top:16px; z-index:1;
-  border:5px solid transparent; border-right-color:#fff; border-left:0;
-}
-.media-thumb {
-  width:100%; max-height:210px; display:block; object-fit:cover; background:#f0f2f4;
-}
-.media-fallback {
-  width:100%; height:150px; display:flex; flex-direction:column; gap:6px;
-  align-items:center; justify-content:center; background:#14171a; color:#c9cdd2;
-  font-size:12px;
-}
-.media-fallback.light { background:#f4f6f8; color:#9aa0a6; }
-.media-fallback.light .media-play.small {
-  background:linear-gradient(135deg,#07C160,#04a94f); color:#fff;
-  box-shadow:0 3px 10px rgba(7,193,96,.28);
-}
-.media-play {
-  width:52px; height:52px; border-radius:50%; background:rgba(255,255,255,.92);
-  color:#12151a; display:flex; align-items:center; justify-content:center;
-  font-size:20px; padding-left:3px; box-shadow:0 4px 16px rgba(0,0,0,.35);
-}
-.media-play.small { width:34px; height:34px; font-size:14px; }
-.media-meta {
-  display:flex; align-items:center; gap:8px; padding:8px 10px;
-  font-size:12px; color:#5f6368; background:#fff;
-}
-.media-meta .m-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#3c4043; font-size:12.5px; }
-.media-meta .m-size { color:#9aa0a6; flex-shrink:0; }
-.media-tag {
-  position:absolute; right:8px; top:8px; padding:2px 7px; border-radius:20px;
-  background:rgba(0,0,0,.55); color:#fff; font-size:10.5px; letter-spacing:.4px;
-}
-
-/* ===== 大图 / 视频预览 ===== */
-#previewMask {
-  display:none; position:fixed; inset:0; z-index:300; background:rgba(12,14,17,.86);
-  align-items:center; justify-content:center; padding:22px;
-}
-#previewMask.show { display:flex; }
-.preview-box {
-  width:100%; max-width:1000px; max-height:100%; display:flex; flex-direction:column;
-  background:#1a1d21; border-radius:14px; overflow:hidden; box-shadow:0 20px 60px rgba(0,0,0,.5);
-}
-.preview-head {
-  display:flex; align-items:center; gap:12px; padding:10px 14px; color:#e8eaed;
-  font-size:13px; background:#212529; flex-shrink:0;
-}
-.preview-head .p-title {
-  flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-}
-.preview-head button {
-  background:none; border:none; color:#c9cdd2; font-size:19px; cursor:pointer;
-  line-height:1; padding:2px 6px; border-radius:6px;
-}
-.preview-head button:hover { background:rgba(255,255,255,.12); color:#fff; }
-.preview-body {
-  flex:1; min-height:0; display:flex; align-items:center; justify-content:center;
-  background:#0f1115; overflow:auto;
-}
-.preview-body img { max-width:100%; max-height:76vh; object-fit:contain; display:block; }
-.preview-body video { max-width:100%; max-height:76vh; display:block; background:#000; }
-.preview-body audio { width:min(520px,86vw); margin:60px 20px; }
-.preview-body iframe { width:min(900px,92vw); height:76vh; border:none; background:#fff; }
-.preview-foot {
-  display:flex; justify-content:flex-end; padding:9px 14px; background:#212529; flex-shrink:0;
-}
-.preview-foot a {
-  color:#7ee2a8; font-size:12.5px; text-decoration:none; padding:5px 12px;
-  border:1px solid rgba(126,226,168,.4); border-radius:20px;
-}
-.preview-foot a:hover { background:rgba(126,226,168,.12); }
 
 /* ===== 待发送文件 ===== */
 .pending-area { display:none; background:#fff; border-top:1px solid #f0f0f0; padding:8px 16px; }
@@ -378,12 +340,15 @@ body.no-peer #textInput { cursor:not-allowed; }
   display:none; position:fixed; inset:0; background:rgba(0,0,0,.45);
   z-index:100; justify-content:center; align-items:center; padding:20px;
 }
-.modal-mask.show { display:flex; }
+.modal-mask.show { display:flex; animation:maskIn .18s ease; }
+@keyframes maskIn { from { background:rgba(0,0,0,0); } to { background:rgba(0,0,0,.45); } }
 .modal {
-  background:#fff; border-radius:12px; padding:22px;
+  background:#fff; border-radius:14px; padding:22px;
   width:100%; max-width:420px; max-height:75vh; overflow-y:auto;
   box-shadow:0 12px 40px rgba(0,0,0,.18);
 }
+.modal-mask.show .modal { animation:modalIn .22s cubic-bezier(.2,.8,.3,1); }
+@keyframes modalIn { from { opacity:0; transform:translateY(12px) scale(.97); } to { opacity:1; transform:none; } }
 .modal h3 { font-size:16px; margin-bottom:14px; }
 .modal input {
   width:100%; padding:10px 12px; border:1px solid #e2e4e6; border-radius:8px;
@@ -391,11 +356,13 @@ body.no-peer #textInput { cursor:not-allowed; }
 }
 .modal input:focus { border-color:#07C160; }
 .modal-btns { display:flex; gap:8px; justify-content:flex-end; margin-top:14px; }
-.modal-btns button { padding:8px 16px; border-radius:8px; border:none; font-size:14px; cursor:pointer; }
+.modal-btns button { padding:8px 16px; border-radius:8px; border:none; font-size:14px; cursor:pointer; transition:filter .15s, background .15s; }
+.modal-btns button:hover { filter:brightness(.96); }
 .btn-primary { background:#07C160; color:#fff; }
+.btn-primary:hover { background:#06ad56; filter:none; }
 .btn-plain { background:#f1f3f4; color:#3c4043; }
 .btn-danger { background:#d93025; color:#fff; }
-.btn-danger:hover { background:#b3261e; }
+.btn-danger:hover { background:#b3261e; filter:none; }
 .modal-tip { font-size:13px; line-height:1.75; color:#5c6b62; margin:-4px 0 4px; }
 .dev-list { list-style:none; }
 .dev-list li {
@@ -417,11 +384,12 @@ body.no-peer #textInput { cursor:not-allowed; }
 .mini-btn.danger { background:#c62828; color:#fff; }
 .mini-btn.normal { background:#f1f3f4; color:#3c4043; }
 .toast {
-  position:fixed; top:24px; left:50%; transform:translateX(-50%);
-  background:rgba(32,33,36,.9); color:#fff; padding:9px 18px; border-radius:20px;
-  font-size:13.5px; opacity:0; transition:opacity .25s; z-index:999; pointer-events:none;
+  position:fixed; top:24px; left:50%; transform:translate(-50%,-10px);
+  background:rgba(32,33,36,.92); color:#fff; padding:9px 18px; border-radius:20px;
+  font-size:13.5px; opacity:0; transition:opacity .22s, transform .22s;
+  z-index:999; pointer-events:none; max-width:86vw; text-align:center;
 }
-.toast.show { opacity:1; }
+.toast.show { opacity:1; transform:translate(-50%,0); }
 .lnk { background:none;border:none;color:#0a8f4a;font-size:12px;cursor:pointer;padding:0 6px;text-decoration:none; }
 .lnk:hover { text-decoration:underline; }
 
@@ -547,7 +515,6 @@ body.no-peer #textInput { cursor:not-allowed; }
   #lanBanner { margin:8px 12px 0; padding:10px 12px; }
   .screen-body { width:100%; }
   #screenVideo { max-height:26vh; }
-  .media-card { width:min(240px,100%); }
   .chat-scroll { padding:14px 12px 6px; }
   .input-bar { padding:8px 12px calc(8px + env(safe-area-inset-bottom)); }
   .file-card { width:100%; }
@@ -724,7 +691,7 @@ body.no-peer #textInput { cursor:not-allowed; }
 <div id="p2pBanner" style="display:none;">
   <div class="p2p-line">
     <span class="p2p-label">🌍 外网直连</span>
-    <b id="roomCode"></b>
+    <b id="roomCode" title="点击复制房间码" onclick="copyRoomCode()"></b>
     <button class="pill ghost" onclick="renewRoom()">新建房间</button>
     <button class="pill danger" id="dissolveBtn" onclick="askDissolve()">销毁房间</button>
     <button class="pill ghost" id="ttlBtn" onclick="showTtl()">房间说明</button>
@@ -788,10 +755,10 @@ body.no-peer #textInput { cursor:not-allowed; }
 <div class="input-bar">
   <div class="input-inner">
     <div class="input-row">
-      <textarea id="textInput" rows="1" placeholder="输入消息…"></textarea>
-      <button class="send-btn" onclick="sendAll()">发送</button>
       <button class="folder-btn" onclick="document.getElementById('fileInput').click()" title="发送文件">📁</button>
       <button class="folder-btn" id="screenBtn" onclick="toggleScreenShare()" title="共享桌面"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="width:18px;height:18px;"><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg></button>
+      <textarea id="textInput" rows="1" placeholder="输入消息，Enter 发送 / Shift+Enter 换行"></textarea>
+      <button class="send-btn" onclick="sendAll()">发送</button>
       <input type="file" id="fileInput" multiple style="display:none">
     </div>
   </div>
@@ -847,7 +814,7 @@ body.no-peer #textInput { cursor:not-allowed; }
       </details>
       <details>
         <summary>收到的文件存在哪了？</summary>
-        <p>房主那台设备上：<code>数据\房间\&lt;房间码&gt;\接收文件\</code>。其他设备不会自动下载聊天里的文件：点文件卡片可以在线预览（图片/视频/音频/PDF），点卡片右侧的「⬇」按钮才下载，存在系统的下载目录里。</p>
+        <p>房主那台设备上：<code>数据\房间\&lt;房间码&gt;\接收文件\</code>。其他设备不会自动下载聊天里的文件，点文件卡片右侧的「⬇」按钮才从房主传过来，存在系统的下载目录里。</p>
       </details>
       <details>
         <summary>大文件能传多大？</summary>
@@ -900,16 +867,6 @@ body.no-peer #textInput { cursor:not-allowed; }
       <button class="btn-plain" onclick="hideDissolve()">取消</button>
       <button class="btn-danger" onclick="dissolveRoom()">销毁</button>
     </div>
-  </div>
-</div>
-<div id="previewMask" onclick="if(event.target===this)closePreview()">
-  <div class="preview-box">
-    <div class="preview-head">
-      <span class="p-title" id="previewName"></span>
-      <button onclick="closePreview()" title="关闭">✕</button>
-    </div>
-    <div class="preview-body" id="previewBody"></div>
-    <div class="preview-foot"><a id="previewDl" href="#" download>下载原文件</a></div>
   </div>
 </div>
 <div class="toast" id="toast"></div>
@@ -1113,8 +1070,8 @@ function fmtEta(sec) {
   if (sec < 3600) return Math.round(sec / 60) + ' 分钟';
   return (sec / 3600).toFixed(1) + ' 小时';
 }
-function txStart(name, total) {
-  txState = { name: name || '', total: total || 0, done: 0,
+function txStart(name, total, mid) {
+  txState = { name: name || '', total: total || 0, done: 0, mid: mid || '',
               lastT: Date.now(), lastD: 0, speed: 0 };
   txRender();
 }
@@ -1156,6 +1113,19 @@ function txRender() {
     return;
   }
   const pct = txState.total ? Math.min(100, txState.done / txState.total * 100) : 0;
+  // 拉取/接收进度优先画到对应文件卡片正下方；卡片不在页面上才退回顶部横条
+  if (txState.mid) {
+    const w = document.getElementById('pullwrap-' + txState.mid);
+    if (w) {
+      w.style.display = 'block';
+      const bar = w.querySelector('.pull-bar i');
+      const txt = w.querySelector('.pull-text');
+      if (bar) bar.style.width = pct.toFixed(1) + '%';
+      if (txt) txt.textContent = txText();
+      box.style.display = 'none';
+      return;
+    }
+  }
   box.style.display = 'block';
   b.style.width = pct.toFixed(1) + '%';
   if (t) t.textContent = txText();
@@ -1463,23 +1433,10 @@ function renderAll() {
   chatScroll.scrollTop = chatScroll.scrollHeight;
 }
 
-// ===== 文件类型判定：图片 / 视频 / 音频 / PDF 走在线预览，其余仍是下载卡片 =====
-const IMG_EXT = ['png','jpg','jpeg','gif','webp','bmp','svg','avif','ico'];
-const VID_EXT = ['mp4','webm','ogv','ogg','m4v','mov','mkv'];
-const AUD_EXT = ['mp3','wav','m4a','aac','flac','opus','oga'];
-const PDF_EXT = ['pdf'];
 function extOf(name) {
   const n = String(name || '');
   const i = n.lastIndexOf('.');
   return i > 0 ? n.slice(i + 1).toLowerCase() : '';
-}
-function mediaKind(name) {
-  const e = extOf(name);
-  if (IMG_EXT.indexOf(e) >= 0) return 'img';
-  if (VID_EXT.indexOf(e) >= 0) return 'vid';
-  if (AUD_EXT.indexOf(e) >= 0) return 'aud';
-  if (PDF_EXT.indexOf(e) >= 0) return 'pdf';
-  return '';
 }
 // 访客端 P2P 收到的分片要拼成带正确 MIME 的 Blob，否则 video/audio 标签拒绝播放
 const MIME_MAP = {
@@ -1492,128 +1449,62 @@ const MIME_MAP = {
   pdf:'application/pdf', txt:'text/plain'
 };
 function mimeOf(name) { return MIME_MAP[extOf(name)] || 'application/octet-stream'; }
-// 预览地址：房主/局域网走本机接口 inline（不触发下载），访客用拉取到的 blob
+// 文件下载地址：房主/局域网走本机接口，访客没有后端（本体要点 ⬇ 按需拉取）
 function fileUrl(msg) {
   if (msg.url) return msg.url;
-  // 访客端没有后端：文件本体要点卡片按需拉取（pullFile），卡片阶段先不给链接
   if (MODE === 'guest') return '';
   return API + '/download?name=' + encodeURIComponent(msg.name);
 }
-function previewSrc(msg) {
-  if (msg.url) return msg.url;
-  if (MODE === 'guest') return '';
-  return API + '/download?name=' + encodeURIComponent(msg.name) + '&inline=1';
+
+// ===== 消息渲染：微信式左右分栏 =====
+// 自己发的靠右、绿色气泡；别人的靠左。判定依据：消息的发送者名字 == 本机在房间里的名字
+const AVATAR_COLORS = ['#07C160','#0aa571','#1296db','#f0a020','#e65100','#8e6cd9','#d4576e','#5b8def'];
+function avatarColor(name) {
+  let h = 0; const s = String(name || '?');
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return AVATAR_COLORS[h % AVATAR_COLORS.length];
 }
+function isSelfMsg(msg) { return !!myName && !!msg.ip && msg.ip === myName; }
 
 function renderMsg(msg) {
+  const self = isSelfMsg(msg);
   let bubble='';
   if (msg.type==='text') {
-    bubble = '<div class="bubble">'+esc(msg.content)+'</div>';
+    bubble = '<div class="bubble'+(self?' me':'')+'">'+esc(msg.content)+'</div>';
   } else {
-    const kind = mediaKind(msg.name);
-    const src = previewSrc(msg);
+    // 文件消息：统一一张文件卡片，不做在线预览；访客靠 ⬇ 按钮按需拉取
     const dl = fileUrl(msg);
     const nm = esc(msg.name), sz = esc(msg.size || '');
-    const attrs = ' data-name="'+nm+'" data-url="'+esc(src)+'" data-dl="'+esc(dl)+'" data-kind="'+kind+'"';
-    // 访客端拉到本体后卡片带个独立下载按钮；房主/局域网点开预览后里面也有下载
-    const dlBtn = (MODE === 'guest' && msg.id)
-      ? '<button class="file-dl" title="下载到本机" onclick="event.stopPropagation(); pullFile(\'' + esc(msg.id) + '\', true)">⬇</button>'
-      : '';
-    if (!dl) {
-      // 访客端拿不到文件本体（历史/别人传的都只收到卡片）：
-      // 点卡片 = 预览（可预览类型）；右边单独的 ⬇ 按钮才是下载落盘
-      const ext=String(msg.name||'').split('.').pop().toUpperCase().slice(0,4);
-      const pullable = MODE === 'guest' && msg.id;
-      const pv = kind && pullable;   // 图片/视频/音频/PDF 才值得点开预览
-      bubble = '<div class="file-card"'+(pullable
-        ? ' style="cursor:pointer;" title="'+(pv ? '点击预览' : '点击获取')+'" onclick="tapFileCard(\'' + esc(msg.id) + '\')"'
-        : '') + '>'+
+    const ext=String(msg.name||'').split('.').pop().toUpperCase().slice(0,4);
+    const pullable = MODE === 'guest' && msg.id;
+    if (pullable) {
+      bubble = '<div class="file-card" title="点右侧 ⬇ 下载">'+
         '<div class="file-icon">'+esc(ext)+'</div>'+
         '<div class="file-info"><div class="file-name">'+nm+'</div>'+
-        '<div class="file-size">'+sz+(pullable ? (pv ? ' · 点击预览' : ' · 不支持预览') : ' · 历史文件')+'</div></div>'+
-        (pullable ? '<button class="file-dl" title="下载到本机" onclick="event.stopPropagation(); pullFile(\'' + esc(msg.id) + '\', true)">⬇</button>' : '')+
-        '</div>';
-    } else if (kind === 'img') {
-      bubble = '<div class="media-card"'+attrs+' onclick="openPreview(this)">'+
-        '<img class="media-thumb" src="'+esc(src)+'" alt="'+nm+'" loading="lazy">'+
-        '<div class="media-meta"><span class="m-name">'+nm+'</span><span class="m-size">'+sz+'</span>'+dlBtn+'</div></div>';
-    } else if (kind === 'vid') {
-      bubble = '<div class="media-card"'+attrs+' onclick="openPreview(this)">'+
-        '<div class="media-fallback"><span class="media-play">▶</span></div>'+
-        '<span class="media-tag">视频</span>'+
-        '<div class="media-meta"><span class="m-name">'+nm+'</span><span class="m-size">'+sz+'</span>'+dlBtn+'</div></div>';
-    } else if (kind === 'aud') {
-      bubble = '<div class="media-card"'+attrs+' onclick="openPreview(this)">'+
-        '<div class="media-fallback light" style="height:74px;"><span class="media-play small">♪</span></div>'+
-        '<div class="media-meta"><span class="m-name">'+nm+'</span><span class="m-size">'+sz+'</span>'+dlBtn+'</div></div>';
-    } else if (kind === 'pdf') {
-      bubble = '<div class="media-card"'+attrs+' onclick="openPreview(this)">'+
-        '<div class="media-fallback light" style="height:88px;"><span class="media-play small">📄</span></div>'+
-        '<div class="media-meta"><span class="m-name">'+nm+'</span><span class="m-size">'+sz+'</span>'+dlBtn+'</div></div>';
+        '<div class="file-size">'+sz+'</div></div>'+
+        '<button class="file-dl" title="下载到本机" onclick="pullFile(\'' + esc(msg.id) + '\')">⬇</button></div>';
     } else {
-      const ext=String(msg.name||'').split('.').pop().toUpperCase().slice(0,4);
-      if (MODE === 'guest' && msg.id) {
-        // 访客：不可预览的文件本体到手后也不给裸链接，统一「⬇ 按钮」样式
-        bubble = '<div class="file-card" style="cursor:pointer;" title="保存到下载目录"'+
-          ' onclick="saveBlobUrl(\'' + esc(msg.id) + '\')">'+
-          '<div class="file-icon">'+esc(ext)+'</div>'+
-          '<div class="file-info"><div class="file-name">'+nm+'</div>'+
-          '<div class="file-size">'+sz+'</div></div>'+
-          '<button class="file-dl" title="下载到本机" onclick="event.stopPropagation(); saveBlobUrl(\'' + esc(msg.id) + '\')">⬇</button></div>';
-      } else {
-        bubble = '<a class="file-card" href="'+esc(dl)+'" download="'+nm+'">'+
-          '<div class="file-icon">'+esc(ext)+'</div>'+
-          '<div class="file-info"><div class="file-name">'+nm+'</div>'+
-          '<div class="file-size">'+sz+'</div></div></a>';
-      }
+      bubble = '<a class="file-card" href="'+esc(dl)+'" download="'+nm+'" title="下载">'+
+        '<div class="file-icon">'+esc(ext)+'</div>'+
+        '<div class="file-info"><div class="file-name">'+nm+'</div>'+
+        '<div class="file-size">'+sz+'</div></div></a>';
     }
   }
-  const ip = msg.ip ? '<div class="msg-sender">'+esc(msg.ip)+'</div>' : '';
-  return '<div class="msg-row"><div class="msg-avatar">🌐</div><div class="msg-side">'+
-    ip+bubble+'<div class="msg-time">'+esc(msg.time)+'</div></div></div>';
+  // 头像：名字首字 + 按名字稳定取色；自己发的名字不重复显示（气泡已经靠右）
+  const name = self ? myName : (msg.ip || '');
+  const avatar = '<div class="msg-avatar" style="background:'+avatarColor(name)+'">'+
+    esc((name || '？').slice(0, 1).toUpperCase())+'</div>';
+  const sender = (!self && msg.ip) ? '<div class="msg-sender">'+esc(msg.ip)+'</div>' : '';
+  // 访客文件卡片正下方的下载进度条（平时隐藏，下载中由 txRender 填充）
+  const bar = (msg.type === 'file' && MODE === 'guest' && msg.id)
+    ? '<div class="pull-wrap" id="pullwrap-' + esc(msg.id) + '">'+
+      '<div class="pull-bar"><i></i></div><div class="pull-text"></div></div>'
+    : '';
+  const side = '<div class="msg-side">'+sender+bubble+bar+
+    '<div class="msg-time">'+esc(msg.time)+'</div></div>';
+  return '<div class="msg-row'+(self?' self':'')+'">'+
+    (self ? side+avatar : avatar+side)+'</div>';
 }
-
-// ===== 在线预览弹层 =====
-function previewBodyHTML(kind, src, name) {
-  if (kind === 'img') return '<img src="'+esc(src)+'" alt="'+esc(name)+'">';
-  if (kind === 'vid') return '<video src="'+esc(src)+'" controls autoplay playsinline preload="metadata"></video>';
-  if (kind === 'aud') return '<audio src="'+esc(src)+'" controls autoplay preload="metadata"></audio>';
-  if (kind === 'pdf') return '<iframe src="'+esc(src)+'" title="'+esc(name)+'"></iframe>';
-  return '';
-}
-function openPreview(el) {
-  const name = el.getAttribute('data-name') || '';
-  const kind = el.getAttribute('data-kind') || '';
-  const src = el.getAttribute('data-url') || '';
-  const dl = el.getAttribute('data-dl') || src;
-  openPreviewSrc(name, kind, src, dl);
-}
-// 访客端：拉到 blob 后直接开预览弹层
-function openMsgPreview(m) {
-  const name = m.name || '';
-  const kind = mediaKind(name);
-  if (!kind) { notify('这种类型不支持预览，点卡片上的 ⬇ 可下载'); return; }
-  openPreviewSrc(name, kind, m.url, m.url);
-}
-function openPreviewSrc(name, kind, src, dl) {
-  const body = previewBodyHTML(kind, src, name);
-  if (!body) return;
-  document.getElementById('previewName').textContent = name;
-  document.getElementById('previewBody').innerHTML = body;
-  const link = document.getElementById('previewDl');
-  link.href = dl;
-  link.setAttribute('download', name);
-  document.getElementById('previewMask').classList.add('show');
-}
-function closePreview() {
-  const mask = document.getElementById('previewMask');
-  mask.classList.remove('show');
-  // 清空内容，顺带停掉正在播放的音视频
-  document.getElementById('previewBody').innerHTML = '';
-}
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') closePreview();
-});
 
 function stopPolling() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
@@ -1840,7 +1731,11 @@ function handleData(data, ctx) {
       let e0 = null;
       try { e0 = JSON.parse(data.slice(16)); } catch (e) {}
       const mid = e0 && e0.mid;
-      if (mid) { pullIntents.delete(mid); pullInFlight.delete(mid); pumpPullQueue(); }
+      if (mid) {
+        pullInFlight.delete(mid); pumpPullQueue();
+        const w = document.getElementById('pullwrap-' + mid);
+        if (w) { w.style.display = 'none'; w.querySelector('.pull-bar i').style.width = '0%'; }
+      }
       notify('「' + ((e0 && e0.name) || '文件') + '」已不存在，无法下载');
       return;
     }
@@ -1909,7 +1804,7 @@ function handleData(data, ctx) {
           mid: meta.mid || '',
           from: meta.f || (ctx && ctx.name) || '外网设备'
         });
-        if (MODE === 'guest') { txStart(meta.name, meta.size); setStatus('接收中: ' + meta.name); }
+        if (MODE === 'guest') { txStart(meta.name, meta.size, meta.mid || ''); setStatus('接收中: ' + meta.name); }
         else if (!isLanClient) { showHostHint('正在接收：' + meta.name + '（' + fmtSize(meta.size) + '）'); }
       } catch (e) { recvBuf.delete(key); }
     } else if (data.startsWith('FILE_END:')) {
@@ -2063,30 +1958,18 @@ function acceptScreenCall(call) {
   });
 }
 
-// ===== 按需拉取（访客端）：点卡片=预览，点 ⬇ 按钮=下载落盘 =====
+// ===== 按需下载（访客端）：⬇ 按钮 → 向房主要文件本体 → 存到下载目录 =====
 // 同一时间只拉一个文件：访客只有一条数据通道，混着收会串包
-const pullIntents = new Map();  // mid → 'save' | 'preview'（拉到本体后按意图处理）
 const pullInFlight = new Set();  // 正在拉取的 mid
-const pullQueue = [];            // 排队中的 {mid, name, save}
-// 点文件卡片：有本体直接开预览，没有就先拉（拉完自动开预览）
-function tapFileCard(mid) {
+const pullQueue = [];            // 排队中的 {mid, name}
+// ⬇ 按钮：把文件从房主拉过来并存到下载目录
+function pullFile(mid) {
   const m = localMsgs.find(x => x.id === mid);
   if (!m || m.type !== 'file') return;
-  if (m.url) { openMsgPreview(m); return; }
-  pullFile(mid, false);
-}
-function pullFile(mid, save) {
-  const m = localMsgs.find(x => x.id === mid);
-  if (!m || m.type !== 'file') return;
-  if (m.url) {                    // 本体已经在手上
-    if (save) saveBlob(m.url, m.name);
-    else openMsgPreview(m);
-    return;
-  }
-  if (!canP2P() || !guestConn || !guestConn.open) { notify('未连接房间，无法获取文件'); return; }
-  if (pullInFlight.has(mid) || pullQueue.some(x => x.mid === mid)) { notify('这个文件已在获取队列里'); return; }
-  pullIntents.set(mid, save ? 'save' : 'preview');
-  pullQueue.push({ mid: mid, name: m.name, save: !!save });
+  if (m.url) { saveBlob(m.url, m.name); return; }   // 本体已在手上：直接再存一份
+  if (!canP2P() || !guestConn || !guestConn.open) { notify('未连接房间，无法下载'); return; }
+  if (pullInFlight.has(mid) || pullQueue.some(x => x.mid === mid)) { notify('这个文件已在下载队列里'); return; }
+  pullQueue.push({ mid: mid, name: m.name });
   pumpPullQueue();
 }
 function saveBlob(url, name) {
@@ -2097,27 +1980,29 @@ function saveBlob(url, name) {
     setTimeout(() => a.remove(), 1000);
   } catch (e) {}
 }
-// 卡片 onclick 用：按 mid 找到已缓存的本体直接保存
-function saveBlobUrl(mid) {
-  const m = localMsgs.find(x => x.id === mid);
-  if (m && m.url) saveBlob(m.url, m.name);
-}
 function pumpPullQueue() {
   if (!pullQueue.length || pullInFlight.size) return;
   const job = pullQueue.shift();
   if (!guestConn || !guestConn.open) {
-    pullIntents.delete(job.mid);
-    notify('连接已断开，获取中断');
+    notify('连接已断开，下载中断');
     return;
   }
   pullInFlight.add(job.mid);
   try {
     guestConn.send('FILE_PULL:' + JSON.stringify({ mid: job.mid, name: job.name }));
-    setStatus((job.save ? '正在请求下载: ' : '正在加载预览: ') + job.name);
+    setStatus('正在请求下载: ' + job.name);
+    // 卡片正下方的进度条先亮起来
+    const w = document.getElementById('pullwrap-' + job.mid);
+    if (w) {
+      w.style.display = 'block';
+      const bar = w.querySelector('.pull-bar i');
+      const txt = w.querySelector('.pull-text');
+      if (bar) bar.style.width = '0%';
+      if (txt) txt.textContent = '正在请求…';
+    }
   } catch (e) {
     pullInFlight.delete(job.mid);
-    pullIntents.delete(job.mid);
-    notify('请求发送失败');
+    notify('下载请求发送失败');
   }
 }
 
@@ -2129,18 +2014,8 @@ async function onFileReceived(blob, name, mid, from) {
     else pushMsg({ type: 'file', name: name, size: fmtSize(blob.size), url: url,
                    ip: from || '外网设备', id: mid || uid() });
     txEnd();
-    const intent = mid ? (pullIntents.get(mid) || '') : '';
-    if (mid) pullIntents.delete(mid);
-    if (intent === 'save') {
-      // 用户点的是 ⬇ 下载按钮：落盘一次
-      setStatus('✅ ' + name + ' 已下载', true);
-      saveBlob(url, name);
-    } else if (intent === 'preview') {
-      setStatus('✅ ' + name + ' 已就绪', true);
-      openMsgPreview({ name: name, url: url });
-    } else {
-      setStatus('✅ 已收到 ' + name, true);
-    }
+    setStatus('✅ ' + name + ' 已下载', true);
+    saveBlob(url, name);
     if (mid) pullInFlight.delete(mid);
     pumpPullQueue();
     return;
@@ -2275,6 +2150,23 @@ function copyLanUrl() {
     else toast('复制失败，请手动记下：' + short);
   });
 }
+
+// 房主横幅上的房间码可以点：一键复制，省得手动框选
+function copyRoomCode() {
+  const code = ROOM || document.getElementById('roomCode').textContent.trim();
+  if (!code) return;
+  copyText(code, ok => toast(ok ? '房间码已复制：' + code : '复制失败，请手动复制：' + code));
+}
+
+// Esc 关掉所有开着的小弹窗（设置/帮助/说明/登录/确认），不用非去点关闭按钮
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  let closed = false;
+  document.querySelectorAll('.modal-mask.show').forEach(m => {
+    m.classList.remove('show'); closed = true;
+  });
+  if (closed) e.preventDefault();
+});
 
 // 局域网二维码：地址后面带上房间码，扫码进来房间码已经填好，不用手输
 function lanQrUrl() {
@@ -2982,7 +2874,7 @@ function dropGuestConn() {
 function resetToGate() {
   currentRoom = '';
   guestAutoTry = 0;
-  pullIntents.clear(); pullInFlight.clear(); pullQueue.length = 0;   // 清掉没完成的获取任务
+  pullInFlight.clear(); pullQueue.length = 0;   // 清掉没完成的下载任务
   serverMsgs = []; localMsgs = [];
   seenIds = new Set();
   guestNames = [];
