@@ -945,7 +945,7 @@ const PROTOCOL = 4;          // v4：连接元数据带上昵称与设备 ID，�
 // 邀请链接用的域名：本机页面由程序每次请求时按 client_url.txt 现填；
 // 在线页（GitHub 上那份）写的是导出那一刻的值，只能靠运行时从本机接口拿最新值覆盖，
 // 见 applyClientUrl()。所以改 client_url.txt 不用重新导出、也不用重新上传静态页。
-let CLIENT_URL = 'https://zvzqvqdvd.github.io/data-transmission/';
+let CLIENT_URL = '';
 let lastRev = null;
 let pollTimer = null;        // 房主端的 /messages 轮询
 let roomClosed = false;      // 房主已解散房间，页面停在入口页
@@ -997,9 +997,8 @@ function peerOpts() {
   const o = {
     config: {
       iceServers: iceServers(),
-      // 候选地址提前收一批：点「连接」时不必从零开始等 STUN，
-      // 弱网/移动网络下这一项能省掉几百毫秒
-      iceCandidatePoolSize: 4,
+      // 注意：不要加 iceCandidatePoolSize！2026-11 实测新版 Chrome 上它会制造
+      // 重复候选、两条 nominated pair，DTLS 握手随机卡死（外网加入失败的主因）。
       bundlePolicy: 'max-bundle',
       rtcpMuxPolicy: 'require'
     }
