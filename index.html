@@ -543,6 +543,119 @@ body.no-peer #textInput { cursor:not-allowed; }
   .empty { padding:56px 16px; }
   .gate-card { padding:26px 20px 18px; border-radius:18px; }
 }
+
+/* ===== 发送队列（多文件逐项进度） ===== */
+.pq-head {
+  display:flex; align-items:center; justify-content:space-between;
+  max-width:760px; margin:0 auto 6px; font-size:11.5px; color:#6b8a78;
+}
+.pq-head button {
+  border:none; background:none; color:#3c7a57; font-size:11.5px; cursor:pointer;
+  padding:2px 6px; border-radius:5px;
+}
+.pq-head button:hover { background:#eef3f0; color:#0a8f4a; }
+.pq-item {
+  position:relative; display:flex; align-items:center; gap:8px;
+  padding:7px 10px 9px; background:#f4f6f7; border-radius:8px; margin-bottom:6px;
+  max-width:760px; margin-left:auto; margin-right:auto; font-size:13px; overflow:hidden;
+}
+.pq-item.sending { background:#eefaf3; }
+.pq-item.err { background:#fdf0ef; }
+.pq-ico { flex-shrink:0; }
+.pq-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pq-state { flex-shrink:0; font-size:11px; color:#8a949c; white-space:nowrap; }
+.pq-state.ok { color:#0a8f4a; }
+.pq-state.err { color:#d93025; }
+.pq-x {
+  flex-shrink:0; background:none; border:none; color:#9aa0a6;
+  cursor:pointer; font-size:15px; padding:0 2px; line-height:1;
+}
+.pq-x:hover { color:#c62828; }
+.pq-bar {
+  position:absolute; left:0; right:0; bottom:0; height:2px; background:#e8eeeb;
+}
+.pq-fill { height:100%; width:0; background:#07C160; transition:width .18s linear; }
+.pq-item.err .pq-fill { background:#e57373; }
+
+/* ===== 拖拽投放 ===== */
+#dropMask {
+  position:fixed; inset:0; z-index:120; display:none;
+  align-items:center; justify-content:center; padding:24px;
+  background:rgba(7,193,96,.08); border:2px dashed #07C160; border-radius:14px;
+}
+#dropMask.show { display:flex; }
+.drop-card { text-align:center; pointer-events:none; }
+.drop-ico { font-size:40px; }
+.drop-t { font-size:15px; font-weight:600; color:#0a8f4a; margin-top:6px; }
+.drop-s { font-size:12px; color:#3c7a57; margin-top:4px; }
+
+/* ===== 网络与中继设置 ===== */
+.modal.wide { max-width:560px; }
+.ice-list { display:flex; flex-direction:column; gap:6px; margin:10px 0 12px; }
+.ice-row {
+  display:flex; align-items:center; gap:8px;
+  padding:8px 10px; background:#f7f9f8; border-radius:8px; font-size:12.5px;
+}
+.ice-row .why {
+  flex-shrink:0; font-size:10px; padding:1px 6px; border-radius:4px;
+  background:#e6f7ed; color:#0a8f4a;
+}
+.ice-row .why.def { background:#eef1f4; color:#5f6368; }
+.ice-url {
+  flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  font-family:Menlo,Consolas,monospace; color:#1f3d2c;
+}
+.ice-row button {
+  border:none; background:none; color:#c62828; cursor:pointer; font-size:13px;
+}
+.ice-add { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+.ice-add select, .ice-add input {
+  margin:0; padding:8px 10px; border:1px solid #e2e4e6; border-radius:8px;
+  font-size:12.5px; outline:none; background:#fff; min-width:0;
+}
+.ice-add select { flex:0 0 84px; }
+.ice-add #iceUrl { flex:1 1 220px; }
+.ice-add #iceUser, .ice-add #icePass { flex:1 1 140px; }
+.ice-add input:focus, .ice-add select:focus { border-color:#07C160; }
+.ice-add .btn-primary {
+  flex:0 0 auto; margin-left:auto; padding:7px 16px; border:none;
+  border-radius:8px; font-size:13px; cursor:pointer;
+}
+.ice-tip { font-size:11.5px; line-height:1.7; color:#6b8a78; margin-top:9px; }
+
+/* ===== 帮助 ===== */
+.faq { display:flex; flex-direction:column; gap:6px; max-height:52vh; overflow:auto; }
+.faq details { background:#f7f9f8; border-radius:8px; padding:9px 12px; }
+.faq summary { cursor:pointer; font-size:13.5px; font-weight:600; color:#1f3d2c; }
+.faq p { font-size:12.5px; line-height:1.85; color:#5c6b62; margin-top:7px; }
+.faq code {
+  font-family:Menlo,Consolas,monospace; background:#eef3f0;
+  padding:1px 5px; border-radius:4px; font-size:11.5px;
+}
+
+/* ===== 房间有效期 ===== */
+.ttl-opts { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:12px; }
+.ttl-opts button {
+  padding:11px; border:1px solid #e2e4e6; background:#fff; border-radius:9px;
+  font-size:13.5px; color:#3c4043; cursor:pointer; transition:all .16s;
+}
+.ttl-opts button:hover { border-color:#07C160; color:#0a8f4a; }
+.ttl-opts button.on {
+  background:#e9f8ef; border-color:#07C160; color:#0a8f4a; font-weight:600;
+}
+
+/* ===== 其它小件 ===== */
+#guestProgText {
+  font-size:11.5px; color:#3c7a57; margin-top:5px; text-align:center;
+}
+.screen-bar .stop.audio { background:rgba(255,255,255,.18); }
+.member-tag.relay { background:#fff4e5; color:#c86a00; }
+.file-save {
+  display:inline-flex; align-items:center; gap:4px; margin-top:6px;
+  padding:3px 9px; border-radius:6px; border:1px solid #cfeada;
+  background:#fff; color:#0a8f4a; font-size:11px; cursor:pointer; text-decoration:none;
+}
+.file-save:hover { background:#e9f8ef; }
 </style>
 </head>
 <body>
@@ -592,6 +705,8 @@ body.no-peer #textInput { cursor:not-allowed; }
   <div class="topbar-right">
     <span class="conn-status" id="connStatus">连接中…</span>
     <span class="topbar-addr" id="serverUrl"></span>
+    <button class="icon-btn" id="netBtn" onclick="showNet()" title="网络与中继设置">🌐</button>
+    <button class="icon-btn" id="helpBtn" onclick="showHelp()" title="使用帮助">?</button>
     <button class="icon-btn" id="adminBtn" onclick="onAdminClick()" title="设备管理">⚙</button>
   </div>
 </div>
@@ -618,6 +733,7 @@ body.no-peer #textInput { cursor:not-allowed; }
     <b id="roomCode"></b>
     <button class="pill ghost" onclick="renewRoom()">换一个</button>
     <button class="pill danger" id="dissolveBtn" onclick="askDissolve()">解散房间</button>
+    <button class="pill ghost" id="ttlBtn" onclick="showTtl()">有效期：不限</button>
     <span id="inviteBox" style="display:none;gap:8px;">
       <a id="inviteLink" class="pill" href="#" target="_blank" rel="noopener">打开访问链接</a>
       <button class="pill" onclick="toggleQR()">二维码</button>
@@ -643,6 +759,7 @@ body.no-peer #textInput { cursor:not-allowed; }
   <div id="wxTip">检测到 App 内置浏览器，可能无法使用点对点传输。请点右上角「···」选择「在浏览器中打开」。</div>
   <div id="guestTip"></div>
   <div id="guestProg"><div id="guestBar"></div></div>
+  <div id="guestProgText"></div>
 </div>
 
 <div id="waitBar" style="display:none;">
@@ -660,6 +777,7 @@ body.no-peer #textInput { cursor:not-allowed; }
           <video id="screenVideo" autoplay playsinline muted></video>
           <div class="screen-bar">
             <span class="lb"><i class="dot"></i><span id="screenLabel">桌面共享中</span></span>
+            <button id="screenAudio" class="stop audio" onclick="toggleScreenAudio()" style="display:none;">开启声音</button>
             <button id="screenStop" class="stop" onclick="stopScreenShare()">停止共享</button>
           </div>
         </div>
@@ -682,6 +800,81 @@ body.no-peer #textInput { cursor:not-allowed; }
       <button class="folder-btn" id="screenBtn" onclick="toggleScreenShare()" title="共享桌面"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="width:18px;height:18px;"><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg></button>
       <input type="file" id="fileInput" multiple style="display:none">
     </div>
+  </div>
+</div>
+
+<div id="dropMask">
+  <div class="drop-card">
+    <div class="drop-ico">📥</div>
+    <div class="drop-t">松手即加入发送队列</div>
+    <div class="drop-s">支持一次拖多个文件；截图按 Ctrl+V 也能直接发</div>
+  </div>
+</div>
+
+<div class="modal-mask" id="netModal">
+  <div class="modal wide">
+    <h3>网络与中继</h3>
+    <p class="modal-tip" style="text-align:left;">直连打不通时（公司/学校网络、对称 NAT），可以加一台 TURN 服务器帮你中转。配置只存在这台设备的浏览器里，不上传、不写进房间。</p>
+    <div class="ice-list" id="iceList"></div>
+    <div class="ice-add">
+      <select id="iceType"><option value="stun">STUN</option><option value="turn">TURN</option></select>
+      <input id="iceUrl" placeholder="stun:example.com:3478" autocomplete="off" spellcheck="false">
+      <input id="iceUser" placeholder="用户名（TURN 才要）" autocomplete="off">
+      <input id="icePass" placeholder="密码（TURN 才要）" autocomplete="off" type="password">
+      <button class="btn-primary" onclick="addIce()">添加</button>
+    </div>
+    <div class="ice-tip" id="iceTip">当前使用默认的 4 个公共 STUN，能连上就别改。</div>
+    <div class="modal-btns">
+      <button class="btn-plain" onclick="resetIce()">恢复默认</button>
+      <button class="btn-plain" onclick="hideNet()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-mask" id="helpModal">
+  <div class="modal wide">
+    <h3>使用帮助</h3>
+    <div class="faq">
+      <details open>
+        <summary>房间码是对的，却说找不到房间？</summary>
+        <p>房主点过「换一个」或「解散房间」，旧码就作废了；也可能是房主那边的程序或页面已经关掉。找房主重新要房间码，或者直接扫二维码/点邀请链接。</p>
+      </details>
+      <details>
+        <summary>一直卡在「正在连接对方设备」？</summary>
+        <p>先让两台设备连同一个 WiFi，在浏览器里打开房主给的局域网地址，走局域网通道最稳。跨网络时如果双方都在公司网、对称 NAT，直连会失败，可以点右上角 🌐 加一台 TURN 服务器中转；另外微信/QQ 内置浏览器不支持点对点，请用系统浏览器打开。</p>
+      </details>
+      <details>
+        <summary>桌面共享点不动 / 对方看不到？</summary>
+        <p>共享桌面要求页面在 <b>https</b> 或 <b>localhost</b> 下打开，用 <code>http://192.168.x.x</code> 访问时浏览器会禁用采集，这是安全限制。手机浏览器只能看、不能发起共享。</p>
+      </details>
+      <details>
+        <summary>点「复制」没反应？</summary>
+        <p>非 HTTPS 页面不能调用系统剪贴板。本程序会自动退回到老办法复制；如果还是失败，长按或手动选中地址复制即可。</p>
+      </details>
+      <details>
+        <summary>收到的文件存在哪了？</summary>
+        <p>房主那台设备上：<code>数据\房间\&lt;房间码&gt;\接收文件\</code>，聊天里的文件卡片上点「在文件夹中显示」可以直接打开。访客是浏览器下载，存在系统的下载目录里。</p>
+      </details>
+      <details>
+        <summary>大文件能传多大？</summary>
+        <p>上传到本机最大 4 GiB；但外网直连转给其他设备时，超过 256 MB 的文件不再中转，只在房主设备上保存并在聊天里提示，让其他人到房主那台机器上下载。</p>
+      </details>
+    </div>
+    <div class="modal-btns"><button class="btn-plain" onclick="hideHelp()">知道了</button></div>
+  </div>
+</div>
+
+<div class="modal-mask" id="ttlModal">
+  <div class="modal">
+    <h3>房间有效期</h3>
+    <p class="modal-tip">到点自动解散：房间码作废、所有设备退出，聊天记录和已收到的文件仍留在本机。</p>
+    <div class="ttl-opts" id="ttlOpts">
+      <button data-min="0">不限</button>
+      <button data-min="30">30 分钟</button>
+      <button data-min="60">1 小时</button>
+      <button data-min="480">8 小时</button>
+    </div>
+    <div class="modal-btns"><button class="btn-plain" onclick="hideTtl()">取消</button></div>
   </div>
 </div>
 
@@ -794,10 +987,28 @@ const ICE_SERVERS = [
   { urls: 'stun:global.stun.twilio.com:3478' },
   { urls: 'stun:stun.l.google.com:19302' }
 ];
+// 自定义 STUN/TURN：只存在这台设备的浏览器里，不写进房间、不上传。
+// 存的是「完整列表」（含用户删改后的默认项），没存过就用上面的默认值。
+function customIce() {
+  try {
+    const list = JSON.parse(localStorage.getItem('lanshare_ice') || 'null');
+    if (Array.isArray(list) && list.length) return list;
+  } catch (e) {}
+  // 兼容更早的版本：单独存过一条 TURN
+  try {
+    const t = JSON.parse(localStorage.getItem('lanshare_turn') || 'null');
+    if (t && t.urls) return [{ urls: t.urls, username: t.username || '', credential: t.credential || '' }];
+  } catch (e) {}
+  return null;
+}
+function iceServers() {
+  const custom = customIce();
+  return custom ? custom.slice() : ICE_SERVERS.slice();
+}
 function peerOpts() {
   const o = {
     config: {
-      iceServers: ICE_SERVERS.slice(),
+      iceServers: iceServers(),
       // 候选地址提前收一批：点「连接」时不必从零开始等 STUN，
       // 弱网/移动网络下这一项能省掉几百毫秒
       iceCandidatePoolSize: 4,
@@ -805,10 +1016,6 @@ function peerOpts() {
       rtcpMuxPolicy: 'require'
     }
   };
-  try {
-    const t = JSON.parse(localStorage.getItem('lanshare_turn') || 'null');
-    if (t && t.urls) o.config.iceServers.push(t);
-  } catch (e) {}
   return o;
 }
 // 每次都是一个全新的 Peer ID：不能用固定值，否则两台设备撞号
@@ -901,13 +1108,74 @@ function setStatus(m, ok) {
   el.style.color = ok ? '#0a8f4a' : '#3c7a57';
   el.style.fontWeight = ok ? '600' : 'normal';
 }
-function setGuestProgress(pct) {
+// ===== 传输进度：百分比 + 实时速度 + 剩余时间 =====
+// 速度用「每 0.35 秒采样一次、指数平滑」：瞬时值抖得厉害，直接显示会跳来跳去
+let txState = null;
+function fmtSpeed(bps) {
+  if (!(bps > 0)) return '';
+  if (bps < 1024) return bps.toFixed(0) + ' B/s';
+  if (bps < 1048576) return (bps / 1024).toFixed(1) + ' KB/s';
+  return (bps / 1048576).toFixed(1) + ' MB/s';
+}
+function fmtEta(sec) {
+  if (!(sec > 0)) return '';
+  if (sec < 60) return Math.max(1, Math.round(sec)) + ' 秒';
+  if (sec < 3600) return Math.round(sec / 60) + ' 分钟';
+  return (sec / 3600).toFixed(1) + ' 小时';
+}
+function txStart(name, total) {
+  txState = { name: name || '', total: total || 0, done: 0,
+              lastT: Date.now(), lastD: 0, speed: 0 };
+  txRender();
+}
+function txTick(done, total) {
+  if (!txState) txStart('', total || done);
+  if (total) txState.total = total;
+  const now = Date.now();
+  const dt = (now - txState.lastT) / 1000;
+  if (dt >= 0.35) {
+    const inst = (done - txState.lastD) / dt;
+    if (inst >= 0) txState.speed = txState.speed ? (txState.speed * 0.6 + inst * 0.4) : inst;
+    txState.lastT = now;
+    txState.lastD = done;
+  }
+  txState.done = done;
+  txRender();
+}
+function txText() {
+  if (!txState) return '';
+  const pct = txState.total ? Math.min(100, txState.done / txState.total * 100) : 0;
+  const parts = [pct.toFixed(0) + '%'];
+  if (txState.total) parts.push(fmtSize(txState.done) + ' / ' + fmtSize(txState.total));
+  const sp = fmtSpeed(txState.speed);
+  if (sp) parts.push(sp);
+  if (txState.speed > 0 && txState.total > txState.done) {
+    parts.push('剩余 ' + fmtEta((txState.total - txState.done) / txState.speed));
+  }
+  return parts.join(' · ');
+}
+function txRender() {
   const box = document.getElementById('guestProg');
   const b = document.getElementById('guestBar');
+  const t = document.getElementById('guestProgText');
   if (!box || !b) return;
-  if (pct < 0) { box.style.display = 'none'; b.style.width = '0%'; return; }
+  if (!txState) {
+    box.style.display = 'none';
+    b.style.width = '0%';
+    if (t) t.textContent = '';
+    return;
+  }
+  const pct = txState.total ? Math.min(100, txState.done / txState.total * 100) : 0;
   box.style.display = 'block';
-  b.style.width = pct + '%';
+  b.style.width = pct.toFixed(1) + '%';
+  if (t) t.textContent = txText();
+}
+function txEnd() { txState = null; txRender(); }
+// 兼容旧调用点：负数表示收工，其余当百分比用
+function setGuestProgress(pct, total) {
+  if (pct < 0) { txEnd(); return; }
+  if (!txState) txStart('', total || 0);
+  txTick(total ? total * pct / 100 : 0, total || 0);
 }
 function protoMismatch(v, ctx) {
   const msg = '协议版本不一致（本机 v' + PROTOCOL + '，对方 v' + v + '），请刷新对方页面或更新本机程序';
@@ -920,11 +1188,79 @@ function protoMismatch(v, ctx) {
 
 // 顶栏地址由 startHostUI 里按「本机 / 局域网设备」分别填充
 
-fi.onchange = () => {
-  for (const f of fi.files) pendingFiles.push(f);
-  fi.value = '';
-  renderPending();
-};
+// 发送队列：每个文件一条记录，带状态与进度（不再是一堆裸 File）
+//   status: wait / sending / done / fail
+let pendingSeq = 0;
+function addFiles(list) {
+  let n = 0;
+  for (const f of Array.from(list || [])) {
+    if (!f || typeof f.size !== 'number') continue;
+    pendingFiles.push({ uid: 'q' + (++pendingSeq), file: f, status: 'wait',
+                        pct: 0, speed: 0, err: '' });
+    n++;
+  }
+  if (n) {
+    renderPending();
+    toast(n + ' 个文件已加入队列，点「发送」开始');
+  }
+  return n;
+}
+function pendingCount() { return pendingFiles.filter(x => x.status !== 'done').length; }
+fi.onchange = () => { addFiles(fi.files); fi.value = ''; };
+
+// 拖拽：把文件拖进窗口任何位置都能加入队列
+const dropMask = document.getElementById('dropMask');
+let dragDepth = 0;
+function inRoomView() {
+  const g = document.getElementById('gateView');
+  return !!g && !g.classList.contains('show');
+}
+function hasFiles(e) {
+  const t = e.dataTransfer && e.dataTransfer.types;
+  return !!t && Array.prototype.indexOf.call(t, 'Files') >= 0;
+}
+window.addEventListener('dragenter', e => {
+  if (!inRoomView() || !hasFiles(e)) return;
+  e.preventDefault();
+  dragDepth++;
+  dropMask.classList.add('show');
+});
+window.addEventListener('dragover', e => {
+  if (!inRoomView() || !hasFiles(e)) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'copy';
+});
+window.addEventListener('dragleave', e => {
+  if (!hasFiles(e)) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) dropMask.classList.remove('show');
+});
+window.addEventListener('drop', e => {
+  if (!inRoomView()) return;
+  e.preventDefault();
+  dragDepth = 0;
+  dropMask.classList.remove('show');
+  if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+    addFiles(e.dataTransfer.files);
+  }
+});
+// 粘贴截图：聊天里发图最顺手的入口就是 Ctrl+V
+document.addEventListener('paste', e => {
+  if (!inRoomView()) return;
+  const items = (e.clipboardData && e.clipboardData.items) || [];
+  const imgs = [];
+  for (const it of items) {
+    if (it.kind === 'file' && /^image\//.test(it.type || '')) {
+      const f = it.getAsFile();
+      if (f) imgs.push(f);
+    }
+  }
+  if (!imgs.length) return;      // 纯文本粘贴不动它，交给输入框
+  e.preventDefault();
+  const stamp = new Date().toTimeString().slice(0, 8).replace(/:/g, '');
+  addFiles(imgs.map((f, i) => new File([f], '粘贴图片-' + stamp + (i ? '-' + i : '') + '.png',
+                                        { type: f.type || 'image/png' })));
+});
 function autoGrow() {
   textInput.style.height = 'auto';
   textInput.style.height = Math.min(textInput.scrollHeight, 120) + 'px';
@@ -934,15 +1270,74 @@ textInput.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendAll(); }
 });
 
-function renderPending() {
-  if (!pendingFiles.length) { pendingArea.classList.remove('show'); pendingArea.innerHTML=''; return; }
-  pendingArea.classList.add('show');
-  pendingArea.innerHTML = pendingFiles.map((f,i) =>
-    '<div class="pending-item"><span>📎</span><span class="p-name">'+esc(f.name)+'</span>'+
-    '<span class="p-size">'+fmtSize(f.size)+'</span><button onclick="removePending('+i+')">✕</button></div>'
-  ).join('');
+function itemState(it) {
+  if (it.status === 'sending') {
+    const parts = [(it.pct || 0).toFixed(0) + '%'];
+    if (it.speed > 1024) parts.push(fmtSpeed(it.speed));
+    return parts.join(' · ');
+  }
+  if (it.status === 'done') return '已发送';
+  if (it.status === 'fail') return '失败' + (it.err ? '：' + it.err : '');
+  return fmtSize(it.file.size);
 }
-function removePending(i) { pendingFiles.splice(i,1); renderPending(); }
+function itemHTML(it) {
+  const cls = it.status === 'sending' ? ' sending' : it.status === 'fail' ? ' err' : '';
+  const sCls = it.status === 'done' ? ' ok' : it.status === 'fail' ? ' err' : '';
+  const retry = it.status === 'fail'
+    ? '<button class="pq-x" title="重试" onclick="retryOne(\'' + it.uid + '\')">↻</button>' : '';
+  return '<div class="pq-item' + cls + '" data-uid="' + it.uid + '">' +
+      '<span class="pq-ico">📎</span>' +
+      '<span class="pq-name" title="' + esc(it.file.name) + '">' + esc(it.file.name) + '</span>' +
+      '<span class="pq-state' + sCls + '">' + esc(itemState(it)) + '</span>' +
+      retry +
+      '<button class="pq-x" title="移除" onclick="removePending(\'' + it.uid + '\')">✕</button>' +
+      '<div class="pq-bar"><div class="pq-fill" style="width:' + (it.pct || 0) + '%"></div></div>' +
+    '</div>';
+}
+function renderPending() {
+  if (!pendingFiles.length) {
+    pendingArea.classList.remove('show');
+    pendingArea.innerHTML = '';
+    return;
+  }
+  pendingArea.classList.add('show');
+  const done = pendingFiles.filter(x => x.status === 'done').length;
+  pendingArea.innerHTML =
+    '<div class="pq-head"><span>' + pendingFiles.length + ' 个文件' +
+      (done ? ' · 已完成 ' + done : '') + '</span>' +
+      (done ? '<button onclick="clearDone()">清空已完成</button>' : '') + '</div>' +
+    pendingFiles.map(itemHTML).join('');
+}
+function updateItemUI(it) {
+  const el = pendingArea.querySelector('[data-uid="' + it.uid + '"]');
+  if (!el) return;
+  el.className = 'pq-item' + (it.status === 'sending' ? ' sending' : it.status === 'fail' ? ' err' : '');
+  const fill = el.querySelector('.pq-fill');
+  if (fill) fill.style.width = (it.pct || 0) + '%';
+  const st = el.querySelector('.pq-state');
+  if (st) {
+    st.textContent = itemState(it);
+    st.className = 'pq-state' + (it.status === 'done' ? ' ok' : it.status === 'fail' ? ' err' : '');
+  }
+}
+function removePending(uid) {
+  const i = pendingFiles.findIndex(x => x.uid === uid);
+  if (i < 0) return;
+  if (pendingFiles[i].status === 'sending') { toast('正在发送，等这一项完成再移除'); return; }
+  pendingFiles.splice(i, 1);
+  renderPending();
+}
+function clearDone() {
+  pendingFiles = pendingFiles.filter(x => x.status !== 'done');
+  renderPending();
+}
+function retryOne(uid) {
+  const it = pendingFiles.find(x => x.uid === uid);
+  if (!it || it.status === 'sending') return;
+  it.status = 'wait'; it.err = ''; it.pct = 0; it.speed = 0;
+  updateItemUI(it);
+  sendAll();
+}
 function fmtSize(n) {
   if (n<1024) return n+' B';
   if (n<1048576) return (n/1024).toFixed(1)+' KB';
@@ -1052,7 +1447,9 @@ function updateHostRoomHint() {
   const parts = [];
   if (p2p) parts.push('外网 ' + p2p + ' 台');
   if (lan) parts.push('局域网 ' + lan + ' 台');
-  el.textContent = '✅ 房间里现在有 ' + (p2p + lan) + ' 台设备（' + parts.join(' + ') + '），大家都能收到消息';
+  const relayN = hostList().filter(x => x.relay).length;
+  el.textContent = '✅ 房间里现在有 ' + (p2p + lan) + ' 台设备（' + parts.join(' + ') + '）' +
+    (relayN ? '，其中 ' + relayN + ' 台走中继' : '') + '，大家都能收到消息';
 }
 
 // ===== 消息列表：房主端 = 服务端消息 + 本地 P2P 消息；访客端 = 纯本地 =====
@@ -1161,8 +1558,25 @@ function renderMsg(msg) {
     }
   }
   const ip = msg.ip ? '<div class="msg-sender">'+esc(msg.ip)+'</div>' : '';
+  // 房主这台上文件是真落在磁盘里的：给一个直接打开所在文件夹的入口
+  const saveBtn = (msg.type === 'file' && MODE === 'host' && !isLanClient)
+    ? '<button class="file-save" onclick="revealFile(' + esc(JSON.stringify(String(msg.name || ''))) + ')">📂 在文件夹中显示</button>'
+    : '';
   return '<div class="msg-row"><div class="msg-avatar">🌐</div><div class="msg-side">'+
-    ip+bubble+'<div class="msg-time">'+esc(msg.time)+'</div></div></div>';
+    ip+bubble+saveBtn+'<div class="msg-time">'+esc(msg.time)+'</div></div></div>';
+}
+
+// 让后端在资源管理器里选中这个文件（只有跑程序的那台电脑能调）
+async function revealFile(name) {
+  try {
+    const r = await fetch(API + '/api/reveal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'name=' + encodeURIComponent(name)
+    });
+    const d = await r.json();
+    if (!d.ok) toast(d.msg || '打不开文件夹');
+  } catch (e) { toast('打不开文件夹'); }
 }
 
 // ===== 在线预览弹层 =====
@@ -1338,15 +1752,15 @@ async function sendFileTo(c, file, name, onProgress, mid, from) {
   c.send('FILE_END:' + id);
 }
 
-// 房主端：房间里每台外网设备都发一份。串行发送，避免把上行带宽打满
-async function broadcastFile(file, name, mid, from) {
+// 房主端：房间里每台外网设备都发一份。串行发送，避免把上行带宽打满。
+// onProgress 由调用方给（发送队列用它更新单项卡片），转发场景不传就不显示
+async function broadcastFile(file, name, mid, from, onProgress) {
   const list = hostList();
   if (!list.length) throw new Error('房间里没有外网设备');
   let ok = 0, lastErr = null;
   for (const x of list) {
     try {
-      await sendFileTo(x.conn, file, name,
-        p => setGuestProgress((p * 100).toFixed(1)), mid, from);
+      await sendFileTo(x.conn, file, name, onProgress, mid, from);
       ok++;
     } catch (e) { lastErr = e; }
   }
@@ -1484,7 +1898,8 @@ function handleData(data, ctx) {
           mid: meta.mid || '',
           from: meta.f || (ctx && ctx.name) || '外网设备'
         });
-        if (MODE === 'guest') { setGuestProgress('0'); setStatus('接收中: ' + meta.name); }
+        if (MODE === 'guest') { txStart(meta.name, meta.size); setStatus('接收中: ' + meta.name); }
+        else if (!isLanClient) { showHostHint('正在接收：' + meta.name + '（' + fmtSize(meta.size) + '）'); }
       } catch (e) { recvBuf.delete(key); }
     } else if (data.startsWith('FILE_END:')) {
       const buf = recvBuf.get(key);
@@ -1501,28 +1916,64 @@ function handleData(data, ctx) {
   if (ab && buf) {
     buf.chunks.push(ab);
     buf.received += ab.byteLength;
-    if (MODE === 'guest') setGuestProgress((buf.received / buf.size * 100).toFixed(1));
+    if (MODE === 'guest') {
+      txTick(buf.received, buf.size);
+    } else if (!isLanClient) {
+      // 房主页面没有进度条，就在提示行里报一下；400ms 一次，别把界面刷爆
+      const now = Date.now();
+      if (!buf._t || now - buf._t > 400) {
+        buf._t = now;
+        showHostHint('正在接收：' + buf.name + ' · ' +
+          (buf.size ? (buf.received / buf.size * 100).toFixed(0) + '%' : fmtSize(buf.received)));
+      }
+    }
   }
 }
 // ===== 桌面共享：走 WebRTC 媒体流，与传文件的数据通道互不干扰 =====
 let screenStream = null, screenCalls = [], recvCall = null, screenRole = '';
+let screenHasAudio = false;
+function refreshScreenAudioBtn() {
+  const v = document.getElementById('screenVideo');
+  const ab = document.getElementById('screenAudio');
+  if (!ab) return;
+  // 只有「看别人共享」这一端需要声音开关；自己共享时的预览永远静音
+  if (screenRole !== 'recv' || !screenHasAudio) { ab.style.display = 'none'; return; }
+  ab.style.display = '';
+  ab.textContent = (v && v.muted) ? '开启声音' : '静音';
+}
 function attachStream(stream, muted) {
   const v = document.getElementById('screenVideo');
   v.srcObject = stream;
   v.muted = !!muted;
   const p = v.play();
   if (p && p.catch) p.catch(() => {});
+  screenHasAudio = !!(stream && stream.getAudioTracks && stream.getAudioTracks().length);
+  refreshScreenAudioBtn();
+}
+function toggleScreenAudio() {
+  const v = document.getElementById('screenVideo');
+  const ab = document.getElementById('screenAudio');
+  if (!v) return;
+  v.muted = !v.muted;
+  if (!v.muted) {
+    const p = v.play();       // 取消静音必须由用户手势触发，这里正好是点击
+    if (p && p.catch) p.catch(() => {});
+  }
+  if (ab) ab.textContent = v.muted ? '开启声音' : '静音';
 }
 function showScreenPanel(role) {
   screenRole = role;
   document.getElementById('screenLabel').textContent = role === 'send' ? '正在共享你的桌面' : '对方正在共享桌面';
   document.getElementById('screenStop').textContent = role === 'send' ? '停止共享' : '关闭';
   screenSlot.classList.add('show');
+  refreshScreenAudioBtn();
   chatScroll.scrollTop = 0;
 }
 function hideScreenPanel() {
   screenSlot.classList.remove('show');
   document.getElementById('screenVideo').srcObject = null;
+  screenHasAudio = false;
+  refreshScreenAudioBtn();
 }
 async function toggleScreenShare() {
   if (screenStream) { stopScreenShare(); return; }
@@ -1538,10 +1989,16 @@ async function toggleScreenShare() {
   }
   let stream;
   try {
-    stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 15 }, audio: false });
+    // 带上系统/标签页声音：对方可以自己决定开不开扬声器
+    stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 15 }, audio: true });
   } catch (e) {
-    notify(e && e.name === 'NotAllowedError' ? '已取消共享' : '无法共享桌面：' + (e && e.message ? e.message : e));
-    return;
+    if (e && e.name === 'NotAllowedError') { notify('已取消共享'); return; }
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 15 }, audio: false });
+    } catch (e2) {
+      notify('无法共享桌面：' + ((e2 && e2.message) || e2));
+      return;
+    }
   }
   screenStream = stream;
   const track = stream.getVideoTracks()[0];
@@ -1600,8 +2057,8 @@ async function onFileReceived(blob, name, mid, from) {
     const url = URL.createObjectURL(blob);
     pushMsg({ type: 'file', name: name, size: fmtSize(blob.size), url: url,
               ip: from || '外网设备', id: mid || uid() });
-    setGuestProgress(-1);
-    setStatus('✅ 已收到 ' + name, true);
+    txEnd();
+    setStatus('✅ 已收到 ' + name + '，已保存到浏览器下载目录', true);
     try {
       const a = document.createElement('a');
       a.href = url; a.download = name;
@@ -1621,15 +2078,16 @@ async function onFileReceived(blob, name, mid, from) {
     const d = await r.json();
     if (!d.ok) throw new Error(d.msg || '保存失败');
     const newId = (d.ids && d.ids[0]) || '';
+    const savedName = (d.names && d.names[0]) || name;
     if (newId) pushedIds.add(newId);
-    toast('已收到: ' + name + (from ? '（来自 ' + from + '）' : ''));
+    toast('已收到 ' + savedName + '（存到 接收文件\\）' + (from ? '，来自 ' + from : ''));
     const others = hostList().filter(x => x.name !== from);
     for (const x of others) {
       try { await sendFileTo(x.conn, blob, name, null, newId, from); } catch (e) {}
     }
     loadMessages();
   } catch (e) { toast('保存失败: ' + e.message); }
-  finally { relayHold.delete(name); }
+  finally { relayHold.delete(name); updateHostRoomHint(); }
 }
 
 // ===== 房主模式：生成房间码、等待外网设备、生成邀请链接 =====
@@ -1795,6 +2253,147 @@ async function fetchHostInfo() {
     clearTimeout(timer);
   }
 }
+// ===== 网络与中继设置（只存这台设备的浏览器）=====
+function showNet() { renderIce(); document.getElementById('netModal').classList.add('show'); }
+function hideNet() { document.getElementById('netModal').classList.remove('show'); }
+function renderIce() {
+  const box = document.getElementById('iceList');
+  if (!box) return;
+  const custom = customIce();
+  const list = custom || ICE_SERVERS;
+  box.innerHTML = list.map((s, i) => {
+    const url = String((s && s.urls) || '');
+    const isTurn = /^turns?:/.test(url);
+    return '<div class="ice-row">' +
+        '<span class="why' + (custom ? '' : ' def') + '">' + (custom ? (isTurn ? 'TURN' : 'STUN') : '默认') + '</span>' +
+        '<span class="ice-url" title="' + esc(url) + '">' + esc(url) +
+          (isTurn && s.username ? ' · ' + esc(String(s.username)) : '') + '</span>' +
+        '<button onclick="delIce(' + i + ')" title="删除">✕</button>' +
+      '</div>';
+  }).join('');
+  const tip = document.getElementById('iceTip');
+  if (tip) {
+    tip.textContent = custom
+      ? '以上是自定义列表，连接时按顺序尝试；改完重新连接（或刷新）生效。'
+      : '当前使用默认的 4 个公共 STUN，能连上就别改。';
+  }
+}
+function persistIce(list) {
+  try { localStorage.setItem('lanshare_ice', JSON.stringify(list)); } catch (e) {}
+  try { localStorage.removeItem('lanshare_turn'); } catch (e) {}   // 迁移到新 key
+}
+function addIce() {
+  const type = (document.getElementById('iceType') || {}).value || 'stun';
+  let url = ((document.getElementById('iceUrl') || {}).value || '').trim();
+  const user = ((document.getElementById('iceUser') || {}).value || '').trim();
+  const pass = (document.getElementById('icePass') || {}).value || '';
+  if (!url) { toast('先填服务器地址'); return; }
+  if (!/^(stun|stuns|turn|turns):/i.test(url)) url = type + ':' + url.replace(/^\/+/, '');
+  if (!/^(stun|stuns|turn|turns):\S+$/i.test(url)) { toast('地址格式应为 stun:主机:端口'); return; }
+  const list = (customIce() || ICE_SERVERS).slice();
+  const item = { urls: url };
+  if (/^turns?:/i.test(url)) { item.username = user; item.credential = pass; }
+  list.push(item);
+  persistIce(list);
+  ['iceUrl', 'iceUser', 'icePass'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  renderIce();
+  toast('已保存，重新连接后生效');
+}
+function delIce(i) {
+  const list = (customIce() || ICE_SERVERS).slice();
+  if (i < 0 || i >= list.length) return;
+  if (list.length <= 1) { toast('至少留一个服务器'); return; }
+  list.splice(i, 1);
+  persistIce(list);
+  renderIce();
+  toast('已删除，重新连接后生效');
+}
+function resetIce() {
+  try { localStorage.removeItem('lanshare_ice'); } catch (e) {}
+  try { localStorage.removeItem('lanshare_turn'); } catch (e) {}
+  renderIce();
+  toast('已恢复默认 STUN');
+}
+// ===== 使用帮助 =====
+function showHelp() { document.getElementById('helpModal').classList.add('show'); }
+function hideHelp() { document.getElementById('helpModal').classList.remove('show'); }
+// ===== 房间有效期（可选，到点自动解散）=====
+let ttlMin = 0, ttlTimer = null, ttlDeadline = 0;
+function ttlLabel(min) {
+  if (!min) return '不限';
+  return min >= 60 ? (min / 60) + ' 小时' : min + ' 分钟';
+}
+function renderTtl() {
+  const b = document.getElementById('ttlBtn');
+  if (!b) return;
+  if (!ttlDeadline) { b.textContent = '有效期：' + ttlLabel(ttlMin); return; }
+  const left = Math.max(0, ttlDeadline - Date.now());
+  if (left < 60000) {
+    b.textContent = '有效期：' + Math.ceil(left / 1000) + ' 秒';
+  } else if (left < 3600000) {
+    const m = Math.floor(left / 60000), s = Math.floor((left % 60000) / 1000);
+    b.textContent = '有效期：' + m + ' 分 ' + (s < 10 ? '0' + s : s) + ' 秒';
+  } else {
+    b.textContent = '有效期：' + (left / 3600000).toFixed(1) + ' 小时';
+  }
+}
+function armTtl() {
+  if (ttlTimer) { clearInterval(ttlTimer); ttlTimer = null; }
+  if (!ttlDeadline) { renderTtl(); return; }
+  ttlTimer = setInterval(() => {
+    if (!ttlDeadline) { clearInterval(ttlTimer); ttlTimer = null; return; }
+    if (ttlDeadline - Date.now() <= 0) {
+      clearInterval(ttlTimer); ttlTimer = null; ttlDeadline = 0;
+      try { sessionStorage.removeItem('lanshare_ttl_deadline'); } catch (e) {}
+      renderTtl();
+      dissolveRoom(true);
+      return;
+    }
+    renderTtl();
+  }, 1000);
+  renderTtl();
+}
+function showTtl() {
+  const opts = document.querySelectorAll('#ttlOpts button');
+  Array.prototype.forEach.call(opts, b => {
+    b.classList.toggle('on', Number(b.getAttribute('data-min')) === ttlMin);
+  });
+  document.getElementById('ttlModal').classList.add('show');
+}
+function hideTtl() { document.getElementById('ttlModal').classList.remove('show'); }
+function setTtl(min) {
+  ttlMin = Math.max(0, Number(min) || 0);
+  try { localStorage.setItem('lanshare_ttl_min', String(ttlMin)); } catch (e) {}
+  hideTtl();
+  if (!ttlMin) {
+    ttlDeadline = 0;
+    try { sessionStorage.removeItem('lanshare_ttl_deadline'); } catch (e) {}
+    armTtl();
+    toast('已取消有效期，房间不会自动解散');
+    return;
+  }
+  ttlDeadline = Date.now() + ttlMin * 60000;
+  try { sessionStorage.setItem('lanshare_ttl_deadline', String(ttlDeadline)); } catch (e) {}
+  armTtl();
+  toast('房间将在 ' + ttlLabel(ttlMin) + ' 后自动解散');
+}
+function restoreTtl() {
+  let d = 0;
+  try { d = Number(sessionStorage.getItem('lanshare_ttl_deadline') || 0); } catch (e) {}
+  if (d && d > Date.now()) { ttlDeadline = d; armTtl(); }
+  else if (d) {
+    // 刷新页面时已经过期：立刻收掉这个房间
+    try { sessionStorage.removeItem('lanshare_ttl_deadline'); } catch (e) {}
+    ttlDeadline = 0;
+    setTimeout(() => dissolveRoom(true), 800);
+  } else {
+    renderTtl();
+  }
+}
+
 async function renewRoom() {
   try {
     const r = await fetch(API + '/api/room/renew', { method: 'POST' });
@@ -1830,6 +2429,12 @@ async function renewRoom() {
   loadMessages();
   refreshReady();
   renderAll();
+  // 换了新房间：设过的有效期从此刻重新计时
+  if (ttlMin) {
+    ttlDeadline = Date.now() + ttlMin * 60000;
+    try { sessionStorage.setItem('lanshare_ttl_deadline', String(ttlDeadline)); } catch (e) {}
+    armTtl();
+  }
   toast('已换新房间码，数据目录也换成新的了');
 }
 // ===== 解散房间：房主点头 → 断开所有设备 → 回入口页 =====
@@ -1839,7 +2444,7 @@ function askDissolve() {
 function hideDissolve() {
   document.getElementById('dissolveModal').classList.remove('show');
 }
-async function dissolveRoom() {
+async function dissolveRoom(auto) {
   hideDissolve();
   const btn = document.getElementById('dissolveBtn');
   if (btn) btn.disabled = true;
@@ -1855,7 +2460,14 @@ async function dissolveRoom() {
     toast('解散失败，请确认本机程序仍在运行');
     return;
   }
-  onRoomClosed('房间已解散，房间码已作废，所有设备已断开。要重新使用，点「创建房间」开一个新房间。');
+  // 房间没了：有效期倒计时也一并停掉
+  ttlDeadline = 0;
+  if (ttlTimer) { clearInterval(ttlTimer); ttlTimer = null; }
+  try { sessionStorage.removeItem('lanshare_ttl_deadline'); } catch (e) {}
+  renderTtl();
+  onRoomClosed(auto
+    ? '房间有效期到了，已自动解散。房间码已作废，所有设备已断开；要重新使用，点「创建房间」开一个新房间。'
+    : '房间已解散，房间码已作废，所有设备已断开。要重新使用，点「创建房间」开一个新房间。');
   dissolving = false;
   if (btn) btn.disabled = false;
 }
@@ -1999,13 +2611,13 @@ function startHostPeer(roomCode) {
         setTimeout(renewRoom, 1200);
       }
     } else if (t === 'network' || t === 'server-error' || t === 'socket-error') {
-      showHostHint('信令服务器异常（' + t + '），请检查网络；局域网功能不受影响');
+      showHostHint('信令服务器连不上（' + t + '）：检查网络，或让设备改走局域网地址。局域网功能不受影响');
     } else if (t === 'peer-unavailable') {
       // 某台设备的临时 Peer ID 过期了（对方关掉页面、网络断了）。
       // 这不是房主这边的错误，提示行保持原样。
       return;
     } else {
-      showHostHint('P2P 错误：' + t);
+      showHostHint('P2P 错误：' + t + '（点右上角 🌐 可以配一台中继服务器兜底）');
     }
   });
 }
@@ -2113,12 +2725,33 @@ function resolvePeerIp(entry, left) {
   readPeerIp(entry).then(ip => {
     if (ip) {
       if (entry.ip !== ip) { entry.ip = ip; updateHostRoomHint(); reportDevices(); }
-      return;
+    } else if (tries > 0) {
+      setTimeout(() => resolvePeerIp(entry, tries - 1), 1500);
     }
-    if (tries > 0) setTimeout(() => resolvePeerIp(entry, tries - 1), 1500);
   }).catch(() => {
     if (tries > 0) setTimeout(() => resolvePeerIp(entry, tries - 1), 1500);
   });
+  detectRelay(entry).then(r => {
+    if (entry.relay !== r) { entry.relay = r; renderMembers(); updateHostRoomHint(); }
+  });
+}
+
+// 这条连接走的是直连还是 TURN 中继：看被选中的候选对里本端候选的类型
+async function detectRelay(entry) {
+  const pc = entry && entry.conn && entry.conn.peerConnection;
+  if (!pc || !pc.getStats) return false;
+  try {
+    const stats = await pc.getStats();
+    let pair = null;
+    const cands = {};
+    stats.forEach(s => {
+      if (s.type === 'local-candidate' || s.type === 'remote-candidate') cands[s.id] = s;
+      if (s.type === 'candidate-pair' && (s.state === 'succeeded' || s.nominated) && !pair) pair = s;
+    });
+    const lc = pair && pair.localCandidateId ? cands[pair.localCandidateId] : null;
+    const rc = pair && pair.remoteCandidateId ? cands[pair.remoteCandidateId] : null;
+    return !!((lc && lc.candidateType === 'relay') || (rc && rc.candidateType === 'relay'));
+  } catch (e) { return false; }
 }
 
 // 房主把「外网直连的都有谁」报给后端：名字来自对方自报，IP 来自上面的 WebRTC 读取
@@ -2144,7 +2777,7 @@ function renderMembers() {
   const rows = [];
   for (const x of hostList()) {
     if (!x.name) continue;
-    rows.push({ name: x.name, channel: 'p2p', ip: x.ip || '' });
+    rows.push({ name: x.name, channel: 'p2p', ip: x.ip || '', relay: !!x.relay });
   }
   for (const d of roomDevices) {
     if (!d || !d.name) continue;
@@ -2159,6 +2792,7 @@ function renderMembers() {
     '<div class="member-row">' +
       '<span class="member-tag ' + (r.channel === 'p2p' ? 'wan' : 'lan') + '">' +
         (r.channel === 'p2p' ? '外网' : '局域网') + '</span>' +
+      (r.relay ? '<span class="member-tag relay">中继</span>' : '') +
       '<b>' + esc(r.name) + '</b>' +
       '<span class="member-ip">' + esc(r.ip || 'IP 未知') + '</span>' +
     '</div>').join('');
@@ -2420,7 +3054,7 @@ function connectOnce(room) {
     });
   };
   setStatus(peer.open ? '② 已连到信令，正在呼叫对方设备…' : '① 正在连接信令服务器…');
-  guestTimer = setTimeout(() => fail('连接超时', '未能与对方设备建立直连，多为 NAT 限制或信令不通。建议两台设备连同一 WiFi 用局域网模式，或换系统浏览器。', true), 16000);
+  guestTimer = setTimeout(() => fail('连接超时', '未能与对方设备建立直连，多为 NAT 限制或信令不通。建议两台设备连同一 WiFi 用局域网模式，或点右上角 🌐 配一台 TURN 中继服务器。', true), 16000);
   if (peer.open) call();
   else peer.on('open', call);
 }
@@ -2541,6 +3175,11 @@ function markGuestConnected() {
   document.getElementById('guestConnBtn').textContent = '重连';
   refreshReady();
   renderAll();
+  // 直连还是走中继：这里看一眼，中继就把话说明白（速度会慢）
+  detectRelay({ conn: guestConn }).then(r => {
+    if (!r) return;
+    setStatus('✅ 已连接（走中继，速度可能慢一些）', true);
+  });
 }
 
 // ===== 加入房间前的探活：房主真的把名字分配下来才放行进入主页面 =====
@@ -2638,9 +3277,25 @@ function probeRoom(room, timeoutMs) {
 // ===== 发送 =====
 // 房主：文本/文件先落盘（局域网设备也能收到），再逐个推给房间里的外网设备
 // 访客：只有一条通往房主的连接，发过去由房主代转
+// 单个队列项的进度：百分比 + 平滑速度
+function itemProgress(it, frac) {
+  it.pct = Math.max(0, Math.min(100, frac * 100));
+  const now = Date.now();
+  if (!it._t) { it._t = now; it._lastPct = 0; }
+  const dt = (now - it._t) / 1000;
+  if (dt >= 0.35) {
+    const inst = (it.pct - (it._lastPct || 0)) / 100 * it.file.size / dt;
+    if (inst >= 0) it.speed = it.speed ? (it.speed * 0.6 + inst * 0.4) : inst;
+    it._t = now;
+    it._lastPct = it.pct;
+  }
+  updateItemUI(it);
+}
+
 async function sendAll() {
   const v = textInput.value.trim();
-  if (!v && !pendingFiles.length) return;
+  const items = pendingFiles.filter(x => x.status === 'wait' || x.status === 'fail');
+  if (!v && !items.length) return;
   // 房主一个人也能发：先落盘进房间记录，等有人加入时随 HISTORY 一起同步过去
   if (!canCompose()) {
     notify('还没有连上房间，请稍后再试');
@@ -2671,34 +3326,55 @@ async function sendAll() {
   }
 
   // 文件：房主先落盘再逐台直传；访客传给房主，由房主转给其他人
-  if (pendingFiles.length) {
-    let failed = 0;
-    for (const f of pendingFiles) {
+  if (items.length) {
+    let failed = 0, done = 0;
+    for (const it of items) {
+      it.status = 'sending'; it.pct = 0; it.speed = 0; it.err = ''; it._t = 0;
+      updateItemUI(it);
       try {
         if (MODE === 'host') {
           const fd = new FormData();
-          fd.append('files', f);
+          fd.append('files', it.file, it.file.name);
           fd.append('from', myName || '房主');
           const r = await fetch(API + '/upload', {method:'POST', body: fd});
           const d = await r.json();
           if (!d.ok) throw new Error(d.msg || '上传失败');
           const mid = (d.ids && d.ids[0]) || uid();
+          it.savedName = (d.names && d.names[0]) || it.file.name;
           pushedIds.add(mid);
-          if (canP2P()) await broadcastFile(f, f.name, mid, myName || '房主');
+          if (canP2P()) {
+            await broadcastFile(it.file, it.file.name, mid, myName || '房主',
+                                p => itemProgress(it, p));
+          }
         } else {
           if (!canP2P()) throw new Error('还没有连上房间');
           const mid = uid();
-          await sendFileTo(guestConn, f, f.name,
-            p => setGuestProgress((p * 100).toFixed(1)), mid, myName || '访客');
-          pushMsg({ type:'file', name:f.name, size:fmtSize(f.size),
-                    url:URL.createObjectURL(f), ip: myName || '我', id: mid });
+          await sendFileTo(guestConn, it.file, it.file.name,
+            p => itemProgress(it, p), mid, myName || '访客');
+          pushMsg({ type:'file', name:it.file.name, size:fmtSize(it.file.size),
+                    url:URL.createObjectURL(it.file), ip: myName || '我', id: mid });
         }
-      } catch(e) { failed++; notify(f.name + ' 发送失败: ' + e.message); }
+        it.status = 'done'; it.pct = 100; it.speed = 0;
+        updateItemUI(it);
+        done++;
+      } catch(e) {
+        failed++;
+        it.status = 'fail'; it.err = (e && e.message) || '发送失败';
+        updateItemUI(it);
+        notify(it.file.name + ' 发送失败: ' + it.err);
+      }
     }
-    pendingFiles = [];
+    txEnd();
     renderPending();
-    setGuestProgress(-1);
-    if (!failed) toast('发送完成');
+    if (!failed) {
+      toast(done > 1 ? ('已发送 ' + done + ' 个文件') : '发送完成');
+      // 房主自己上传完的文件就在本机：说清楚存哪了
+      if (MODE === 'host' && done === 1 && items[0].savedName) {
+        toast('已保存到 接收文件\\' + items[0].savedName);
+      }
+    } else if (done) {
+      toast('部分文件发送失败，点失败项右侧的 ↻ 重试');
+    }
   }
 
   textInput.value = '';
@@ -2898,6 +3574,14 @@ async function gateCreate() {
     // 本机页面（8000）不算「在线页」，否则会把齿轮和管理入口一起藏掉
     startHostUI(SEED_MODE !== 'host', info.ip ? ('http://' + info.ip + ':' + info.port) : '');
     if (typeof info.peers === 'number') { lanPeers = info.peers; refreshReady(); renderAll(); }
+    // 新房间：之前设过的有效期从此刻重新计时（不设就保持不限）
+    if (ttlMin) {
+      ttlDeadline = Date.now() + ttlMin * 60000;
+      try { sessionStorage.setItem('lanshare_ttl_deadline', String(ttlDeadline)); } catch (e) {}
+      armTtl();
+    } else {
+      renderTtl();
+    }
   } catch (e) {
     gateMsg((e && e.message) || '创建房间失败，请稍后再试。', 'err');
   } finally {
@@ -3007,6 +3691,16 @@ if (MODE === 'host') {
     setTimeout(prewarmSignal, 200);
   }
 }
+
+// ===== 有效期选项（放在最后：此时 DOM 已经全部就绪）=====
+Array.prototype.forEach.call(document.querySelectorAll('#ttlOpts button'), b => {
+  b.addEventListener('click', () => setTtl(b.getAttribute('data-min')));
+});
+// 记住上次选的有效期偏好（下次开新房沿用）
+try { ttlMin = Number(localStorage.getItem('lanshare_ttl_min')) || 0; } catch (e) {}
+// 刷新页面后接着倒计时；上一秒刚好过期就立刻收掉房间
+if (MODE === 'host' && !JOIN_REQUIRED && HAS_ROOM) restoreTtl();
+else renderTtl();
 </script>
 </body>
 </html>
