@@ -800,12 +800,61 @@ const ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' }
 ];
 function peerOpts() {
-  const o = { config: { iceServers: ICE_SERVERS.slice() } };
+  const o = {
+    config: {
+      iceServers: ICE_SERVERS.slice(),
+      // 候选地址提前收一批：点「连接」时不必从零开始等 STUN，
+      // 弱网/移动网络下这一项能省掉几百毫秒
+      iceCandidatePoolSize: 4,
+      bundlePolicy: 'max-bundle',
+      rtcpMuxPolicy: 'require'
+    }
+  };
   try {
     const t = JSON.parse(localStorage.getItem('lanshare_turn') || 'null');
     if (t && t.urls) o.config.iceServers.push(t);
   } catch (e) {}
   return o;
+}
+// 每次都是一个全新的 Peer ID：不能用固定值，否则两台设备撞号
+function guestPeerId() {
+  return 'g-' + Math.random().toString(36).slice(2, 10) + '-' + Date.now().toString(36);
+}
+// ===== 信令预热 =====
+// 外网连接慢，慢的多半不是「连对方」，而是「先连上 PeerJS 信令服务器」那一步
+// （DNS + WebSocket + 服务器回 OPEN，通常 0.3～1.5 秒）。
+// 入口页一打开就把这条长连接建好，用户输房间码的这几秒正好用来握手，
+// 点「加入房间」时只剩「呼叫对方设备」一步。
+let warmPeer = null;
+function prewarmSignal() {
+  if (MODE !== 'guest' || JOIN_REQUIRED) return null;   // 局域网设备走 HTTP，用不上
+  if (warmPeer && !warmPeer.destroyed) return warmPeer;
+  warmPeer = null;
+  try {
+    warmPeer = new Peer(guestPeerId(), peerOpts());
+  } catch (e) {
+    warmPeer = null;
+    return null;                 // 预热失败不影响正常流程，真正连接时会再建
+  }
+  const p = warmPeer;
+  // 预热阶段的错误一律吞掉：置空即可，点「加入」时会现建一条
+  p.on('error', () => {
+    if (warmPeer === p) {
+      warmPeer = null;
+      try { p.destroy(); } catch (e) {}
+    }
+  });
+  p.on('disconnected', () => {
+    if (warmPeer === p) { try { p.reconnect(); } catch (e) {} }
+  });
+  return p;
+}
+// 取走预热好的连接（只取一次）；已经废掉的返回 null
+function takeWarmPeer() {
+  const p = warmPeer;
+  warmPeer = null;
+  if (!p || p.destroyed) return null;
+  return p;
 }
 function showHostHint(m) {
   const el = document.getElementById('hostHint');
@@ -819,10 +868,15 @@ function showGuestTip(m) {
 }
 
 // ===== 连接集合：房主端可能同时连着多台外网设备 =====
+// 只算「真的进了房间」的连接（房主已经分配给它名字）：
+// 通道刚开、还在报身份的那几百毫秒，以及被请出的设备来敲门，都不算人，
+// 否则房主会看到人数闪一下、或者把消息发给一个马上要被拒掉的连接。
 function hostList() {
   const out = [];
   for (const [id, x] of hostConns) {
-    if (x && x.conn && x.conn.open) out.push({ id: id, conn: x.conn, name: x.name, ip: x.ip || '', dev: x.dev || '' });
+    if (x && x.conn && x.conn.open && x.registered) {
+      out.push({ id: id, conn: x.conn, name: x.name, ip: x.ip || '', dev: x.dev || '' });
+    }
   }
   return out;
 }
@@ -1910,10 +1964,11 @@ function startHostPeer(roomCode) {
     const md = (c && c.metadata) || {};
     const mdDev = DEV_ID_RE.test(String(md.dev || '')) ? String(md.dev) : '';
     const mdNick = String(md.nick || '').trim().slice(0, 12);
-    if (mdDev && devKicked(mdDev)) { rejectHostConn(c, mdNick); return; }
+    if (mdDev && devKicked(mdDev)) { rejectHostConn(c); return; }
     hostSeq++;
     const id = 'c' + hostSeq;
-    const entry = { conn: c, name: '', seq: hostSeq, peerId: c.peer || '', ip: '', dev: mdDev, metaNick: mdNick };
+    const entry = { conn: c, name: '', seq: hostSeq, peerId: c.peer || '', ip: '', dev: mdDev, metaNick: mdNick,
+                    registered: false, regTimer: null };
     // 名单可能刚被别的标签页改过：连上时再核一遍（后端才是准的）
     loadKicked();
     hostConns.set(id, entry);
@@ -1925,12 +1980,19 @@ function startHostPeer(roomCode) {
       renderAll();
       // 连接建立后 ICE 还要一小会儿才收敛，晚一点再去读对端地址
       setTimeout(() => resolvePeerIp(entry), 1200);
+      // 通道开了却一直不报身份（半路夭折、页面被关、被拒）：8 秒后悄悄收掉，
+      // 免得房主那边留一个既没名字也没内容的「幽灵设备」
+      entry.regTimer = setTimeout(() => {
+        if (!entry.registered) dropHostConnQuiet(id, false);
+      }, 8000);
     });
     // 每台设备一个 ctx，handleData 靠它区分是谁发来的
     c.on('data', d => handleData(d, { id: id, conn: c, name: entry.name }));
     c.on('close', () => {
       const n = entry.name || ('访客' + entry.seq);
-      const wasIn = hostConns.has(id);
+      if (entry.regTimer) { clearTimeout(entry.regTimer); entry.regTimer = null; }
+      // 只有真正进过房间的设备才算「离开」；被拒的、半路断的从来没进过，不打扰房主
+      const wasIn = entry.registered && hostConns.has(id);
       hostConns.delete(id);
       recvBuf.delete(id);
       if (wasIn) {
@@ -1969,6 +2031,11 @@ function startHostPeer(roomCode) {
       }
     } else if (t === 'network' || t === 'server-error' || t === 'socket-error') {
       showHostHint('信令服务器异常（' + t + '），请检查网络；局域网功能不受影响');
+    } else if (t === 'peer-unavailable') {
+      // 某台设备的临时 Peer ID 过期了（对方关掉页面、被拒进来、或者网络断了）。
+      // 这不是房主这边的错误：被踢的设备每次来敲门都会引发一次，提示行保持原样，
+      // 房主什么都不该看到。
+      return;
     } else {
       showHostHint('P2P 错误：' + t);
     }
@@ -1988,18 +2055,32 @@ async function verifyThenRegister(ctx, nick, dev) {
   if (dev && devKicked(dev)) { rejectGuest(ctx); return; }
   registerGuest(ctx, nick, dev);
 }
-// 名单里的设备：不分配名字、不进房间，直接拒掉
+// 悄悄收掉一条连接：不动聊天、不广播、不弹提示，只把连接表与界面数据刷新一下。
+// 被请出的设备再来敲门、或通道开了却一直不报身份，都走这里——房主那边应该完全无感。
+function dropHostConnQuiet(id, sendKicked) {
+  const e = hostConns.get(id);
+  if (!e) return;
+  if (e.regTimer) { clearTimeout(e.regTimer); e.regTimer = null; }
+  const c = e.conn;
+  hostConns.delete(id);
+  recvBuf.delete(id);
+  if (sendKicked) { try { c.send('KICKED'); } catch (err) {} }
+  setTimeout(() => { try { c.close(); } catch (err) {} }, 150);
+  refreshReady();
+  renderAll();
+}
+// 名单里的设备：不分配名字、不进房间，直接拒掉。
+// 房主这边**完全无感**：不弹提示、不写日志、不广播「某某离开了房间」，
+// 因为这台设备从来没真正进过房间（它只是拿着旧房间码又来敲门而已）。
 function rejectGuest(ctx) {
   const e = hostConns.get(ctx.id);
-  if (e) { try { e.conn.send('KICKED'); } catch (err) {} }
-  setTimeout(() => dropHostConnById(ctx.id, true), 150);
-  toast('有一台被请出的设备想重新进来，已拒绝');
+  if (e) e.registered = false;      // 先摘掉「进过房间」的身份，关连接时就不会广播离开
+  dropHostConnQuiet(ctx.id, true);
 }
-// 名单里的设备在连接元数据里就被认出来了：不进房间、不分配名字、不算成员，
-// 只把「你已被踢出」告诉它再断开（通道开了才发得出去，所以等 open；一直不开就硬掐）
-function rejectHostConn(c, nick) {
-  showHostHint('有一台被请出的设备想重新进来，已拒绝');
-  toast('「' + (nick || '被踢出的设备') + '」已被请出，本次连接已拒绝');
+// 名单里的设备在连接元数据里就被认出来了：不进房间、不分配名字、不算成员。
+// 只把「你已被踢出」告诉它再断开（通道开了才发得出去，所以等 open；一直不开就硬掐）。
+// 同样不在房主页面上留任何痕迹。
+function rejectHostConn(c) {
   let done = false;
   const kill = () => {
     if (done) return;
@@ -2021,6 +2102,7 @@ function registerGuest(ctx, nick, dev) {
   // 这个房间的踢出名单里有它：不分配名字、不进房间，直接拒掉
   if (did && devKicked(did)) { rejectGuest(ctx); return; }
   e.registered = true;
+  if (e.regTimer) { clearTimeout(e.regTimer); e.regTimer = null; }
   let base = String(nick || e.metaNick || '').trim().slice(0, 12) || ('访客' + e.seq);
   const used = new Set();
   for (const x of hostConns.values()) if (x.name) used.add(x.name);
@@ -2425,6 +2507,8 @@ function resetToGate() {
   renderAll();
   showGate();
   gateShowChoices();
+  // 回到入口页就顺手把信令长连接重新预热好，再次加入时不用从零握手
+  setTimeout(prewarmSignal, 300);
 }
 // 访客被房主断开 / 拒绝：清掉连接、退回入口页，并说明原因。
 // peerKicked 必须置上，否则 conn 的 close 事件会把它当成掉线、自动重连回来。
@@ -2440,13 +2524,9 @@ function guestReturnToGate(msg) {
 }
 function connectOnce(room) {
   if (guestTimer) clearTimeout(guestTimer);
-  try { if (guestPeer) guestPeer.destroy(); } catch (e) {}
   try { if (guestConn) guestConn.close(); } catch (e) {}
   guestConn = null;
   setGuestProgress(-1);
-  setStatus('① 正在连接信令服务器…');
-  const gid = 'g-' + Math.random().toString(36).slice(2, 10) + '-' + Date.now().toString(36);
-  guestPeer = new Peer(gid, peerOpts());
   const fail = (msg, tip, retry) => {
     if (guestTimer) clearTimeout(guestTimer);
     if (retry && guestRetry < 1) {
@@ -2458,16 +2538,38 @@ function connectOnce(room) {
       failGuest(msg, tip);
     }
   };
-  guestTimer = setTimeout(() => fail('连接超时', '未能与对方设备建立直连，多为 NAT 限制或信令不通。建议两台设备连同一 WiFi 用局域网模式，或换系统浏览器。', true), 16000);
-  wireGuestPeer(guestPeer, room, (m, t, r) => fail(m, t, r));
-  guestPeer.on('open', () => {
+  // 信令连接还活着就接着用：重连时省掉一整轮 WebSocket 握手 / Peer ID 注册，
+  // 断线重连通常从 2～3 秒降到几百毫秒
+  let p = guestPeer;
+  if (!(p && !p.destroyed && p.open)) {
+    try { if (p) p.destroy(); } catch (e) {}
+    p = takeWarmPeer();                       // 入口页预热过就直接拿来用
+  }
+  if (!p || p.destroyed) p = new Peer(guestPeerId(), peerOpts());
+  guestPeer = p;
+  // 同一条信令连接可能被重试复用：事件只挂一次，回调走可替换的钩子，
+  // 免得重试几次就挂上几份监听、报一个错弹好几次提示
+  p.__failHook = { fn: (m, t, r) => fail(m, t, r) };
+  if (!p.__wired) {
+    p.__wired = true;
+    wireGuestPeer(p, room, (m, t, r) => {
+      const h = p.__failHook;
+      if (h && h.fn) h.fn(m, t, r);
+    });
+  }
+  const peer = p;
+  const call = () => {
     setStatus('② 已连到信令，正在呼叫对方设备…');
-    guestConn = guestPeer.connect('pc-' + room, { reliable: true, metadata: identityMeta() });
+    guestConn = peer.connect('pc-' + room, { reliable: true, metadata: identityMeta() });
     wireGuestConn(guestConn, (msg, tip) => fail(msg, tip, true), () => {
       if (guestTimer) clearTimeout(guestTimer);
       markGuestConnected();
     });
-  });
+  };
+  setStatus(peer.open ? '② 已连到信令，正在呼叫对方设备…' : '① 正在连接信令服务器…');
+  guestTimer = setTimeout(() => fail('连接超时', '未能与对方设备建立直连，多为 NAT 限制或信令不通。建议两台设备连同一 WiFi 用局域网模式，或换系统浏览器。', true), 16000);
+  if (peer.open) call();
+  else peer.on('open', call);
 }
 // 连接期内的失败处理：留在当前页面，给出可操作的提示
 function failGuest(msg, tip) {
@@ -2595,11 +2697,13 @@ function markGuestConnected() {
 function probeRoom(room, timeoutMs) {
   return new Promise(resolve => {
     let done = false, peer = null, conn = null, timer = null, guestName = '';
+    let fallbackTimer = null, freshTried = false;
     const pending = [];      // 探活期间收到的消息（主要是房间历史），进房后补处理
     const finish = (okFlag, msg, tip) => {
       if (done) return;
       done = true;
       if (timer) clearTimeout(timer);
+      if (fallbackTimer) clearTimeout(fallbackTimer);
       if (!okFlag) {
         try { if (conn) conn.close(); } catch (e) {}
         try { if (peer) peer.destroy(); } catch (e) {}
@@ -2607,27 +2711,10 @@ function probeRoom(room, timeoutMs) {
       resolve({ ok: okFlag, msg: msg || '', tip: tip || '',
                 peer: peer, conn: conn, name: guestName, pending: pending });
     };
-    timer = setTimeout(() => finish(false, '连接超时',
-      '没有收到对方响应，可能是房间码不正确，或对方设备网络受限。'), timeoutMs || 12000);
-    try {
-      peer = new Peer('g-' + Math.random().toString(36).slice(2, 10) + '-' + Date.now().toString(36), peerOpts());
-    } catch (e) {
-      finish(false, '无法发起连接：' + (e && e.message ? e.message : e));
-      return;
-    }
-    peer.on('error', err => {
-      const t = (err && err.type) || 'unknown';
-      if (t === 'peer-unavailable') {
-        finish(false, '房间不存在', '这个房间码没有对应的房间，请确认对方已经点「创建房间」并且页面保持打开。');
-      } else if (t === 'network' || t === 'server-error' || t === 'socket-error') {
-        finish(false, '网络不通', '连不上信令服务器，换个网络或改用系统浏览器再试。');
-      } else if (t === 'unavailable-id') {
-        finish(false, '连接被占用', '请稍后重试。');
-      } else {
-        finish(false, '连接失败', '错误类型：' + t + '，请确认房间码正确。');
-      }
-    });
-    peer.on('open', () => {
+    // 呼叫房主：这一步才是真正的 P2P 握手
+    const call = () => {
+      if (done || !peer || peer.destroyed) return;
+      if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
       conn = peer.connect('pc-' + room, { reliable: true, metadata: identityMeta() });
       conn.on('open', () => {
         try { conn.send('HELLO:' + PROTOCOL + ':' + myNick() + ':' + devId()); } catch (e) {}
@@ -2650,7 +2737,54 @@ function probeRoom(room, timeoutMs) {
       conn.on('close', () => finish(false, '房主拒绝了这台设备',
         '它可能已经被房主请出这个房间。请联系房主在「已踢出」那里点「解除」，再重新加入。'));
       conn.on('error', e => finish(false, '数据通道错误', String(e && e.message ? e.message : e)));
-    });
+    };
+    const attach = pp => {
+      peer = pp;
+      pp.on('error', err => {
+        if (done) return;
+        const t = (err && err.type) || 'unknown';
+        if (t === 'peer-unavailable') {
+          finish(false, '房间不存在', '这个房间码没有对应的房间，请确认对方已经点「创建房间」并且页面保持打开。');
+        } else if (t === 'network' || t === 'server-error' || t === 'socket-error') {
+          finish(false, '网络不通', '连不上信令服务器，换个网络或改用系统浏览器再试。');
+        } else if (t === 'unavailable-id') {
+          finish(false, '连接被占用', '请稍后重试。');
+        } else if (!freshTried && !pp.open) {
+          // 预热的那条长连接已经废了（放太久、切了网络）：换一条新的，别直接判失败
+          freshTried = true;
+          try { pp.destroy(); } catch (e) {}
+          fresh();
+        } else {
+          finish(false, '连接失败', '错误类型：' + t + '，请确认房间码正确。');
+        }
+      });
+      if (pp.open) call();
+      else pp.on('open', () => { if (!done) call(); });
+    };
+    const fresh = () => {
+      freshTried = true;
+      try { attach(new Peer(guestPeerId(), peerOpts())); }
+      catch (e) { finish(false, '无法发起连接：' + (e && e.message ? e.message : e)); }
+    };
+    timer = setTimeout(() => finish(false, '连接超时',
+      '没有收到对方响应，可能是房间码不正确，或对方设备网络受限。'), timeoutMs || 12000);
+    // 入口页预热好的信令连接能直接用：跳过 WebSocket 握手，少等 0.3～1.5 秒
+    const warm = takeWarmPeer();
+    if (warm) {
+      attach(warm);
+      if (!warm.open) {
+        // 预热的那条还在握手（公共信令服务器在部分网络下要好几秒，属于正常）：
+        // 就等它，别重开——重开等于把已经走了大半的握手推倒重来。
+        // 只有明显卡死（超过正常握手时间一倍）才换新的。
+        fallbackTimer = setTimeout(() => {
+          if (done || warm.open) return;
+          try { warm.destroy(); } catch (e) {}
+          if (peer === warm) fresh();
+        }, 6000);
+      }
+    } else {
+      fresh();
+    }
   });
 }
 
@@ -3014,6 +3148,7 @@ async function gateJoin() {
     gateMsg(res.msg + (res.tip ? '：' + res.tip : ''), 'err');
     box.focus();
     try { box.select(); } catch (e) {}
+    prewarmSignal();      // 这次的信令连接已经销毁了，先建好下一条，重试时不用再等
     return;
   }
   try { localStorage.setItem('lanshare_last_room', room); } catch (e) {}
@@ -3064,6 +3199,10 @@ if (MODE === 'host') {
     // 刚刚进过房间，刷新页面后自动回去，不用重新输码
     hideGate();
     initGuest(saved);
+  } else {
+    // 留在入口页：趁用户输房间码的这几秒，先把到信令服务器的长连接建好，
+    // 点「加入房间」时只需要「呼叫对方」这一步（省 0.3～1.5 秒）
+    setTimeout(prewarmSignal, 200);
   }
 }
 </script>
