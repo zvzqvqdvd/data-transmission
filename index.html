@@ -647,7 +647,7 @@ body.no-peer #textInput { cursor:not-allowed; }
 
 <div id="waitBar" style="display:none;">
   <span class="w-dot"></span>
-  <span class="w-text">等待有人加入房间</span>
+  <span class="w-text" id="waitText">还没有其他设备加入</span>
   <span class="w-sub" id="waitSub">把房间码或邀请链接发给别人，谁都可以加入这个房间</span>
 </div>
 
@@ -957,12 +957,12 @@ function setConn(mode, n) {
   if (mode === 'p2p') {
     connStatus.textContent = (MODE === 'host' && n > 1) ? ('P2P 直连 × ' + n) : 'P2P 直连';
   } else {
-    connStatus.textContent = mode==='wait' ? '等待对方加入' : mode==='http' ? '局域网' : mode==='off' ? '未连接' : '连接中…';
+    connStatus.textContent = mode==='wait' ? '房间已开' : mode==='http' ? '局域网' : mode==='off' ? '未连接' : '连接中…';
   }
   connStatus.className = 'conn-status ' + (mode==='p2p' ? 'p2p' : mode==='http' ? 'http' : '');
 }
 
-// ===== 房间里有没有别人：没有就不让发，直接提示等待 =====
+// ===== 房间里现在有几台设备：只用来提示，房主没等人也能先发消息 =====
 let lanPeers = 0;        // 局域网里其他在线设备数（后端 /messages 带回）
 let hostP2PCount = 0;    // 房主页面报上来的外网直连设备数（局域网设备看不到 P2P，靠这个）
 let isLanClient = false; // 本页是不是「局域网里其他设备打开的」
@@ -975,23 +975,34 @@ function activePeerCount() {
   return hostList().length + lanPeers;   // 房主：外网直连（可多台）+ 局域网里开着的设备
 }
 function peerReady() { return activePeerCount() > 0; }
+// 能不能输入/发送：房主不受「房间里有没有人」限制——房间一建好就能写，
+// 消息先存进这个房间的记录里，别人加入时由 HISTORY 自动补齐，人来了往上翻就能看到。
+// 访客没有本机后端，只有真的连上房主才发得出去。
+function canCompose() {
+  if (MODE === 'host') return !roomClosed;
+  return peerReady();
+}
 function refreshReady() {
-  const ok = peerReady();
+  const ok = canCompose();
+  const ready = peerReady();
   document.body.classList.toggle('no-peer', !ok);
   const wb = document.getElementById('waitBar');
-  if (wb) wb.style.display = ok ? 'none' : 'flex';
+  if (wb) wb.style.display = ready ? 'none' : 'flex';
+  const wt = document.getElementById('waitText');
+  if (wt) wt.textContent = MODE === 'guest' ? '正在连接房间…' : '还没有其他设备加入';
   const sub = document.getElementById('waitSub');
   if (sub) sub.textContent = MODE === 'guest'
-    ? '正在连接房间，连上后即可和大家互发文字与文件'
-    : '把房间码或邀请链接发给别人，谁都可以加入这个房间';
+    ? '连上后就能和大家互发文字与文件'
+    : '你现在发的消息会存在房间里，别人加入后会自动补上';
   textInput.disabled = !ok;
-  textInput.placeholder = ok ? '输入消息…' : '等待有人加入房间…';
+  textInput.placeholder = ok ? '输入消息…' : '正在连接房间…';
   const sb = document.querySelector('.send-btn');
   if (sb) sb.disabled = !ok;
   const fb = document.querySelector('.folder-btn');
   if (fb) fb.disabled = !ok;
   const screenBtn = document.getElementById('screenBtn');
-  if (screenBtn) screenBtn.disabled = !ok;
+  // 桌面共享要有接收方才有意义：房主一个人时也先不点亮（不影响发文字/文件）
+  if (screenBtn) screenBtn.disabled = !ready;
   fi.disabled = !ok;
   if (MODE === 'host') {
     const n = hostList().length;
@@ -1035,7 +1046,7 @@ function updateHostRoomHint() {
   const lan = lanPeers;
   renderMembers();     // 顺便刷新「谁走外网、谁走局域网」的清单
   if (!p2p && !lan) {
-    el.textContent = '✅ 房间已开，等待别人加入（房间码不变，可随时刷新）';
+    el.textContent = '✅ 房间已开，还没有其他设备加入（你现在发的消息会留在房间里，别人进来就能看到）';
     return;
   }
   const parts = [];
@@ -1045,7 +1056,7 @@ function updateHostRoomHint() {
 }
 
 // ===== 消息列表：房主端 = 服务端消息 + 本地 P2P 消息；访客端 = 纯本地 =====
-const EMPTY_HTML = '<div class="empty"><span class="e-icon">💬</span>暂无消息<span class="e-sub">连上对方后，双方互发的文字与文件会显示在这里</span></div>';
+const EMPTY_HTML = '<div class="empty"><span class="e-icon">💬</span>暂无消息<span class="e-sub">发的文字与文件会显示在这里，后加入的设备也能看到</span></div>';
 let serverMsgs = [], localMsgs = [];
 let seenIds = new Set();     // 同一条消息可能既走本机也走广播，按 id 去重
 function nowHMS() { return new Date().toTimeString().slice(0, 8); }
@@ -1380,7 +1391,15 @@ function handleData(data, ctx) {
     if (data.startsWith('HISTORY:')) {
       try {
         const h = JSON.parse(data.slice(8));
-        (h.messages || []).forEach(m => pushMsg(Object.assign({}, m, { remote: true })));
+        const hist = (h.messages || []).map(m => Object.assign({}, m, { remote: true }));
+        const ids = new Set(hist.filter(m => m.id).map(m => m.id));
+        // 历史可能比实时消息晚到一步：先到的几条留在后面，按时间重新归位，
+        // 免得「刚进来看到的第一条」跑到最上面去
+        const extra = localMsgs.filter(m => !m.id || !ids.has(m.id));
+        const all = hist.concat(extra);
+        all.sort((a, b) => String(a.time || '').localeCompare(String(b.time || '')));
+        localMsgs = all;
+        seenIds = new Set(all.filter(m => m.id).map(m => m.id));
         renderAll();
       } catch (e) {}
       return;
@@ -2027,13 +2046,21 @@ function registerGuest(ctx, nick, dev) {
   refreshReady();
   renderAll();
 }
-// 给刚进来的设备补一份房间历史：刷新页面、晚到的人也能看到前面聊了什么
-function pushHistoryTo(conn) {
-  const list = (serverMsgs || []).slice(-200).map(m => ({
+// 给刚进来的设备补一份房间历史：刷新页面、晚到的人也能看到前面聊了什么。
+// 现场再问一次后端，而不是用 2 秒轮询缓存的那份——房主刚发完、对端紧接着加入时，
+// 缓存里可能还没有最后一条，人一进来就会少一段。
+async function pushHistoryTo(conn) {
+  let list = serverMsgs;
+  try {
+    const r = await fetch(API + '/messages', { cache: 'no-store' });
+    const d = await r.json();
+    if (d && d.ok && Array.isArray(d.messages)) list = d.messages;
+  } catch (e) {}
+  const payload = (list || []).slice(-200).map(m => ({
     type: m.type, content: m.content || '', name: m.name || '',
     size: m.size || '', time: m.time || '', ip: m.ip || '', id: m.id || ''
   }));
-  try { conn.send('HISTORY:' + JSON.stringify({ messages: list })); } catch (e) {}
+  try { conn.send('HISTORY:' + JSON.stringify({ messages: payload })); } catch (e) {}
 }
 // 把房间成员名单广播给所有外网设备
 function sendPeers() {
@@ -2614,9 +2641,9 @@ function probeRoom(room, timeoutMs) {
 async function sendAll() {
   const v = textInput.value.trim();
   if (!v && !pendingFiles.length) return;
-  // 房间里还没别人：不往外发，也不落盘（否则会变成自己跟自己聊）
-  if (!peerReady()) {
-    notify(MODE === 'guest' ? '还没进入房间，正在连接' : '等待有人加入房间后才能发送');
+  // 房主一个人也能发：先落盘进房间记录，等有人加入时随 HISTORY 一起同步过去
+  if (!canCompose()) {
+    notify('还没有连上房间，请稍后再试');
     refreshReady();
     return;
   }
