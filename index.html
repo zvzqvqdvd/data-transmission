@@ -633,17 +633,6 @@ body.no-peer #textInput { cursor:not-allowed; }
   padding:1px 5px; border-radius:4px; font-size:11.5px;
 }
 
-/* ===== 房间有效期 ===== */
-.ttl-opts { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:12px; }
-.ttl-opts button {
-  padding:11px; border:1px solid #e2e4e6; background:#fff; border-radius:9px;
-  font-size:13.5px; color:#3c4043; cursor:pointer; transition:all .16s;
-}
-.ttl-opts button:hover { border-color:#07C160; color:#0a8f4a; }
-.ttl-opts button.on {
-  background:#e9f8ef; border-color:#07C160; color:#0a8f4a; font-weight:600;
-}
-
 /* ===== 其它小件 ===== */
 #guestProgText {
   font-size:11.5px; color:#3c7a57; margin-top:5px; text-align:center;
@@ -731,9 +720,9 @@ body.no-peer #textInput { cursor:not-allowed; }
   <div class="p2p-line">
     <span class="p2p-label">🌍 外网直连</span>
     <b id="roomCode"></b>
-    <button class="pill ghost" onclick="renewRoom()">换一个</button>
-    <button class="pill danger" id="dissolveBtn" onclick="askDissolve()">解散房间</button>
-    <button class="pill ghost" id="ttlBtn" onclick="showTtl()">有效期：不限</button>
+    <button class="pill ghost" onclick="renewRoom()">新建房间</button>
+    <button class="pill danger" id="dissolveBtn" onclick="askDissolve()">销毁房间</button>
+    <button class="pill ghost" id="ttlBtn" onclick="showTtl()">房间说明</button>
     <span id="inviteBox" style="display:none;gap:8px;">
       <a id="inviteLink" class="pill" href="#" target="_blank" rel="noopener">打开访问链接</a>
       <button class="pill" onclick="toggleQR()">二维码</button>
@@ -837,7 +826,7 @@ body.no-peer #textInput { cursor:not-allowed; }
     <div class="faq">
       <details open>
         <summary>房间码是对的，却说找不到房间？</summary>
-        <p>房主点过「换一个」或「解散房间」，旧码就作废了；也可能是房主那边的程序或页面已经关掉。找房主重新要房间码，或者直接扫二维码/点邀请链接。</p>
+        <p>房主点过「新建房间」或「销毁房间」，旧码就作废了；也可能是房主那边的程序或页面已经关掉。找房主重新要房间码，或者直接扫二维码/点邀请链接。</p>
       </details>
       <details>
         <summary>一直卡在「正在连接对方设备」？</summary>
@@ -866,15 +855,14 @@ body.no-peer #textInput { cursor:not-allowed; }
 
 <div class="modal-mask" id="ttlModal">
   <div class="modal">
-    <h3>房间有效期</h3>
-    <p class="modal-tip">到点自动解散：房间码作废、所有设备退出，聊天记录和已收到的文件仍留在本机。</p>
-    <div class="ttl-opts" id="ttlOpts">
-      <button data-min="0">不限</button>
-      <button data-min="30">30 分钟</button>
-      <button data-min="60">1 小时</button>
-      <button data-min="480">8 小时</button>
-    </div>
-    <div class="modal-btns"><button class="btn-plain" onclick="hideTtl()">取消</button></div>
+    <h3>房间什么时候销毁</h3>
+    <p class="modal-tip" style="text-align:left;line-height:2;">
+      房间是<b>临时</b>的，出现以下任一情况就自动销毁：<br>
+      · 关闭房主页面（刷新不算，页面回来就继续用）<br>
+      · 连续 12 小时没有通信（发消息、传文件、新设备加入都算）<br>
+      · 房主点「销毁房间」<br>
+      销毁时房间码作废，本机的聊天记录与接收文件也一并删除，不做保留。</p>
+    <div class="modal-btns"><button class="btn-plain" onclick="hideTtl()">知道了</button></div>
   </div>
 </div>
 
@@ -901,11 +889,11 @@ body.no-peer #textInput { cursor:not-allowed; }
 </div>
 <div class="modal-mask" id="dissolveModal">
   <div class="modal">
-    <h3>解散房间</h3>
-    <p class="modal-tip">解散后所有设备会立即断开，房间码作废，已经发出去的邀请链接和二维码都不能再用。<br>聊天记录和已收到的文件会留在本机，不会删除。</p>
+    <h3>销毁房间</h3>
+    <p class="modal-tip">销毁后所有设备会立即断开，房间码作废，已经发出去的邀请链接和二维码都不能再用。<br><b>本机的聊天记录和接收文件也会一并删除，不可恢复。</b></p>
     <div class="modal-btns">
       <button class="btn-plain" onclick="hideDissolve()">取消</button>
-      <button class="btn-danger" onclick="dissolveRoom()">解散</button>
+      <button class="btn-danger" onclick="dissolveRoom()">销毁</button>
     </div>
   </div>
 </div>
@@ -1636,7 +1624,7 @@ async function loadMessages() {
     // 房间已被解散：本机页面和局域网设备都退回入口页
     if (d.closed) {
       if (!dissolving) {
-        onRoomClosed('房间已解散，房间码已作废。点「创建房间」可以重新开一个。');
+        onRoomClosed('房间已销毁，房间码已作废。点「创建房间」可以重新开一个。');
       }
       return;
     }
@@ -1847,7 +1835,7 @@ function handleData(data, ctx) {
       guestConn = null; guestPeer = null;
       stopScreenShare();
       resetToGate();
-      gateMsg('房主已解散房间，房间码已作废。请联系房主获取新的房间码或邀请链接。', 'info');
+      gateMsg('房主已销毁房间，房间码已作废。请联系房主获取新的房间码或邀请链接。', 'info');
       return;
     }
     // 对端主动点了「断开」：房主端只收掉这一条连接（房间还在）；
@@ -2320,88 +2308,35 @@ function resetIce() {
 // ===== 使用帮助 =====
 function showHelp() { document.getElementById('helpModal').classList.add('show'); }
 function hideHelp() { document.getElementById('helpModal').classList.remove('show'); }
-// ===== 房间有效期（可选，到点自动解散）=====
-let ttlMin = 0, ttlTimer = null, ttlDeadline = 0;
-function ttlLabel(min) {
-  if (!min) return '不限';
-  return min >= 60 ? (min / 60) + ' 小时' : min + ' 分钟';
-}
-function renderTtl() {
-  const b = document.getElementById('ttlBtn');
-  if (!b) return;
-  if (!ttlDeadline) { b.textContent = '有效期：' + ttlLabel(ttlMin); return; }
-  const left = Math.max(0, ttlDeadline - Date.now());
-  if (left < 60000) {
-    b.textContent = '有效期：' + Math.ceil(left / 1000) + ' 秒';
-  } else if (left < 3600000) {
-    const m = Math.floor(left / 60000), s = Math.floor((left % 60000) / 1000);
-    b.textContent = '有效期：' + m + ' 分 ' + (s < 10 ? '0' + s : s) + ' 秒';
-  } else {
-    b.textContent = '有效期：' + (left / 3600000).toFixed(1) + ' 小时';
-  }
-}
-function armTtl() {
-  if (ttlTimer) { clearInterval(ttlTimer); ttlTimer = null; }
-  if (!ttlDeadline) { renderTtl(); return; }
-  ttlTimer = setInterval(() => {
-    if (!ttlDeadline) { clearInterval(ttlTimer); ttlTimer = null; return; }
-    if (ttlDeadline - Date.now() <= 0) {
-      clearInterval(ttlTimer); ttlTimer = null; ttlDeadline = 0;
-      try { sessionStorage.removeItem('lanshare_ttl_deadline'); } catch (e) {}
-      renderTtl();
-      dissolveRoom(true);
-      return;
-    }
-    renderTtl();
-  }, 1000);
-  renderTtl();
-}
-function showTtl() {
-  const opts = document.querySelectorAll('#ttlOpts button');
-  Array.prototype.forEach.call(opts, b => {
-    b.classList.toggle('on', Number(b.getAttribute('data-min')) === ttlMin);
-  });
-  document.getElementById('ttlModal').classList.add('show');
-}
+// ===== 房间生命周期（临时房间：页面关闭 / 12 小时无通信 / 手动销毁）=====
+function showTtl() { document.getElementById('ttlModal').classList.add('show'); }
 function hideTtl() { document.getElementById('ttlModal').classList.remove('show'); }
-function setTtl(min) {
-  ttlMin = Math.max(0, Number(min) || 0);
-  try { localStorage.setItem('lanshare_ttl_min', String(ttlMin)); } catch (e) {}
-  hideTtl();
-  if (!ttlMin) {
-    ttlDeadline = 0;
-    try { sessionStorage.removeItem('lanshare_ttl_deadline'); } catch (e) {}
-    armTtl();
-    toast('已取消有效期，房间不会自动解散');
-    return;
-  }
-  ttlDeadline = Date.now() + ttlMin * 60000;
-  try { sessionStorage.setItem('lanshare_ttl_deadline', String(ttlDeadline)); } catch (e) {}
-  armTtl();
-  toast('房间将在 ' + ttlLabel(ttlMin) + ' 后自动解散');
-}
-function restoreTtl() {
-  let d = 0;
-  try { d = Number(sessionStorage.getItem('lanshare_ttl_deadline') || 0); } catch (e) {}
-  if (d && d > Date.now()) { ttlDeadline = d; armTtl(); }
-  else if (d) {
-    // 刷新页面时已经过期：立刻收掉这个房间
-    try { sessionStorage.removeItem('lanshare_ttl_deadline'); } catch (e) {}
-    ttlDeadline = 0;
-    setTimeout(() => dissolveRoom(true), 800);
-  } else {
-    renderTtl();
-  }
+let hostBeatTimer = null;
+// 房主页面每 10 秒向本机程序报一次平安；页面关掉后心跳停止，
+// 本机程序的看门狗等 60 秒（刷新页面足够回来了）就把房间销毁
+function startHostHeartbeat() {
+  if (MODE !== 'host' || isLanClient || hostBeatTimer) return;
+  const beat = () => {
+    if (roomClosed || !ROOM) return;
+    try { fetch(API + '/api/room/heartbeat', { method: 'POST', body: '' }); } catch (e) {}
+  };
+  beat();
+  hostBeatTimer = setInterval(beat, 10000);
+  // 关页面 / 跳走时打一声招呼。刷新也会触发，但页面回来后第一次心跳就把「再见」撤销
+  window.addEventListener('pagehide', () => {
+    try { navigator.sendBeacon(API + '/api/room/bye'); } catch (e) {}
+  });
 }
 
 async function renewRoom() {
+  if (!confirm('新建房间会作废当前房间码，旧房间的聊天记录和接收文件也将一并删除。\n确定继续吗？')) return;
   try {
     const r = await fetch(API + '/api/room/renew', { method: 'POST' });
     const d = await r.json();
     if (!d.ok) throw new Error();
     ROOM = d.room;
   } catch (e) {
-    toast('换房间码失败，请确认本机程序仍在运行');
+    toast('新建房间失败，请确认本机程序仍在运行');
     return;
   }
   // 换码 = 换房间：通知并断开所有外网设备，清空界面，服务端已切到新房间目录
@@ -2429,22 +2364,16 @@ async function renewRoom() {
   loadMessages();
   refreshReady();
   renderAll();
-  // 换了新房间：设过的有效期从此刻重新计时
-  if (ttlMin) {
-    ttlDeadline = Date.now() + ttlMin * 60000;
-    try { sessionStorage.setItem('lanshare_ttl_deadline', String(ttlDeadline)); } catch (e) {}
-    armTtl();
-  }
-  toast('已换新房间码，数据目录也换成新的了');
+  toast('已新建房间，旧房间的数据已删除');
 }
-// ===== 解散房间：房主点头 → 断开所有设备 → 回入口页 =====
+// ===== 销毁房间：房主点头 → 断开所有设备 → 删除本机数据 → 回入口页 =====
 function askDissolve() {
   document.getElementById('dissolveModal').classList.add('show');
 }
 function hideDissolve() {
   document.getElementById('dissolveModal').classList.remove('show');
 }
-async function dissolveRoom(auto) {
+async function dissolveRoom() {
   hideDissolve();
   const btn = document.getElementById('dissolveBtn');
   if (btn) btn.disabled = true;
@@ -2453,21 +2382,14 @@ async function dissolveRoom(auto) {
     const r = await fetch(API + '/api/room/dissolve', { method: 'POST' });
     const d = await r.json();
     if (!d.ok) throw new Error('fail');
-    ROOM = '';   // 服务端已经把这个房间作废，码不再有效
+    ROOM = '';   // 服务端已经销毁这个房间（含磁盘数据），码不再有效
   } catch (e) {
     dissolving = false;
     if (btn) btn.disabled = false;
-    toast('解散失败，请确认本机程序仍在运行');
+    toast('销毁失败，请确认本机程序仍在运行');
     return;
   }
-  // 房间没了：有效期倒计时也一并停掉
-  ttlDeadline = 0;
-  if (ttlTimer) { clearInterval(ttlTimer); ttlTimer = null; }
-  try { sessionStorage.removeItem('lanshare_ttl_deadline'); } catch (e) {}
-  renderTtl();
-  onRoomClosed(auto
-    ? '房间有效期到了，已自动解散。房间码已作废，所有设备已断开；要重新使用，点「创建房间」开一个新房间。'
-    : '房间已解散，房间码已作废，所有设备已断开。要重新使用，点「创建房间」开一个新房间。');
+  onRoomClosed('房间已销毁，房间码已作废，本机聊天记录与接收文件已删除。要重新使用，点「创建房间」开一个新房间。');
   dissolving = false;
   if (btn) btn.disabled = false;
 }
@@ -2529,7 +2451,7 @@ function onNeedJoin() {
   refreshReady();
   renderAll();
   showLanGate();
-  gateMsg('房间码已经变了（房主换了码或解散了房间），请重新输入。', 'info');
+  gateMsg('房间码已经变了（房主新建或销毁了房间），请重新输入。', 'info');
 }
 let hostRetry = 0;
 function startHostPeer(roomCode) {
@@ -2817,6 +2739,7 @@ function startHostUI(fromWeb, lanUrl, lanClient) {
   // 局域网里其他设备打开的页面：同样是 host 模式（共用一套收发逻辑），
   // 但它不是房主，名字要算自己的一台设备，不能也叫「房主」
   isLanClient = !!lanClient;
+  startHostHeartbeat();   // 只有真房主页面会生效（局域网设备页面自动跳过）
   // 重新开房：把上一次「已解散」的状态清干净，否则界面会立刻又退回入口页
   roomClosed = false;
   dissolving = false;
@@ -3074,7 +2997,7 @@ function wireGuestPeer(peer, room, onFail) {
   peer.on('error', err => {
     const t = (err && err.type) || 'unknown';
     if (t === 'peer-unavailable') {
-      onFail('未找到对方设备', '请确认对端程序正在运行、页面保持打开，且房间码一致（对端若刚点过「换一个」，需重新获取房间码）。', false);
+      onFail('未找到对方设备', '请确认对端程序正在运行、页面保持打开，且房间码一致（对端若刚点过「新建房间」，需重新获取房间码）。', false);
     } else if (t === 'network' || t === 'server-error' || t === 'socket-error') {
       onFail('信令服务器连不上', '当前网络访问 PeerJS 公共信令服务器失败，可切换 WiFi / 蜂窝网络，或用系统浏览器打开。', true);
     } else {
@@ -3495,7 +3418,7 @@ function showHostGate() {
   const sub = document.querySelector('.gate-sub');
   if (sub) sub.textContent = '点「创建房间」开一个房间，别人用房间码加入';
   const foot = document.querySelector('.gate-foot');
-  if (foot) foot.innerHTML = '房间只在点「创建房间」之后才存在<br>关掉程序房间就结束，聊天记录会留在本机';
+  if (foot) foot.innerHTML = '房间是临时的：关掉房主页面或 12 小时无通信就会自动销毁<br>销毁时聊天记录与接收文件一并删除';
   gateClearMsg();
 }
 // 局域网设备打开页面：只留「输入房间码」这一步
@@ -3574,14 +3497,7 @@ async function gateCreate() {
     // 本机页面（8000）不算「在线页」，否则会把齿轮和管理入口一起藏掉
     startHostUI(SEED_MODE !== 'host', info.ip ? ('http://' + info.ip + ':' + info.port) : '');
     if (typeof info.peers === 'number') { lanPeers = info.peers; refreshReady(); renderAll(); }
-    // 新房间：之前设过的有效期从此刻重新计时（不设就保持不限）
-    if (ttlMin) {
-      ttlDeadline = Date.now() + ttlMin * 60000;
-      try { sessionStorage.setItem('lanshare_ttl_deadline', String(ttlDeadline)); } catch (e) {}
-      armTtl();
-    } else {
-      renderTtl();
-    }
+    startHostHeartbeat();
   } catch (e) {
     gateMsg((e && e.message) || '创建房间失败，请稍后再试。', 'err');
   } finally {
@@ -3692,15 +3608,7 @@ if (MODE === 'host') {
   }
 }
 
-// ===== 有效期选项（放在最后：此时 DOM 已经全部就绪）=====
-Array.prototype.forEach.call(document.querySelectorAll('#ttlOpts button'), b => {
-  b.addEventListener('click', () => setTtl(b.getAttribute('data-min')));
-});
-// 记住上次选的有效期偏好（下次开新房沿用）
-try { ttlMin = Number(localStorage.getItem('lanshare_ttl_min')) || 0; } catch (e) {}
-// 刷新页面后接着倒计时；上一秒刚好过期就立刻收掉房间
-if (MODE === 'host' && !JOIN_REQUIRED && HAS_ROOM) restoreTtl();
-else renderTtl();
+// 房间生命周期：临时房间（页面关闭 / 12 小时无通信 / 手动销毁），没有可设的选项了
 </script>
 </body>
 </html>
