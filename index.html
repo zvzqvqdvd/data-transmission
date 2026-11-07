@@ -220,6 +220,17 @@ body.no-peer #textInput { cursor:not-allowed; }
   transition:box-shadow .18s, transform .18s;
 }
 .file-card:hover { box-shadow:0 4px 12px rgba(0,0,0,.1); transform:translateY(-1px); }
+/* 卡片右侧的独立下载按钮：点它才落盘，点卡片本体是预览 */
+.file-dl {
+  flex-shrink:0; margin-left:auto; width:30px; height:30px;
+  border-radius:50%; border:1px solid #bfe6cf; background:#e9f8ef;
+  color:#0a8f4a; font-size:14px; line-height:1; cursor:pointer;
+  display:inline-flex; align-items:center; justify-content:center;
+  transition:background .15s, transform .15s;
+}
+.file-dl:hover { background:#07C160; border-color:#07C160; color:#fff; transform:scale(1.08); }
+.file-dl:active { transform:scale(.94); }
+.media-meta .file-dl { margin-left:auto; width:24px; height:24px; font-size:12px; }
 .file-card::before {
   content:''; position:absolute; left:-5px; top:16px;
   border:5px solid transparent; border-right-color:#fff; border-left:0;
@@ -836,7 +847,7 @@ body.no-peer #textInput { cursor:not-allowed; }
       </details>
       <details>
         <summary>收到的文件存在哪了？</summary>
-        <p>房主那台设备上：<code>数据\房间\&lt;房间码&gt;\接收文件\</code>。其他设备不会自动下载聊天里的文件，点文件卡片上的「⬇ 点击下载」才会传过来，存在系统的下载目录里；下载过的卡片可以直接在线预览。</p>
+        <p>房主那台设备上：<code>数据\房间\&lt;房间码&gt;\接收文件\</code>。其他设备不会自动下载聊天里的文件：点文件卡片可以在线预览（图片/视频/音频/PDF），点卡片右侧的「⬇」按钮才下载，存在系统的下载目录里。</p>
       </details>
       <details>
         <summary>大文件能传多大？</summary>
@@ -1504,39 +1515,57 @@ function renderMsg(msg) {
     const dl = fileUrl(msg);
     const nm = esc(msg.name), sz = esc(msg.size || '');
     const attrs = ' data-name="'+nm+'" data-url="'+esc(src)+'" data-dl="'+esc(dl)+'" data-kind="'+kind+'"';
+    // 访客端拉到本体后卡片带个独立下载按钮；房主/局域网点开预览后里面也有下载
+    const dlBtn = (MODE === 'guest' && msg.id)
+      ? '<button class="file-dl" title="下载到本机" onclick="event.stopPropagation(); pullFile(\'' + esc(msg.id) + '\', true)">⬇</button>'
+      : '';
     if (!dl) {
-      // 访客端拿不到文件本体（历史/别人传的都只收到卡片）：点卡片按需从房主拉取
+      // 访客端拿不到文件本体（历史/别人传的都只收到卡片）：
+      // 点卡片 = 预览（可预览类型）；右边单独的 ⬇ 按钮才是下载落盘
       const ext=String(msg.name||'').split('.').pop().toUpperCase().slice(0,4);
       const pullable = MODE === 'guest' && msg.id;
+      const pv = kind && pullable;   // 图片/视频/音频/PDF 才值得点开预览
       bubble = '<div class="file-card"'+(pullable
-        ? ' style="cursor:pointer;" title="点击下载" onclick="pullFile(\'' + esc(msg.id) + '\')"'
+        ? ' style="cursor:pointer;" title="'+(pv ? '点击预览' : '点击获取')+'" onclick="tapFileCard(\'' + esc(msg.id) + '\')"'
         : '') + '>'+
         '<div class="file-icon">'+esc(ext)+'</div>'+
         '<div class="file-info"><div class="file-name">'+nm+'</div>'+
-        '<div class="file-size">'+sz+(pullable ? ' · ⬇ 点击下载' : ' · 历史文件')+'</div></div></div>';
+        '<div class="file-size">'+sz+(pullable ? (pv ? ' · 点击预览' : ' · 不支持预览') : ' · 历史文件')+'</div></div>'+
+        (pullable ? '<button class="file-dl" title="下载到本机" onclick="event.stopPropagation(); pullFile(\'' + esc(msg.id) + '\', true)">⬇</button>' : '')+
+        '</div>';
     } else if (kind === 'img') {
       bubble = '<div class="media-card"'+attrs+' onclick="openPreview(this)">'+
         '<img class="media-thumb" src="'+esc(src)+'" alt="'+nm+'" loading="lazy">'+
-        '<div class="media-meta"><span class="m-name">'+nm+'</span><span class="m-size">'+sz+'</span></div></div>';
+        '<div class="media-meta"><span class="m-name">'+nm+'</span><span class="m-size">'+sz+'</span>'+dlBtn+'</div></div>';
     } else if (kind === 'vid') {
       bubble = '<div class="media-card"'+attrs+' onclick="openPreview(this)">'+
         '<div class="media-fallback"><span class="media-play">▶</span></div>'+
         '<span class="media-tag">视频</span>'+
-        '<div class="media-meta"><span class="m-name">'+nm+'</span><span class="m-size">'+sz+'</span></div></div>';
+        '<div class="media-meta"><span class="m-name">'+nm+'</span><span class="m-size">'+sz+'</span>'+dlBtn+'</div></div>';
     } else if (kind === 'aud') {
       bubble = '<div class="media-card"'+attrs+' onclick="openPreview(this)">'+
         '<div class="media-fallback light" style="height:74px;"><span class="media-play small">♪</span></div>'+
-        '<div class="media-meta"><span class="m-name">'+nm+'</span><span class="m-size">'+sz+'</span></div></div>';
+        '<div class="media-meta"><span class="m-name">'+nm+'</span><span class="m-size">'+sz+'</span>'+dlBtn+'</div></div>';
     } else if (kind === 'pdf') {
       bubble = '<div class="media-card"'+attrs+' onclick="openPreview(this)">'+
         '<div class="media-fallback light" style="height:88px;"><span class="media-play small">📄</span></div>'+
-        '<div class="media-meta"><span class="m-name">'+nm+'</span><span class="m-size">'+sz+'</span></div></div>';
+        '<div class="media-meta"><span class="m-name">'+nm+'</span><span class="m-size">'+sz+'</span>'+dlBtn+'</div></div>';
     } else {
       const ext=String(msg.name||'').split('.').pop().toUpperCase().slice(0,4);
-      bubble = '<a class="file-card" href="'+esc(dl)+'" download="'+nm+'">'+
-        '<div class="file-icon">'+esc(ext)+'</div>'+
-        '<div class="file-info"><div class="file-name">'+nm+'</div>'+
-        '<div class="file-size">'+sz+'</div></div></a>';
+      if (MODE === 'guest' && msg.id) {
+        // 访客：不可预览的文件本体到手后也不给裸链接，统一「⬇ 按钮」样式
+        bubble = '<div class="file-card" style="cursor:pointer;" title="保存到下载目录"'+
+          ' onclick="saveBlobUrl(\'' + esc(msg.id) + '\')">'+
+          '<div class="file-icon">'+esc(ext)+'</div>'+
+          '<div class="file-info"><div class="file-name">'+nm+'</div>'+
+          '<div class="file-size">'+sz+'</div></div>'+
+          '<button class="file-dl" title="下载到本机" onclick="event.stopPropagation(); saveBlobUrl(\'' + esc(msg.id) + '\')">⬇</button></div>';
+      } else {
+        bubble = '<a class="file-card" href="'+esc(dl)+'" download="'+nm+'">'+
+          '<div class="file-icon">'+esc(ext)+'</div>'+
+          '<div class="file-info"><div class="file-name">'+nm+'</div>'+
+          '<div class="file-size">'+sz+'</div></div></a>';
+      }
     }
   }
   const ip = msg.ip ? '<div class="msg-sender">'+esc(msg.ip)+'</div>' : '';
@@ -1557,6 +1586,16 @@ function openPreview(el) {
   const kind = el.getAttribute('data-kind') || '';
   const src = el.getAttribute('data-url') || '';
   const dl = el.getAttribute('data-dl') || src;
+  openPreviewSrc(name, kind, src, dl);
+}
+// 访客端：拉到 blob 后直接开预览弹层
+function openMsgPreview(m) {
+  const name = m.name || '';
+  const kind = mediaKind(name);
+  if (!kind) { notify('这种类型不支持预览，点卡片上的 ⬇ 可下载'); return; }
+  openPreviewSrc(name, kind, m.url, m.url);
+}
+function openPreviewSrc(name, kind, src, dl) {
   const body = previewBodyHTML(kind, src, name);
   if (!body) return;
   document.getElementById('previewName').textContent = name;
@@ -1801,7 +1840,7 @@ function handleData(data, ctx) {
       let e0 = null;
       try { e0 = JSON.parse(data.slice(16)); } catch (e) {}
       const mid = e0 && e0.mid;
-      if (mid) { pullWanted.delete(mid); pullInFlight.delete(mid); pumpPullQueue(); }
+      if (mid) { pullIntents.delete(mid); pullInFlight.delete(mid); pumpPullQueue(); }
       notify('「' + ((e0 && e0.name) || '文件') + '」已不存在，无法下载');
       return;
     }
@@ -2024,45 +2063,61 @@ function acceptScreenCall(call) {
   });
 }
 
-// ===== 按需下载（访客端）：点文件卡片 → 向房主要文件本体 → 存到下载目录 =====
+// ===== 按需拉取（访客端）：点卡片=预览，点 ⬇ 按钮=下载落盘 =====
 // 同一时间只拉一个文件：访客只有一条数据通道，混着收会串包
-const pullWanted = new Set();    // 用户主动点过下载的 mid（拉到后自动保存）
+const pullIntents = new Map();  // mid → 'save' | 'preview'（拉到本体后按意图处理）
 const pullInFlight = new Set();  // 正在拉取的 mid
-const pullQueue = [];            // 排队中的 {mid, name}
-function pullFile(mid) {
+const pullQueue = [];            // 排队中的 {mid, name, save}
+// 点文件卡片：有本体直接开预览，没有就先拉（拉完自动开预览）
+function tapFileCard(mid) {
   const m = localMsgs.find(x => x.id === mid);
   if (!m || m.type !== 'file') return;
-  if (m.url) {                    // 本体已经在手上：直接存
-    try {
-      const a = document.createElement('a');
-      a.href = m.url; a.download = m.name;
-      document.body.appendChild(a); a.click();
-      setTimeout(() => a.remove(), 1000);
-    } catch (e) {}
+  if (m.url) { openMsgPreview(m); return; }
+  pullFile(mid, false);
+}
+function pullFile(mid, save) {
+  const m = localMsgs.find(x => x.id === mid);
+  if (!m || m.type !== 'file') return;
+  if (m.url) {                    // 本体已经在手上
+    if (save) saveBlob(m.url, m.name);
+    else openMsgPreview(m);
     return;
   }
-  if (!canP2P() || !guestConn || !guestConn.open) { notify('未连接房间，无法下载'); return; }
-  if (pullInFlight.has(mid) || pullQueue.some(x => x.mid === mid)) { notify('这个文件已在下载队列里'); return; }
-  pullWanted.add(mid);
-  pullQueue.push({ mid: mid, name: m.name });
+  if (!canP2P() || !guestConn || !guestConn.open) { notify('未连接房间，无法获取文件'); return; }
+  if (pullInFlight.has(mid) || pullQueue.some(x => x.mid === mid)) { notify('这个文件已在获取队列里'); return; }
+  pullIntents.set(mid, save ? 'save' : 'preview');
+  pullQueue.push({ mid: mid, name: m.name, save: !!save });
   pumpPullQueue();
+}
+function saveBlob(url, name) {
+  try {
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => a.remove(), 1000);
+  } catch (e) {}
+}
+// 卡片 onclick 用：按 mid 找到已缓存的本体直接保存
+function saveBlobUrl(mid) {
+  const m = localMsgs.find(x => x.id === mid);
+  if (m && m.url) saveBlob(m.url, m.name);
 }
 function pumpPullQueue() {
   if (!pullQueue.length || pullInFlight.size) return;
   const job = pullQueue.shift();
   if (!guestConn || !guestConn.open) {
-    pullWanted.delete(job.mid);
-    notify('连接已断开，下载中断');
+    pullIntents.delete(job.mid);
+    notify('连接已断开，获取中断');
     return;
   }
   pullInFlight.add(job.mid);
   try {
     guestConn.send('FILE_PULL:' + JSON.stringify({ mid: job.mid, name: job.name }));
-    setStatus('正在请求下载: ' + job.name);
+    setStatus((job.save ? '正在请求下载: ' : '正在加载预览: ') + job.name);
   } catch (e) {
     pullInFlight.delete(job.mid);
-    pullWanted.delete(job.mid);
-    notify('下载请求发送失败');
+    pullIntents.delete(job.mid);
+    notify('请求发送失败');
   }
 }
 
@@ -2074,16 +2129,15 @@ async function onFileReceived(blob, name, mid, from) {
     else pushMsg({ type: 'file', name: name, size: fmtSize(blob.size), url: url,
                    ip: from || '外网设备', id: mid || uid() });
     txEnd();
-    // 只有用户主动点「下载」的才会落盘；卡片更新后随时可再保存
-    if (mid && pullWanted.has(mid)) {
-      pullWanted.delete(mid);
+    const intent = mid ? (pullIntents.get(mid) || '') : '';
+    if (mid) pullIntents.delete(mid);
+    if (intent === 'save') {
+      // 用户点的是 ⬇ 下载按钮：落盘一次
       setStatus('✅ ' + name + ' 已下载', true);
-      try {
-        const a = document.createElement('a');
-        a.href = url; a.download = name;
-        document.body.appendChild(a); a.click();
-        setTimeout(() => a.remove(), 1000);
-      } catch (e) {}
+      saveBlob(url, name);
+    } else if (intent === 'preview') {
+      setStatus('✅ ' + name + ' 已就绪', true);
+      openMsgPreview({ name: name, url: url });
     } else {
       setStatus('✅ 已收到 ' + name, true);
     }
@@ -2928,7 +2982,7 @@ function dropGuestConn() {
 function resetToGate() {
   currentRoom = '';
   guestAutoTry = 0;
-  pullWanted.clear(); pullInFlight.clear(); pullQueue.length = 0;   // 清掉没下完的下载任务
+  pullIntents.clear(); pullInFlight.clear(); pullQueue.length = 0;   // 清掉没完成的获取任务
   serverMsgs = []; localMsgs = [];
   seenIds = new Set();
   guestNames = [];
