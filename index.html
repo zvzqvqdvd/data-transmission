@@ -497,8 +497,9 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 .gate-btn.primary .gate-txt b { color:#fff; }
 .gate-btn.primary .gate-txt i { color:rgba(255,255,255,.82); }
 /* 创建房间：正在等本机程序回应时，左边的 ＋ 换成一个转圈，期间按钮不可再点。
-   配合 JS 里最少 1 秒的等待，让「创建中」这一步看得见（接口通常几十毫秒就回来，
-   一闪就进主界面反而像没点上）。放在 .gate-btn.primary .gate-ico 之后才能盖住它的 color。 */
+   创建进度画在「正在创建房间…」正下方（阶段文字 + 百分比 + 细进度条），
+   下方不再用黄色提示条重复播报等待状态。
+   放在 .gate-btn.primary .gate-ico 之后才能盖住它的 color。 */
 .gate-btn.busy { pointer-events:none; cursor:default; }
 .gate-btn.busy .gate-ico { position:relative; color:transparent; font-size:0; }
 .gate-btn.busy .gate-ico::after {
@@ -508,6 +509,31 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   animation:gateSpin .7s linear infinite;
 }
 @keyframes gateSpin { to { transform:rotate(360deg); } }
+/* 进度区只在创建中出现，替换掉原来那行静态副标题 */
+.gate-btn.busy .gate-txt > i { display:none; }
+.gate-prog { display:none; margin-top:8px; }
+.gate-btn.busy .gate-prog { display:block; }
+.gate-prog-line { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }
+.gate-prog-line > span {
+  display:flex; flex-wrap:wrap; align-items:center; gap:5px;
+  font-size:10.5px; line-height:1.45; color:rgba(255,255,255,.92);
+}
+.gate-prog-line > b {
+  flex-shrink:0; font-size:10.5px; font-weight:600; color:#fff;
+  font-variant-numeric:tabular-nums;
+}
+.gp-done { color:#fff; }
+.gp-now { color:#fff; font-weight:600; }
+.gp-wait { color:rgba(255,255,255,.55); }
+.gp-sep { color:rgba(255,255,255,.4); }
+.gate-prog-bar {
+  display:block; height:4px; margin-top:6px; border-radius:3px;
+  background:rgba(255,255,255,.3); overflow:hidden;
+}
+.gate-prog-fill {
+  display:block; height:100%; width:0; border-radius:3px;
+  background:#fff; transition:width .22s ease;
+}
 #gateJoin { display:none; margin-top:22px; }
 #gateRoom {
   width:100%; padding:13px; font-size:19px; text-align:center; letter-spacing:3px;
@@ -728,7 +754,14 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
     <div class="gate-list" id="gateChoices">
       <button class="gate-btn primary" id="gateCreateBtn" onclick="gateCreate()">
         <span class="gate-ico">＋</span>
-        <span class="gate-txt"><b>创建房间</b><i>在本机开一个房间</i></span>
+        <span class="gate-txt">
+          <b>创建房间</b>
+          <i>在本机开一个房间</i>
+          <span class="gate-prog" id="gateProgress">
+            <span class="gate-prog-line"><span id="gateProgText"></span><b id="gateProgPct">0%</b></span>
+            <span class="gate-prog-bar" id="gateProgBar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="gate-prog-fill" id="gateProgFill"></span></span>
+          </span>
+        </span>
       </button>
       <button class="gate-btn" id="gateJoinChoiceBtn" onclick="gateShowJoin()">
         <span class="gate-ico">→</span>
@@ -1496,6 +1529,13 @@ function setConn(mode, n) {
   }
   connStatus.className = 'conn-status ' + (mode==='p2p' ? 'p2p' : mode==='http' ? 'http' : '');
 }
+
+
+// ===== room.js — 房间内逻辑 =====
+// 人数与权限、消息与渲染、轮询与中继、P2P 数据通道、桌面共享、按需下载、
+// 邀请与房间码、网络/帮助弹窗、房间生命周期、房主 Peer、成员管理、发送与管理面板。
+// 本文件不会被浏览器单独加载：build_page() 按 app.js → room.js → gate.js 顺序
+// 拼成同一个 <script> 内联进页面，交付始终是一份 index.html。
 
 // ===== 房间里现在有几台设备：只用来提示，房主没等人也能先发消息 =====
 let lanPeers = 0;        // 局域网里其他在线设备数（后端 /messages 带回）
@@ -3387,98 +3427,6 @@ function markGuestConnected() {
   renderAll();
 }
 
-// ===== 加入房间前的探活：房主真的把名字分配下来才放行进入主页面 =====
-// 光「数据通道打开」不算：房主那边可能还没登记、或者页面正在关闭。
-// 探活自己发 HELLO，等到 WELCOME 才算进得去。
-function probeRoom(room, timeoutMs) {
-  return new Promise(resolve => {
-    let done = false, peer = null, conn = null, timer = null, guestName = '';
-    let fallbackTimer = null, freshTried = false;
-    const pending = [];      // 探活期间收到的消息（主要是房间历史），进房后补处理
-    const finish = (okFlag, msg, tip) => {
-      if (done) return;
-      done = true;
-      if (timer) clearTimeout(timer);
-      if (fallbackTimer) clearTimeout(fallbackTimer);
-      if (!okFlag) {
-        try { if (conn) conn.close(); } catch (e) {}
-        try { if (peer) peer.destroy(); } catch (e) {}
-      }
-      resolve({ ok: okFlag, msg: msg || '', tip: tip || '',
-                peer: peer, conn: conn, name: guestName, pending: pending });
-    };
-    // 呼叫房主：这一步才是真正的 P2P 握手
-    const call = () => {
-      if (done || !peer || peer.destroyed) return;
-      if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
-      conn = peer.connect('pc-' + room, { reliable: true, metadata: identityMeta() });
-      conn.on('open', () => {
-        try { conn.send('HELLO:' + PROTOCOL + ':' + myNick() + ':' + devId()); } catch (e) {}
-      });
-      conn.on('data', d => {
-        if (done) return;                        // 进了房间之后由 wireGuestConn 接管
-        if (typeof d !== 'string') return;      // 探活期间不会有文件过来
-        if (d.startsWith('WELCOME:')) {
-          try { guestName = (JSON.parse(d.slice(8)) || {}).name || ''; } catch (e) {}
-          finish(true);
-          return;
-        }
-        if (pending.length < 300) pending.push(d);
-      });
-      conn.on('close', () => finish(false, '房间那边没有回应',
-        '房主的页面可能已经关闭，请确认对方还在房间里再试一次。'));
-      conn.on('error', e => finish(false, '数据通道错误', String(e && e.message ? e.message : e)));
-    };
-    const attach = pp => {
-      peer = pp;
-      pp.on('error', err => {
-        if (done) return;
-        const t = (err && err.type) || 'unknown';
-        if (t === 'peer-unavailable') {
-          finish(false, '房间不存在', '这个房间码没有对应的房间，请确认对方已经点「创建房间」并且页面保持打开。');
-        } else if (t === 'network' || t === 'server-error' || t === 'socket-error') {
-          finish(false, '网络不通', '连不上信令服务器，换个网络或改用系统浏览器再试。');
-        } else if (t === 'unavailable-id') {
-          finish(false, '连接被占用', '请稍后重试。');
-        } else if (!freshTried && !pp.open) {
-          // 预热的那条长连接已经废了（放太久、切了网络）：换一条新的，别直接判失败
-          freshTried = true;
-          try { pp.destroy(); } catch (e) {}
-          fresh();
-        } else {
-          finish(false, '连接失败', '错误类型：' + t + '，请确认房间码正确。');
-        }
-      });
-      if (pp.open) call();
-      else pp.on('open', () => { if (!done) call(); });
-    };
-    const fresh = () => {
-      freshTried = true;
-      try { attach(new Peer(guestPeerId(), peerOpts())); }
-      catch (e) { finish(false, '无法发起连接：' + (e && e.message ? e.message : e)); }
-    };
-    timer = setTimeout(() => finish(false, '连接超时',
-      '没有收到对方响应，可能是房间码不正确，或对方设备网络受限。'), timeoutMs || 12000);
-    // 入口页预热好的信令连接能直接用：跳过 WebSocket 握手，少等 0.3～1.5 秒
-    const warm = takeWarmPeer();
-    if (warm) {
-      attach(warm);
-      if (!warm.open) {
-        // 预热的那条还在握手（公共信令服务器在部分网络下要好几秒，属于正常）：
-        // 就等它，别重开——重开等于把已经走了大半的握手推倒重来。
-        // 只有明显卡死（超过正常握手时间一倍）才换新的。
-        fallbackTimer = setTimeout(() => {
-          if (done || warm.open) return;
-          try { warm.destroy(); } catch (e) {}
-          if (peer === warm) fresh();
-        }, 6000);
-      }
-    } else {
-      fresh();
-    }
-  });
-}
-
 // ===== 发送 =====
 // 房主：文本/文件先落盘（局域网设备也能收到），再逐个推给房间里的外网设备
 // 访客：只有一条通往房主的连接，发过去由房主代转
@@ -3655,6 +3603,104 @@ async function doLogin() {
   if (d.ok) { toast('登录成功'); setTimeout(()=>location.reload(),600); } else toast('密码错误');
 }
 
+
+// ===== gate.js — 首页 / 入口页逻辑 =====
+// 加入前的 P2P 探活、创建房间、加入房间、刷新恢复、房间码验证、
+// 入口页视图切换与页面启动分发（最后一段会立即执行）。
+// build_page() 把它拼在 app.js / room.js 之后，共用同一个作用域。
+
+// ===== 加入房间前的探活：房主真的把名字分配下来才放行进入主页面 =====
+// 光「数据通道打开」不算：房主那边可能还没登记、或者页面正在关闭。
+// 探活自己发 HELLO，等到 WELCOME 才算进得去。
+function probeRoom(room, timeoutMs) {
+  return new Promise(resolve => {
+    let done = false, peer = null, conn = null, timer = null, guestName = '';
+    let fallbackTimer = null, freshTried = false;
+    const pending = [];      // 探活期间收到的消息（主要是房间历史），进房后补处理
+    const finish = (okFlag, msg, tip) => {
+      if (done) return;
+      done = true;
+      if (timer) clearTimeout(timer);
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+      if (!okFlag) {
+        try { if (conn) conn.close(); } catch (e) {}
+        try { if (peer) peer.destroy(); } catch (e) {}
+      }
+      resolve({ ok: okFlag, msg: msg || '', tip: tip || '',
+                peer: peer, conn: conn, name: guestName, pending: pending });
+    };
+    // 呼叫房主：这一步才是真正的 P2P 握手
+    const call = () => {
+      if (done || !peer || peer.destroyed) return;
+      if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
+      conn = peer.connect('pc-' + room, { reliable: true, metadata: identityMeta() });
+      conn.on('open', () => {
+        try { conn.send('HELLO:' + PROTOCOL + ':' + myNick() + ':' + devId()); } catch (e) {}
+      });
+      conn.on('data', d => {
+        if (done) return;                        // 进了房间之后由 wireGuestConn 接管
+        if (typeof d !== 'string') return;      // 探活期间不会有文件过来
+        if (d.startsWith('WELCOME:')) {
+          try { guestName = (JSON.parse(d.slice(8)) || {}).name || ''; } catch (e) {}
+          finish(true);
+          return;
+        }
+        if (pending.length < 300) pending.push(d);
+      });
+      conn.on('close', () => finish(false, '房间那边没有回应',
+        '房主的页面可能已经关闭，请确认对方还在房间里再试一次。'));
+      conn.on('error', e => finish(false, '数据通道错误', String(e && e.message ? e.message : e)));
+    };
+    const attach = pp => {
+      peer = pp;
+      pp.on('error', err => {
+        if (done) return;
+        const t = (err && err.type) || 'unknown';
+        if (t === 'peer-unavailable') {
+          finish(false, '房间不存在', '这个房间码没有对应的房间，请确认对方已经点「创建房间」并且页面保持打开。');
+        } else if (t === 'network' || t === 'server-error' || t === 'socket-error') {
+          finish(false, '网络不通', '连不上信令服务器，换个网络或改用系统浏览器再试。');
+        } else if (t === 'unavailable-id') {
+          finish(false, '连接被占用', '请稍后重试。');
+        } else if (!freshTried && !pp.open) {
+          // 预热的那条长连接已经废了（放太久、切了网络）：换一条新的，别直接判失败
+          freshTried = true;
+          try { pp.destroy(); } catch (e) {}
+          fresh();
+        } else {
+          finish(false, '连接失败', '错误类型：' + t + '，请确认房间码正确。');
+        }
+      });
+      if (pp.open) call();
+      else pp.on('open', () => { if (!done) call(); });
+    };
+    const fresh = () => {
+      freshTried = true;
+      try { attach(new Peer(guestPeerId(), peerOpts())); }
+      catch (e) { finish(false, '无法发起连接：' + (e && e.message ? e.message : e)); }
+    };
+    timer = setTimeout(() => finish(false, '连接超时',
+      '没有收到对方响应，可能是房间码不正确，或对方设备网络受限。'), timeoutMs || 12000);
+    // 入口页预热好的信令连接能直接用：跳过 WebSocket 握手，少等 0.3～1.5 秒
+    const warm = takeWarmPeer();
+    if (warm) {
+      attach(warm);
+      if (!warm.open) {
+        // 预热的那条还在握手（公共信令服务器在部分网络下要好几秒，属于正常）：
+        // 就等它，别重开——重开等于把已经走了大半的握手推倒重来。
+        // 只有明显卡死（超过正常握手时间一倍）才换新的。
+        fallbackTimer = setTimeout(() => {
+          if (done || warm.open) return;
+          try { warm.destroy(); } catch (e) {}
+          if (peer === warm) fresh();
+        }, 6000);
+      }
+    } else {
+      fresh();
+    }
+  });
+}
+
 // ===== 入口页：创建房间 / 加入房间 =====
 function gateMsg(text, kind) {
   const el = document.getElementById('gateMsg');
@@ -3767,18 +3813,65 @@ async function resumeHostFromWeb() {
   hideGate();
   startHostUI(true, info.ip ? ('http://' + info.ip + ':' + info.port) : '');
 }
+// ===== 创建房间进度：只画在「正在创建房间…」按钮里 =====
+// 阶段：检查本机程序 → 创建房间 → 注册外网直连（本机没开外网通道时只两步）。
+// 百分比是阶段进度而不是耗时估算：等 PeerJS open 期间慢慢爬到 92%，
+// open 一到立刻补到 100% 再进房；不再用 gateMsg 那条黄色横条写「等待连接就绪」。
+let gateSteps = [];
+let gateProgPct = 0;
+let gateProgTimer = null;
+function gateProgReset(steps) {
+  if (gateProgTimer) { clearInterval(gateProgTimer); gateProgTimer = null; }
+  gateSteps = steps || [];
+  gateProgPct = 0;
+  gateProgress(-1, 0);
+}
+function gateProgress(active, pct, allDone) {
+  const text = document.getElementById('gateProgText');
+  const pctEl = document.getElementById('gateProgPct');
+  const fill = document.getElementById('gateProgFill');
+  if (!text || !pctEl || !fill) return;
+  gateProgPct = Math.max(gateProgPct, Math.min(100, pct || 0));
+  text.innerHTML = gateSteps.map((s, i) => {
+    const state = allDone || i < active ? 'done' : (i === active ? 'now' : 'wait');
+    const mark = state === 'done' ? '✓' : (state === 'now' ? '›' : '·');
+    return '<span class="gp-' + state + '">' + mark + ' ' + esc(s) + '</span>';
+  }).join('<span class="gp-sep">·</span>');
+  pctEl.textContent = gateProgPct + '%';
+  fill.style.width = gateProgPct + '%';
+  const bar = document.getElementById('gateProgBar');
+  if (bar) bar.setAttribute('aria-valuenow', String(gateProgPct));
+}
+// 等信令 open 的这一两秒别让进度条看着像卡死：缓慢爬到上限，open 后由 gateProgress 补满
+function gateProgCreep(to) {
+  if (gateProgTimer) clearInterval(gateProgTimer);
+  gateProgTimer = setInterval(() => {
+    if (gateProgPct >= to) { clearInterval(gateProgTimer); gateProgTimer = null; return; }
+    gateProgPct++;
+    const pctEl = document.getElementById('gateProgPct');
+    const fill = document.getElementById('gateProgFill');
+    if (pctEl) pctEl.textContent = gateProgPct + '%';
+    if (fill) fill.style.width = gateProgPct + '%';
+  }, 130);
+}
+
 // 创建房间：确认本机程序在跑，再由它当场开一个房间（房间码在这一刻才生成）。
 // 不再人为拖时间：后端开好 + 外网直连房主 Peer 注册成功就立刻进主界面。
 async function gateCreate() {
   const btn = document.getElementById('gateCreateBtn');
   if (!btn || btn.disabled) return;
   const label = btn.querySelector('.gate-txt b');
-  const sub = btn.querySelector('.gate-txt i');
+  const sub = btn.querySelector('.gate-txt > i');
   btn.disabled = true;
   btn.classList.add('busy');
   if (label) label.textContent = '正在创建房间…';
-  if (sub) sub.textContent = '请稍候，正在本机开一个房间';
-  gateMsg('正在检查本机程序…', 'info');
+  gateClearMsg();
+  // 本机页面开了外网直连、或在线页要当房主，都要等房主 Peer 在信令注册成功
+  const needP2P = P2P_ENABLED || SEED_MODE !== 'host';
+  gateProgReset(needP2P
+    ? ['检查本机程序', '创建房间', '连接外网通道']
+    : ['检查本机程序', '创建房间']);
+  gateProgress(0, 8);
   try {
     let info;
     try {
@@ -3788,18 +3881,22 @@ async function gateCreate() {
     }
     // 邀请链接以本机程序当前的 client_url.txt 为准（在线页那份是导出时的旧值）
     applyClientUrl(info.client_url);
-    gateMsg('正在创建房间…', 'info');
+    gateProgress(1, 40);
     const r = await fetch(HOST_API + '/api/room/create', { method: 'POST' });
     const j = await r.json();
     if (!j || !j.ok || !j.room) throw new Error((j && j.msg) || '创建房间失败');
     ROOM = j.room;
     API = HOST_API;
-    gateMsg('房间已创建，正在等待连接就绪…', 'info');
     // 房间完全就绪 = 后端开好房间 + 外网直连的房主 Peer 已经在信令服务器上注册成功。
-    // 只等这个真实条件，不再人为拖 1 秒：信令快就快进，慢就老实等在入口页。
+    // 只等这个真实条件，不再人为拖时间：信令快就快进，慢就老实等在入口页。
     // 信令实在连不上（超时 9 秒）也不能把人卡在入口页，届时仍进房，局域网可正常使用。
-    if (P2P_ENABLED || SEED_MODE !== 'host') await prepareHostPeer(ROOM, 9000);
-    gateClearMsg();
+    if (needP2P) {
+      gateProgress(2, 68);
+      gateProgCreep(92);
+      await prepareHostPeer(ROOM, 9000);
+    }
+    if (gateProgTimer) { clearInterval(gateProgTimer); gateProgTimer = null; }
+    gateProgress(gateSteps.length, 100, true);
     hideGate();
     // 记下「在在线页当房主」这件事，刷新后自动回到同一个房间
     try { localStorage.removeItem('lanshare_room_code'); } catch (e) {}
@@ -3813,6 +3910,7 @@ async function gateCreate() {
     startHostHeartbeat();
   } catch (e) {
     gateMsg((e && e.message) || '创建房间失败，请稍后再试。', 'err');
+    gateProgReset([]);          // 清掉进度，下次创建重新从 0 开始
   } finally {
     // 失败要退回来能再点；成功时页面已经切走了，恢复也不影响
     btn.disabled = false;
