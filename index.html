@@ -108,10 +108,13 @@ body {
   gap:5px; margin-top:6px;
 }
 .chan-list.show { display:flex; }
-/* 设备数 / IP 清单、连接等待条只给房主端看：外网访客、局域网其他设备一律不显示 */
+/* 设备数 / IP 清单、连接等待条只给房主端看：外网访客、局域网其他设备一律不显示。
+   顶栏那个「局域网 / P2P 直连」小标签对两端也是两种文字，非房主端统一收起，
+   保证局域网设备与外网访客显示的信息完全一样。 */
 body:not(.is-room-owner) .chan-state,
 body:not(.is-room-owner) .side-notice,
-body:not(.is-room-owner) #waitBar { display:none !important; }
+body:not(.is-room-owner) #waitBar,
+body:not(.is-room-owner) #connStatus { display:none !important; }
 /* 房主端临时提示（连接中 / 传文件中 / 信令错误），单独一行，不占通道状态 */
 .side-notice {
   margin-top:6px; padding:5px 8px; text-align:left;
@@ -216,7 +219,10 @@ body.no-peer #textInput { cursor:not-allowed; }
   display:flex; justify-content:center; align-items:center;
   gap:8px; margin-top:8px;
 }
-#guestStatus { font-size:11.5px; color:#3c7a57; margin-top:7px; line-height:1.6; }
+/* 其他设备的卡片只有「通道名 / 房间号 / 按钮」三行：
+   「✅ 已连接，可以互发文字与文件」这类状态文字不显示，
+   局域网端与外网端的信息保持一致（下载进度条和失败提示仍保留）。 */
+#guestStatus { display:none !important; font-size:11.5px; color:#3c7a57; margin-top:7px; line-height:1.6; }
 #guestProg { display:none; height:4px; background:#d9ece2; border-radius:2px; margin-top:9px; overflow:hidden; }
 #guestBar { height:100%; width:0%; background:#07C160; transition:width .2s; }
 #guestTip {
@@ -816,14 +822,14 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 
 <div id="guestGate" style="display:block;">
   <div class="p2p-line">
-    <span class="p2p-label">🌍 外网直连</span>
+    <span class="p2p-label" id="connChannel">🌍 外网直连</span>
   </div>
   <div class="guest-room">房间号：<b id="linkRoom"></b></div>
   <div class="guest-actions" id="guestActions" style="display:none;">
     <button class="pill ghost" id="guestConnBtn" onclick="guestConnect()">重连</button>
     <button class="pill danger" id="guestDropBtn" onclick="dropGuestConn()">断开连接</button>
   </div>
-  <div id="guestStatus">正在连接对方设备…</div>
+  <div id="guestStatus"></div>
   <div id="wxTip">检测到 App 内置浏览器，可能无法使用点对点传输。请点右上角「···」选择「在浏览器中打开」。</div>
   <div id="guestTip"></div>
   <div id="guestProg"><div id="guestBar"></div></div>
@@ -1147,6 +1153,24 @@ function setGuestActions(state) {
   box.style.display = state === 'connecting' ? 'none' : 'flex';
   retry.style.display = state === 'failed' ? '' : 'none';
   drop.style.display = state === 'connected' ? '' : 'none';
+}
+// 其他设备（外网访客 / 局域网设备）共用同一张连接卡：只有通道名不同，
+// 房间号、按钮、显示的信息完全一样，不再各写一套横幅和说明。
+function showOtherDeviceCard(label, room) {
+  document.getElementById('lanBanner').style.display = 'none';
+  document.getElementById('p2pBanner').style.display = 'none';
+  document.getElementById('guestGate').style.display = 'block';
+  document.getElementById('connChannel').textContent = label;
+  document.getElementById('linkRoom').textContent = room || '';
+}
+// 局域网设备没有 P2P 连接可断：点「断开连接」就是退出房间、回输码页
+function leaveLanRoom() {
+  setGuestActions('connecting');
+  stopPolling();
+  document.getElementById('guestGate').style.display = 'none';
+  document.getElementById('lanBanner').style.display = 'none';
+  showLanGate();
+  gateMsg('已断开连接，可重新输入房间码加入。', 'info');
 }
 
 // ===== 连接集合：房主端可能同时连着多台外网设备 =====
@@ -2265,35 +2289,23 @@ function copyText(text, cb) {
   done(ok);
 }
 
-function setupLanBanner(canHost, url) {
+// 局域网卡片现在只属于房主：给其他设备能用的地址 + 复制/二维码。
+// 其他设备改用统一的「通道 + 房间号 + 断开连接」卡片，不再走这里。
+function setupLanBanner(url) {
   const box = document.getElementById('lanBanner');
   if (!box) return;
   const short = u => String(u).replace(/^https?:\/\//, '');
   const here = LAN_URL || (location.protocol + '//' + location.host);
-  if (canHost) {
-    // 本机：给出其他设备能用的地址（在线页模式下由 /api/host 提供）
-    lanShareUrl = url || LAN_URL || here;
-    document.getElementById('lanLabel').textContent = '🏠 局域网';
-    document.getElementById('lanUrl').textContent = short(lanShareUrl);
-    document.getElementById('lanHint').textContent =
-      '局域网：同一 WiFi 下的设备打开这个地址，输入房间码即可加入';
-    document.getElementById('lanActions').style.display = 'inline-flex';
-    const addr = document.getElementById('serverUrl');
-    addr.textContent = short(lanShareUrl);
-    addr.title = '点击复制局域网地址';
-    addr.onclick = copyLanUrl;
-  } else {
-    // 局域网设备：让自己知道进的是哪个房间
-    document.getElementById('lanLabel').textContent = '🏠 局域网';
-    document.getElementById('lanUrl').textContent = ROOM || location.host;
-    document.getElementById('lanHint').textContent =
-      '局域网：已加入房间，可以直接发送消息';
-    document.getElementById('lanActions').style.display = 'none';
-    const addr = document.getElementById('serverUrl');
-    addr.textContent = location.host;
-    addr.title = '你当前访问的地址';
-    addr.onclick = null;
-  }
+  lanShareUrl = url || LAN_URL || here;
+  document.getElementById('lanLabel').textContent = '🏠 局域网';
+  document.getElementById('lanUrl').textContent = short(lanShareUrl);
+  document.getElementById('lanHint').textContent =
+    '局域网：同一 WiFi 下的设备打开这个地址，输入房间码即可加入';
+  document.getElementById('lanActions').style.display = 'inline-flex';
+  const addr = document.getElementById('serverUrl');
+  addr.textContent = short(lanShareUrl);
+  addr.title = '点击复制局域网地址';
+  addr.onclick = copyLanUrl;
   box.style.display = 'block';
 }
 
@@ -2554,6 +2566,7 @@ function onRoomClosed(tip) {
   pushedIds = new Set();
   relaySeeded = false;
   document.getElementById('p2pBanner').style.display = 'none';
+  document.getElementById('guestGate').style.display = 'none';
   const lb = document.getElementById('lanBanner');
   if (lb) lb.style.display = 'none';
   setConn('off');
@@ -2587,6 +2600,7 @@ function onNeedJoin() {
   relaySeeded = false;
   const lb2 = document.getElementById('lanBanner');
   if (lb2) lb2.style.display = 'none';
+  document.getElementById('guestGate').style.display = 'none';
   setConn('off');
   refreshReady();
   renderAll();
@@ -2919,18 +2933,20 @@ function startHostUI(fromWeb, lanUrl, lanClient) {
     // 它自己就是房间成员，可以直接发（后端会把它算进 peers）
     lanPeers = Math.max(lanPeers, 1);
     setConn('http');
-    document.getElementById('p2pBanner').style.display = 'none';
+    // 与外网访客用同一张连接卡：只有通道名不同，别的文字一概不多写
+    showOtherDeviceCard('🏠 局域网', ROOM);
+    setGuestActions('connected');   // 走 HTTP，进来就是已连接
   }
 
-  // 顶栏地址：在线页拿到的是线上域名，换成 /api/host 给的局域网地址
+  // 顶栏地址：只有房主端才需要给局域网地址；其他设备统一用上面的连接卡
   if (fromWeb) {
     if (lanUrl) {
-      setupLanBanner(true, lanUrl);
+      setupLanBanner(lanUrl);
     } else {
       document.getElementById('serverUrl').style.display = 'none';
     }
-  } else {
-    setupLanBanner(canHostP2P);
+  } else if (!isLanClient) {
+    setupLanBanner();
   }
 
   loadMessages();
@@ -2955,11 +2971,9 @@ function initGuest(room, existing) {
   MODE = 'guest';
   applyDevicePrivacy();       // 访客只看得到自己的连接状态，看不到设备数 / IP
   guestGoneHandled = false;   // 重新进房，允许下一次「房间已不存在」再触发收尾
-  document.getElementById('p2pBanner').style.display = 'none';
   document.getElementById('adminBtn').style.display = 'none';
   document.getElementById('serverUrl').style.display = 'none';
-  document.getElementById('guestGate').style.display = 'block';
-  document.getElementById('linkRoom').textContent = room || '';
+  showOtherDeviceCard('🌍 外网直连', room || '');
   setGuestActions('connecting');   // 连接中先不给按钮
 
   if (/MicroMessenger|QQ\/|Weibo/.test(navigator.userAgent)) {
@@ -3042,6 +3056,7 @@ function scheduleGuestRetry() {
 }
 // 访客主动断开：通知对方、关连接、回到入口页
 function dropGuestConn() {
+  if (MODE === 'host' && isLanClient) { leaveLanRoom(); return; }
   peerBye = true;
   setGuestActions('connecting');  // 点了就先收起按钮，避免连点
   if (guestAutoTimer) { clearTimeout(guestAutoTimer); guestAutoTimer = null; }
@@ -3288,17 +3303,13 @@ function markGuestConnected() {
   guestGoneHits = 0;
   peerBye = false;
   setConn('p2p');
-  setStatus('✅ 已连接，可以互发文字与文件', true);
+  // 连接卡不显示任何状态文字：连上了只把「断开连接」按钮放出来
+  setStatus('');
   showGuestTip('');
   document.getElementById('wxTip').style.display = 'none';
   setGuestActions('connected');    // 连上后只留「断开连接」
   refreshReady();
   renderAll();
-  // 直连还是走中继：这里看一眼，中继就把话说明白（速度会慢）
-  detectRelay({ conn: guestConn }).then(r => {
-    if (!r) return;
-    setStatus('✅ 已连接（走中继，速度可能慢一些）', true);
-  });
 }
 
 // ===== 加入房间前的探活：房主真的把名字分配下来才放行进入主页面 =====
