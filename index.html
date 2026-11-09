@@ -70,7 +70,34 @@ body {
 }
 .icon-btn:hover { background:#e6f7ed; color:#07C160; }
 
-/* ===== 外网直连卡片 ===== */
+/* ===== 房间卡片：房间号 + 新建 / 销毁，是房间级信息，不塞进任何通道卡片 ===== */
+#roomCard {
+  flex-shrink:0; margin:10px 18px 0; padding:12px 16px;
+  background:#fff; border:1px solid #e2e6ec; border-radius:12px; text-align:center;
+}
+.room-card-title {
+  display:flex; align-items:center; justify-content:center; gap:7px;
+  font-size:12px; font-weight:600; color:#2b3a4b;
+}
+.room-card-title::before {
+  content:''; width:9px; height:9px; border-radius:3px;
+  background:#8a94a3; flex-shrink:0;
+}
+#roomCode {
+  display:block; margin-top:9px; padding:7px 8px;
+  font-family:Menlo,Consolas,monospace; font-size:17px; font-weight:700;
+  letter-spacing:1.4px; color:#1f2d3d; background:#f5f7f9;
+  border-radius:8px; cursor:pointer; word-break:break-all;
+  transition:background .15s, transform .1s;
+}
+#roomCode:hover { background:#eef3f0; }
+#roomCode:active { transform:scale(.99); }
+.room-actions { display:flex; gap:8px; margin-top:10px; }
+.room-actions .pill { flex:1; min-width:0; padding:5px 0; text-align:center; }
+#roomCard .pill.ghost { background:#fff; border-color:#d8dee6; color:#3a4a5a; }
+#roomCard .pill.ghost:hover { background:#07C160; border-color:#07C160; color:#fff; }
+
+/* ===== 外网直连卡片：只放这条通道自己的入口与状态 ===== */
 #p2pBanner {
   flex-shrink:0; margin:10px 18px 0; padding:12px 16px;
   background:linear-gradient(180deg,#f3fbf7,#eaf7f0);
@@ -78,14 +105,7 @@ body {
 }
 .p2p-line { display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:8px; }
 .p2p-label { font-size:12px; color:#3c7a57; }
-#roomCode {
-  font-family:Menlo,Consolas,monospace; font-size:16px; font-weight:700;
-  color:#0a8f4a; letter-spacing:1.5px; background:#fff;
-  padding:3px 10px; border-radius:7px; border:1px solid #cfeada;
-  cursor:pointer; transition:border-color .15s, box-shadow .15s, transform .1s;
-}
-#roomCode:hover { border-color:#07C160; box-shadow:0 0 0 2px rgba(7,193,96,.12); }
-#roomCode:active { transform:scale(.97); }
+.side-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:9px; }
 .pill {
   border:1px solid #cfeada; background:#fff; color:#0a8f4a; font-size:12px;
   padding:4px 11px; border-radius:20px; cursor:pointer; text-decoration:none;
@@ -108,12 +128,13 @@ body {
   gap:5px; margin-top:6px;
 }
 .chan-list.show { display:flex; }
-/* 设备数 / IP 清单、连接等待条只给房主端看：外网访客、局域网其他设备一律不显示。
-   顶栏那个「局域网 / P2P 直连」小标签对两端也是两种文字，非房主端统一收起，
-   保证局域网设备与外网访客显示的信息完全一样。 */
+/* 设备数 / IP 清单、连接等待条、房间号与新建 / 销毁操作只给房主端看：
+   外网访客、局域网其他设备一律不显示。顶栏那个「局域网 / P2P 直连」小标签
+   对两端也是两种文字，非房主端统一收起，保证两端显示的信息完全一样。 */
 body:not(.is-room-owner) .chan-state,
 body:not(.is-room-owner) .side-notice,
 body:not(.is-room-owner) #waitBar,
+body:not(.is-room-owner) #roomCard,
 body:not(.is-room-owner) #connStatus { display:none !important; }
 /* 房主端临时提示（连接中 / 传文件中 / 信令错误），单独一行，不占通道状态 */
 .side-notice {
@@ -345,15 +366,6 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 /* ===== 待发送文件 ===== */
 .pending-area { display:none; background:#fff; border-top:1px solid #f0f0f0; padding:8px 16px; }
 .pending-area.show { display:block; }
-.pending-item {
-  display:flex; align-items:center; gap:8px; padding:7px 10px;
-  background:#f4f6f7; border-radius:8px; margin-bottom:6px; font-size:13px;
-  max-width:760px; margin-left:auto; margin-right:auto;
-}
-.pending-item .p-name { flex:1; word-break:break-all; }
-.pending-item .p-size { color:#9aa0a6; font-size:12px; }
-.pending-item button { background:none; border:none; color:#9aa0a6; cursor:pointer; font-size:16px; padding:0 4px; }
-.pending-item button:hover { color:#c62828; }
 
 /* ===== 输入区 ===== */
 .input-bar {
@@ -432,15 +444,9 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 .dev-name { font-size:14px; font-weight:500; white-space:nowrap; }
 .dev-ip { font-size:12px; color:#9aa0a6; margin-top:3px; white-space:nowrap; }
 .badge { display:inline-block; padding:2px 8px; border-radius:4px; font-size:11px; margin-left:6px; vertical-align:middle; }
-.badge.online { background:#e6f7ed; color:#0a8f4a; }
-.badge.blocked { background:#fdecec; color:#c62828; }
-.badge.self { background:#e8f0fe; color:#1565c0; }
-.badge.wan { background:#e8f0fe; color:#1565c0; }
-.badge.lan { background:#e6f7ed; color:#0a8f4a; }
+.badge.online, .badge.lan { background:#e6f7ed; color:#0a8f4a; }
+.badge.self, .badge.wan { background:#e8f0fe; color:#1565c0; }
 .badge.idle { background:#f1f3f4; color:#5f6368; }
-.mini-btn { padding:6px 14px; font-size:12px; border-radius:8px; border:none; cursor:pointer; white-space:nowrap; flex-shrink:0; }
-.mini-btn.danger { background:#c62828; color:#fff; }
-.mini-btn.normal { background:#f1f3f4; color:#3c4043; }
 .toast {
   position:fixed; top:24px; left:50%; transform:translate(-50%,-10px);
   background:rgba(32,33,36,.92); color:#fff; padding:9px 18px; border-radius:20px;
@@ -448,8 +454,6 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   z-index:999; pointer-events:none; max-width:86vw; text-align:center;
 }
 .toast.show { opacity:1; transform:translate(-50%,0); }
-.lnk { background:none;border:none;color:#0a8f4a;font-size:12px;cursor:pointer;padding:0 6px;text-decoration:none; }
-.lnk:hover { text-decoration:underline; }
 
 /* ===== 入口页：创建房间 / 加入房间 ===== */
 #gateView {
@@ -603,8 +607,7 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   .topbar { padding:8px 12px; }
   .topbar-sub { display:none; }
   .topbar-addr { display:none; }
-  #p2pBanner { margin:8px 12px 0; padding:10px 12px; }
-  #lanBanner { margin:8px 12px 0; padding:10px 12px; }
+  #roomCard, #p2pBanner, #lanBanner { margin:8px 12px 0; padding:10px 12px; }
   /* 手机屏幕小：去掉头像占的宽度，把共享画面放大到接近半屏 */
   #screenPanel > .msg-avatar { display:none; }
   .screen-body { width:100%; }
@@ -720,7 +723,9 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 .side-info > #p2pBanner,
 .side-info > #guestGate,
 .side-info > #waitBar { text-align:left; }
-.side-info .p2p-line { justify-content:flex-start; }
+.side-info .p2p-line,
+.side-info .side-actions,
+.side-info .room-card-title { justify-content:flex-start; }
 .side-info .guest-room { text-align:left; }
 .side-info .guest-actions { justify-content:flex-start; }
 .side-info #inviteHint,
@@ -747,7 +752,7 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   }
   .side-info .p2p-line { gap:6px; }
   .side-info .pill { font-size:11px; padding:3px 8px; white-space:nowrap; }
-  .side-info #roomCode { font-size:14px; letter-spacing:1px; padding:3px 8px; }
+  .side-info #roomCode { font-size:16px; letter-spacing:1.2px; padding:6px 8px; }
   .side-info #lanUrl { font-size:12px; padding:3px 8px; }
   .side-info #inviteBox, .side-info #lanActions { gap:6px !important; }
   .side-info #qrImg, .side-info #lanQrImg { padding:5px; }
@@ -818,6 +823,16 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 
 <!-- 连接信息（局域网 / 外网 / 等待加入）统一放这一栏：宽屏靠右侧竖排，不占聊天区中间 -->
 <aside class="side-info" id="sideInfo">
+<!-- 房间卡片：房间号与房间操作是房间级别的信息，不属于任何一条通道，置顶且只给房主看 -->
+<div id="roomCard" style="display:none;">
+  <div class="room-card-title">房间</div>
+  <b id="roomCode" title="点击复制房间码" onclick="copyRoomCode()"></b>
+  <div class="room-actions">
+    <button class="pill ghost" onclick="renewRoom()">新建房间</button>
+    <button class="pill danger" id="dissolveBtn" onclick="askDissolve()">销毁房间</button>
+  </div>
+</div>
+
 <div id="lanBanner" style="display:none;">
   <div class="p2p-line">
     <span class="p2p-label" id="lanLabel">🏠 局域网</span>
@@ -841,13 +856,10 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 <div id="p2pBanner" style="display:none;">
   <div class="p2p-line">
     <span class="p2p-label">🌍 外网直连</span>
-    <b id="roomCode" title="点击复制房间码" onclick="copyRoomCode()"></b>
-    <button class="pill ghost" onclick="renewRoom()">新建房间</button>
-    <button class="pill danger" id="dissolveBtn" onclick="askDissolve()">销毁房间</button>
-    <span id="inviteBox" style="display:none;gap:8px;">
-      <a id="inviteLink" class="pill" href="#" target="_blank" rel="noopener">打开访问链接</a>
-      <button class="pill" onclick="toggleQR()">二维码</button>
-    </span>
+  </div>
+  <div id="inviteBox" class="side-actions" style="display:none;">
+    <a id="inviteLink" class="pill" href="#" target="_blank" rel="noopener">打开访问链接</a>
+    <button class="pill" onclick="toggleQR()">二维码</button>
   </div>
   <div id="inviteHint"></div>
   <div id="hostNotice" class="side-notice" style="display:none;"></div>
@@ -1234,9 +1246,18 @@ function setGuestActions(state) {
   guestConnState = state;
   renderGuestStatus();
 }
+// 房间卡片只属于房主：传房间码就显示并刷新，传空值就收起。
+// 房间号的写入统一走这里，不在各处重复 getElementById。
+function showRoomCard(room) {
+  const box = document.getElementById('roomCard');
+  if (!box) return;
+  box.style.display = room ? 'block' : 'none';
+  if (room) document.getElementById('roomCode').textContent = room;
+}
 // 其他设备（外网访客 / 局域网设备）共用同一张连接卡：只有通道名不同，
 // 房间号、按钮、显示的信息完全一样，不再各写一套横幅和说明。
 function showOtherDeviceCard(label, room) {
+  showRoomCard('');
   document.getElementById('lanBanner').style.display = 'none';
   document.getElementById('p2pBanner').style.display = 'none';
   document.getElementById('guestGate').style.display = 'block';
@@ -1408,7 +1429,6 @@ function addFiles(list) {
   }
   return n;
 }
-function pendingCount() { return pendingFiles.filter(x => x.status !== 'done').length; }
 fi.onchange = () => { addFiles(fi.files); fi.value = ''; };
 
 // 拖拽：把文件拖进窗口任何位置都能加入队列
@@ -1593,6 +1613,7 @@ function applyDevicePrivacy() {
   if (owner) return;
   roomDevices = [];
   clearDeviceLists();
+  showRoomCard('');   // 别的设备连房间号和「新建 / 销毁」都不该看到
   const notice = document.getElementById('hostNotice');
   if (notice) { notice.textContent = ''; notice.style.display = 'none'; }
 }
@@ -2460,7 +2481,7 @@ function copyLanUrl() {
   });
 }
 
-// 房主横幅上的房间码可以点：一键复制，省得手动框选
+// 房间卡片上的房间码可以点：一键复制，省得手动框选
 function copyRoomCode() {
   const code = ROOM || document.getElementById('roomCode').textContent.trim();
   if (!code) return;
@@ -2502,7 +2523,7 @@ function setupInvite(room) {
     return;
   }
   document.getElementById('inviteLink').href = url;
-  document.getElementById('inviteBox').style.display = 'inline-flex';
+  document.getElementById('inviteBox').style.display = 'flex';
   document.getElementById('inviteHint').textContent = '外网：扫码或打开链接即可加入，无需手输房间码';
   makeQR(url);
 }
@@ -2640,7 +2661,7 @@ async function renewRoom() {
   lastDevicesSig = '';
   reportedDevices = '';
   renderMembers();
-  document.getElementById('roomCode').textContent = ROOM;
+  showRoomCard(ROOM);
   setupInvite(ROOM);
   if (pcPeer) { try { pcPeer.destroy(); } catch (e) {} pcPeer = null; }
   startHostPeer(ROOM);
@@ -2707,6 +2728,7 @@ function onRoomClosed(tip) {
   seenIds = new Set();
   pushedIds = new Set();
   relaySeeded = false;
+  showRoomCard('');
   document.getElementById('p2pBanner').style.display = 'none';
   document.getElementById('guestGate').style.display = 'none';
   const lb = document.getElementById('lanBanner');
@@ -3117,8 +3139,8 @@ function startHostUI(fromWeb, lanUrl, lanClient) {
   if (fromWeb || isLanClient) document.getElementById('adminBtn').style.display = 'none';
 
   if (canHostP2P) {
+    showRoomCard(ROOM);
     document.getElementById('p2pBanner').style.display = 'block';
-    document.getElementById('roomCode').textContent = ROOM;
     setupInvite(ROOM);
     startHostPeer(ROOM);
   } else {
@@ -3312,6 +3334,7 @@ function resetToGate() {
   seenIds = new Set();
   guestNames = [];
   myName = '';
+  showRoomCard('');
   document.getElementById('guestGate').style.display = 'none';
   document.getElementById('wxTip').style.display = 'none';
   showGuestTip('');
