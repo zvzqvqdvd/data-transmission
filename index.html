@@ -318,9 +318,13 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 #textInput {
   flex:1; border:1px solid #e2e4e6; background:#f7f8f8; border-radius:10px;
   padding:9px 12px; font-size:15px; font-family:inherit; resize:none; outline:none;
-  line-height:1.45; max-height:120px; transition:border-color .18s, background .18s;
+  line-height:1.45; max-height:120px; overflow-y:auto;
+  /* 输入框里不显示右侧滚动条：内容超长时仍可滚轮/方向键滚动，只是不画那根托条 */
+  scrollbar-width:none; -ms-overflow-style:none;
+  transition:border-color .18s, background .18s, box-shadow .18s;
 }
-#textInput:focus { border-color:#07C160; background:#fff; }
+#textInput::-webkit-scrollbar { width:0; height:0; display:none; }
+#textInput:focus { border-color:#07C160; background:#fff; box-shadow:0 0 0 2px rgba(7,193,96,.08); }
 .send-btn {
   padding:0 18px; height:38px; border-radius:10px; background:#07C160; color:#fff;
   border:none; font-size:14px; font-weight:500; cursor:pointer;
@@ -624,6 +628,45 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 }
 .screen-bar .stop.audio { background:rgba(255,255,255,.18); }
 .member-tag.relay { background:#fff4e5; color:#c86a00; }
+
+/* ===== 连接信息侧栏 =====
+   局域网 / 外网 / 等待条都是「连接信息」，不该堆在聊天区正中：
+   宽屏时统一靠页面右侧竖排，窄屏没空间才退回成顶部横条（文字仍靠左）。 */
+.side-info { flex-shrink:0; display:flex; flex-direction:column; }
+.side-info > #lanBanner,
+.side-info > #p2pBanner,
+.side-info > #guestGate,
+.side-info > #waitBar { text-align:left; }
+.side-info .p2p-line { justify-content:flex-start; }
+.side-info #memberList { justify-content:flex-start; }
+.side-info #inviteHint,
+.side-info #hostHint,
+.side-info #lanHint,
+.side-info #guestStatus,
+.side-info #qrBox,
+.side-info #lanQrBox,
+.side-info #guestProgText { text-align:left; }
+
+/* 宽屏：右侧固定信息栏；聊天区正中只留消息，连接信息不再横在中间 */
+@media (min-width:1280px) {
+  .side-info {
+    position:fixed; top:62px; right:10px; width:228px;
+    max-height:calc(100vh - 168px); overflow-y:auto;
+    z-index:6; gap:8px;
+    scrollbar-width:thin; scrollbar-color:#cfd8d3 transparent;
+  }
+  .side-info::-webkit-scrollbar { width:4px; }
+  .side-info::-webkit-scrollbar-thumb { background:#cfd8d3; border-radius:2px; }
+  .side-info > * { margin:0 !important; padding:10px 12px !important; }
+  .side-info .p2p-line { gap:6px; }
+  .side-info .pill { font-size:11px; padding:3px 8px; white-space:nowrap; }
+  .side-info #roomCode { font-size:14px; letter-spacing:1px; padding:3px 8px; }
+  .side-info #lanUrl { font-size:12px; padding:3px 8px; }
+  .side-info #inviteBox, .side-info #lanActions { gap:6px !important; }
+  .side-info #qrImg, .side-info #lanQrImg { padding:5px; }
+  .side-info #qrImg canvas, .side-info #lanQrImg canvas { max-width:100%; height:auto; }
+  #waitBar { flex-direction:column; align-items:flex-start; gap:4px; }
+}
 </style>
 </head>
 <body>
@@ -679,6 +722,8 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   </div>
 </div>
 
+<!-- 连接信息（局域网 / 外网 / 等待加入）统一放这一栏：宽屏靠右侧竖排，不占聊天区中间 -->
+<aside class="side-info" id="sideInfo">
 <div id="lanBanner" style="display:none;">
   <div class="p2p-line">
     <span class="p2p-label" id="lanLabel">🏠 局域网</span>
@@ -735,6 +780,7 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   <span class="w-text" id="waitText">还没有其他设备加入</span>
   <span class="w-sub" id="waitSub">把房间码或邀请链接发给别人，谁都可以加入这个房间</span>
 </div>
+</aside><!-- /side-info -->
 
 <div class="chat-scroll" id="chatScroll">
   <div class="chat-inner" id="chatInner">
