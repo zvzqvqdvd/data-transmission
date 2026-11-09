@@ -434,6 +434,27 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 .btn-danger { background:#d93025; color:#fff; }
 .btn-danger:hover { background:#b3261e; filter:none; }
 .modal-tip { font-size:13px; line-height:1.75; color:#5c6b62; margin:-4px 0 4px; }
+/* 免责声明弹窗正文：段落分条、行距放宽，认真读得下去 */
+.disclaimer { max-height:52vh; overflow-y:auto; text-align:left; font-size:12.5px; line-height:1.9; color:#41544a; padding-right:6px; }
+.disclaimer p { margin:0 0 10px; }
+.disclaimer b { color:#22352b; }
+.gate-agree { margin-top:14px; }
+.agree-row {
+  display:flex; align-items:flex-start; gap:8px; cursor:pointer;
+  padding:10px 12px; background:rgba(255,255,255,.12);
+  border:1px solid rgba(255,255,255,.35); border-radius:10px;
+}
+.agree-row input { width:16px; height:16px; margin:1px 0 0; accent-color:#07C160; flex-shrink:0; cursor:pointer; }
+.agree-txt { font-size:11.5px; line-height:1.6; color:rgba(255,255,255,.92); text-align:left; }
+.agree-link { color:#fff; text-decoration:underline; cursor:pointer; font-weight:600; }
+.gate-btn.agree-off { opacity:.45; }
+.gate-agree.shake { animation:agreeShake .45s ease; }
+@keyframes agreeShake {
+  0%,100% { transform:translateX(0); }
+  25% { transform:translateX(-6px); }
+  50% { transform:translateX(6px); }
+  75% { transform:translateX(-3px); }
+}
 .dev-list { list-style:none; }
 .dev-list li {
   padding:14px 8px; border-bottom:1px solid #f0f0f0;
@@ -577,7 +598,7 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   width:min(340px,100%); border-radius:10px; overflow:hidden; position:relative;
   background:#0d0f11; box-shadow:0 1px 4px rgba(0,0,0,.1);
 }
-#screenVideo { width:100%; aspect-ratio:16/9; max-height:30vh; display:block; background:#000; object-fit:contain; }
+#screenVideo, #screenImg { width:100%; aspect-ratio:16/9; max-height:30vh; display:block; background:#000; object-fit:contain; }
 /* 移动端自动播放被拦时的手势兜底：盖在画面上，点一下再 play() */
 .screen-play {
   position:absolute; left:0; right:0; top:0; bottom:34px; z-index:1;
@@ -611,7 +632,7 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   /* 手机屏幕小：去掉头像占的宽度，把共享画面放大到接近半屏 */
   #screenPanel > .msg-avatar { display:none; }
   .screen-body { width:100%; }
-  #screenVideo { max-height:42vh; }
+  #screenVideo, #screenImg { max-height:42vh; }
   .chat-scroll { padding:14px 12px 6px; }
   .input-bar { padding:8px 12px calc(8px + env(safe-area-inset-bottom)); }
   .file-card { width:100%; }
@@ -787,6 +808,13 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
       </button>
     </div>
 
+    <div class="gate-agree" id="gateAgree">
+      <label class="agree-row">
+        <input type="checkbox" id="agreeChk" onchange="onAgreeChange()">
+        <span class="agree-txt">我已阅读并同意<b class="agree-link" onclick="showDisclaimer(event)">《免责声明》</b>，本服务仅供学习交流使用</span>
+      </label>
+    </div>
+
     <div id="gateJoin">
       <input id="gateRoom" placeholder="房间码" maxlength="16" autocomplete="off" spellcheck="false">
       <div class="gate-row">
@@ -908,6 +936,7 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
         <div class="msg-avatar">💻</div>
         <div class="screen-body">
           <video id="screenVideo" autoplay playsinline webkit-playsinline x5-playsinline muted></video>
+          <img id="screenImg" alt="共享画面" style="display:none;">
           <button id="screenPlay" class="screen-play" style="display:none;">▶ 点击播放共享画面</button>
           <div class="screen-bar">
             <span class="lb"><i class="dot"></i><span id="screenLabel">桌面共享中</span></span>
@@ -963,6 +992,22 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
       <button class="btn-plain" onclick="resetIce()">恢复默认</button>
       <button class="btn-plain" onclick="hideNet()">关闭</button>
     </div>
+  </div>
+</div>
+
+<div class="modal-mask" id="disclaimerModal">
+  <div class="modal wide">
+    <h3>免责声明</h3>
+    <div class="disclaimer">
+      <p><b>1. 用途限制</b>　本软件（含桌面程序与本网页，以下统称「本服务」）仅供个人学习、研究与技术交流使用，严禁用于任何商业用途或盈利活动，严禁用于企业生产环境。</p>
+      <p><b>2. 遵守法律</b>　使用本服务必须遵守《中华人民共和国网络安全法》《数据安全法》《个人信息保护法》及其他适用法律法规。不得利用本服务实施任何违法活动，包括但不限于：危害国家安全、传播淫秽色情与暴力恐怖信息、赌博诈骗、侵犯知识产权、传播木马病毒、非法侵入或干扰他人网络与系统。</p>
+      <p><b>3. 内容责任</b>　用户通过本服务创建、发送、接收的文字、文件与共享画面等内容均由用户自行产生，相应法律责任完全由内容发布者自行承担。请勿传输涉密信息、他人隐私或任何不适宜共享的内容。</p>
+      <p><b>4. 数据与隐私</b>　本服务基于局域网与点对点直连技术，数据在设备之间直接传输，不经由第三方服务器长期保存。房间内的聊天记录与接收文件只做临时存放，房间销毁或新建后即被删除且不可恢复，请自行备份重要数据。</p>
+      <p><b>5. 无担保</b>　本服务按「现状」提供，不作任何明示或默示的保证，包括但不限于可用性、无错误、准确性、完整性与特定用途适用性。因网络环境、系统故障或操作不当导致的数据丢失、传输中断等，开发者不承担责任。</p>
+      <p><b>6. 责任限制</b>　对于因使用或无法使用本服务而产生的任何直接或间接损失（包括但不限于数据损失、业务中断、利润损失），开发者在其法律允许的最大范围内不承担任何责任。</p>
+      <p><b>7. 声明生效</b>　勾选同意本声明并继续使用本服务，即视为您已完整阅读、充分理解并接受上述全部条款。如您不同意任何一项，请立即停止使用本服务。</p>
+    </div>
+    <div class="modal-btns"><button class="btn-plain" onclick="hideDisclaimer()">我已知晓</button></div>
   </div>
 </div>
 
@@ -1594,6 +1639,8 @@ let isLanClient = false; // 本页是不是「局域网里其他设备打开的�
 let lastReportedP2P = -1;// 房主端：上次报给后端的外网设备数
 let lastDevicesSig = ''; // 上次收到的房间成员清单，没变就不重绘
 let peerBye = false;  // 收到 BYE：主动断开的一方不自动重连
+// 「有设备正在握手中」的临时提示文案：连上后要能对号清除，不能干等 10 秒过期
+const HOST_CONNECT_HINT = '有设备正在建立直连…';
 
 // 「谁连进来了 + 对方 IP」只属于房主：外网访客（MODE=guest）和局域网里
 // 其他设备（isLanClient）一概不看，也不把设备清单留在自己的内存 / DOM 里。
@@ -1841,6 +1888,11 @@ async function loadMessages() {
       hostP2PCount = d.p2p;
       peerChanged = true;
     }
+    // 局域网设备同样收不到共享画面的媒体流：后端说有人正在共享就去拉帧
+    if (isLanClient) {
+      if (d.screen) startFrameViewer();
+      else stopFrameViewer();
+    }
     // 房间里都有谁（外网 + 局域网）：只有房主端画成员清单，
     // 其他设备连数组都不留，避免 IP 落到自己的页面里
     if (Array.isArray(d.devices)) {
@@ -2043,6 +2095,11 @@ function handleData(data, ctx) {
       return;
     }
     if (data === 'SCREEN_END') {
+      // 房主是中继：发共享的那台停了，把「停止」继续转给其他外网设备并收掉转发
+      if (MODE === 'host') {
+        stopScreenRelay();
+        try { broadcast('SCREEN_END'); } catch (e) {}
+      }
       if (screenRole === 'recv') { screenRole = ''; hideScreenPanel(); }
       return;
     }
@@ -2132,6 +2189,7 @@ function handleData(data, ctx) {
 }
 // ===== 桌面共享：走 WebRTC 媒体流，与传文件的数据通道互不干扰 =====
 let screenStream = null, screenCalls = [], recvCall = null, screenRole = '';
+let screenRelayCalls = [];   // 房主把收到的一路共享转给其他外网设备的那些 call
 let screenHasAudio = false;
 function refreshScreenAudioBtn() {
   const v = document.getElementById('screenVideo');
@@ -2181,6 +2239,89 @@ function attachStream(stream, muted) {
   playScreenVideo(v);
   screenHasAudio = !!(stream && stream.getAudioTracks && stream.getAudioTracks().length);
   refreshScreenAudioBtn();
+  // 房主把当前共享画面（自己发的或转收的）压成 JPEG 帧推给本机程序：
+  // 局域网设备没有 P2P 通道，靠轮询这些帧才能看到共享
+  if (MODE === 'host' && !isLanClient) startFrameSender(stream);
+}
+// ===== 局域网观看共享画面：JPEG 帧经本机程序中转 =====
+// 房主端离屏播放共享流 → canvas 按 300ms 抓帧 → POST /api/screen/frame；
+// 观看端（局域网设备）轮询拉帧显示。延迟约 1 秒，局域网内流量可接受。
+let frameTimer = null, frameVideo = null, frameCanvas = null, frameBusy = false;
+function startFrameSender(stream) {
+  stopFrameSender(false);
+  if (!window.isSecureContext || !stream) return;
+  const v = document.createElement('video');
+  v.muted = true;
+  v.playsInline = true;
+  v.setAttribute('playsinline', '');
+  try { v.srcObject = stream; } catch (e) { return; }
+  const p = v.play(); if (p && p.catch) p.catch(() => {});
+  frameVideo = v;
+  frameCanvas = document.createElement('canvas');
+  const push = async () => {
+    if (frameBusy || !frameVideo || !frameCanvas) return;
+    frameBusy = true;
+    try {
+      if (v.videoWidth) {
+        const scale = Math.min(1, 1280 / v.videoWidth);
+        frameCanvas.width = Math.round(v.videoWidth * scale);
+        frameCanvas.height = Math.round(v.videoHeight * scale);
+        frameCanvas.getContext('2d').drawImage(v, 0, 0, frameCanvas.width, frameCanvas.height);
+        const blob = await new Promise(res => { try { frameCanvas.toBlob(res, 'image/jpeg', 0.55); } catch (e) { res(null); } });
+        if (blob) await fetch(HOST_API + '/api/screen/frame', { method: 'POST', body: blob });
+      }
+    } catch (e) {}
+    frameBusy = false;
+  };
+  push();
+  frameTimer = setInterval(push, 300);
+}
+function stopFrameSender(sendEnd) {
+  if (frameTimer) { clearInterval(frameTimer); frameTimer = null; }
+  if (frameVideo) { try { frameVideo.srcObject = null; } catch (e) {} }
+  frameVideo = null; frameCanvas = null; frameBusy = false;
+  if (sendEnd) { try { fetch(HOST_API + '/api/screen/frame', { method: 'POST', body: '' }); } catch (e) {} }
+}
+// 观看端（局域网设备）：轮询拉当前帧显示；后端说没帧（204/404）就收起
+let frameViewTimer = null;
+function startFrameViewer() {
+  if (frameViewTimer || !isLanClient) return;
+  const img = document.getElementById('screenImg');
+  const v = document.getElementById('screenVideo');
+  showScreenPanel('recv');
+  if (v) v.style.display = 'none';
+  if (img) img.style.display = 'block';
+  const tick = async () => {
+    try {
+      const r = await fetch(API + '/api/screen/frame', { cache: 'no-store' });
+      if (r.status === 200 && img) {
+        const blob = await r.blob();
+        if (img.dataset.u) URL.revokeObjectURL(img.dataset.u);
+        const u = URL.createObjectURL(blob);
+        img.dataset.u = u;
+        img.src = u;
+      } else if (r.status === 204 || r.status === 404) {
+        stopFrameViewer();
+      }
+    } catch (e) {}
+  };
+  tick();
+  frameViewTimer = setInterval(tick, 350);
+}
+function stopFrameViewer() {
+  if (!frameViewTimer) return;
+  clearInterval(frameViewTimer);
+  frameViewTimer = null;
+  const img = document.getElementById('screenImg');
+  const v = document.getElementById('screenVideo');
+  if (img) {
+    if (img.dataset.u) URL.revokeObjectURL(img.dataset.u);
+    img.dataset.u = '';
+    img.removeAttribute('src');
+    img.style.display = 'none';
+  }
+  if (v) v.style.display = '';
+  if (screenRole === 'recv') { screenRole = ''; hideScreenPanel(); }
 }
 // 手机屏幕小，共享画面看不清：点一下进全屏（iOS Safari 只有 video 级全屏）
 function toggleScreenFull() {
@@ -2215,6 +2356,7 @@ function showScreenPanel(role) {
 }
 function hideScreenPanel() {
   screenSlot.classList.remove('show');
+  stopFrameSender(true);   // 画面收了，帧推送也该停；顺便让本机程序把当前帧清掉
   const v = document.getElementById('screenVideo');
   try { v.pause(); } catch (e) {}
   try { v.srcObject = null; } catch (e) {}
@@ -2280,6 +2422,7 @@ function stopScreenShare() {
   }
   for (const c of screenCalls) { try { c.close(); } catch (e) {} }
   screenCalls = [];
+  stopScreenRelay();
   if (recvCall) { try { recvCall.close(); } catch (e) {} recvCall = null; }
   // 通知对端收起画面，否则对方那边会停在最后一帧
   if (wasSending) {
@@ -2289,16 +2432,36 @@ function stopScreenShare() {
   screenRole = '';
   hideScreenPanel();
 }
+// 房主把收到的一路共享转给其余外网设备：访客发起的共享原来只有房主能看到，
+// 走这里之后所有外网设备都能看到（转发占用的是房主上行，和房主自己共享一样）
+function stopScreenRelay() {
+  for (const c of screenRelayCalls) { try { c.close(); } catch (e) {} }
+  screenRelayCalls = [];
+}
+function relayScreenToOthers(stream, fromPeer) {
+  if (MODE !== 'host' || !pcPeer) return;
+  stopScreenRelay();
+  for (const x of hostList()) {
+    if (x.conn.peer && x.conn.peer !== fromPeer) {
+      try { screenRelayCalls.push(pcPeer.call(x.conn.peer, stream)); } catch (e) {}
+    }
+  }
+}
 function acceptScreenCall(call) {
   try { call.answer(); } catch (e) { return; }
   // 同一时间只显示一路；有人换了共享源就切到新的那路
   if (recvCall) { try { recvCall.close(); } catch (e) {} }
   recvCall = call;
   // 接收端（尤其是手机）同理：先让视频可见，再挂流播放
-  call.on('stream', stream => { showScreenPanel('recv'); attachStream(stream, true); });
+  call.on('stream', stream => {
+    showScreenPanel('recv');
+    attachStream(stream, true);
+    relayScreenToOthers(stream, call.peer);
+  });
   call.on('close', () => {
     if (recvCall === call) recvCall = null;
     if (screenRole === 'recv') { screenRole = ''; hideScreenPanel(); }
+    stopScreenRelay();
   });
 }
 
@@ -2651,6 +2814,7 @@ async function renewRoom() {
   }
   hostConns.clear();
   recvBuf.clear();
+  clearConnectHint();   // 换房后所有连接都没了，「正在建立直连」的旧提示一起收掉
   lastRev = null;
   serverMsgs = [];
   localMsgs = [];
@@ -2723,6 +2887,7 @@ function onRoomClosed(tip) {
   }
   lanPeers = 0;
   lastRev = null;
+  stopFrameViewer();
   serverMsgs = [];
   localMsgs = [];
   seenIds = new Set();
@@ -2757,6 +2922,7 @@ function onNeedJoin() {
   lanPeers = 0;
   hostP2PCount = 0;
   lastRev = null;
+  stopFrameViewer();
   serverMsgs = [];
   localMsgs = [];
   seenIds = new Set();
@@ -2845,7 +3011,7 @@ function startHostPeer(roomCode) {
     const entry = { conn: c, name: '', seq: hostSeq, peerId: c.peer || '', ip: '', dev: mdDev, metaNick: mdNick,
                     registered: false, regTimer: null };
     hostConns.set(id, entry);
-    showHostHint('有设备正在建立直连…');
+    showHostHint(HOST_CONNECT_HINT);
     c.on('open', () => {
       try { c.send('HELLO:' + PROTOCOL); } catch (e) {}
       if (!entry.name) entry.name = '访客' + entry.seq;
@@ -2868,6 +3034,7 @@ function startHostPeer(roomCode) {
       const wasIn = entry.registered && hostConns.has(id);
       hostConns.delete(id);
       recvBuf.delete(id);
+      clearConnectHint();   // 握手中的连接断了也收提示，别让「正在建立直连」挂满 10 秒
       if (wasIn) {
         broadcast('NOTE:' + JSON.stringify({ t: '有设备离开了房间' }));
         toast('有设备离开了房间');
@@ -2914,6 +3081,15 @@ function startHostPeer(roomCode) {
   });
 }
 
+// 设备真正进了房间（或握手的连接断掉 / 被静默收掉）后，「正在建立直连」就没意义了：
+// 只要当前挂的正是这条提示、也没有别的设备还在握手中，就立刻收起，
+// 不让它顶着「正在连接」的样子干等 10 秒过期；别的提示（收文件等）不动。
+function clearConnectHint() {
+  const notice = document.getElementById('hostNotice');
+  if (!notice || notice.textContent !== HOST_CONNECT_HINT) return;
+  for (const [, e] of hostConns) { if (!e.registered) return; }
+  showHostHint('');
+}
 // ===== 房间成员管理（房主端）=====
 // 悄悄收掉一条连接：不动聊天、不广播、不弹提示，只把连接表与界面数据刷新一下。
 // 通道开了却一直不报身份的连接走这里，房主那边应该无感。
@@ -2925,6 +3101,7 @@ function dropHostConnQuiet(id) {
   hostConns.delete(id);
   recvBuf.delete(id);
   setTimeout(() => { try { c.close(); } catch (err) {} }, 150);
+  clearConnectHint();
   refreshReady();
   renderAll();
 }
@@ -2935,6 +3112,7 @@ function registerGuest(ctx, nick, dev) {
   e.dev = did;
   e.registered = true;
   if (e.regTimer) { clearTimeout(e.regTimer); e.regTimer = null; }
+  clearConnectHint();   // 这台设备已进房，握手指示该收了（还有别的在握手中则先留着）
   let base = String(nick || e.metaNick || '').trim().slice(0, 12) || ('访客' + e.seq);
   const used = new Set();
   for (const x of hostConns.values()) if (x.name) used.add(x.name);
@@ -3339,6 +3517,7 @@ function resetToGate() {
   document.getElementById('wxTip').style.display = 'none';
   showGuestTip('');
   setGuestProgress(-1);
+  stopFrameViewer();
   hideScreenPanel();
   try { localStorage.removeItem('lanshare_room_code'); } catch (e) {}
   // 邀请链接带来的 ?room= 也要清掉，否则刷新又会自动连回去
@@ -3892,6 +4071,38 @@ function hideGate() {
   document.getElementById('gateView').classList.remove('show');
   document.getElementById('hostView').style.display = 'flex';
 }
+// ===== 免责声明：勾选了才放行创建 / 加入；每次打开页面都要重新勾，不记住 =====
+function agreeOk() {
+  const chk = document.getElementById('agreeChk');
+  return !!(chk && chk.checked);
+}
+function requireAgree() {
+  if (agreeOk()) return true;
+  const box = document.getElementById('gateAgree');
+  if (box) {
+    box.classList.remove('shake');
+    void box.offsetWidth;      // 重置动画，连续点也能每次抖一下
+    box.classList.add('shake');
+  }
+  const chk = document.getElementById('agreeChk');
+  if (chk) { try { chk.focus(); } catch (e) {} }
+  gateMsg('请先阅读并勾选同意《免责声明》后再继续。');
+  return false;
+}
+function onAgreeChange() {
+  const on = agreeOk();
+  ['gateCreateBtn', 'gateJoinChoiceBtn', 'gateJoinBtn'].forEach(id => {
+    const b = document.getElementById(id);
+    if (b) b.classList.toggle('agree-off', !on);
+  });
+}
+function showDisclaimer(e) {
+  if (e) { e.preventDefault(); e.stopPropagation(); }
+  document.getElementById('disclaimerModal').classList.add('show');
+}
+function hideDisclaimer() {
+  document.getElementById('disclaimerModal').classList.remove('show');
+}
 function gateShowJoin() {
   document.getElementById('gateChoices').style.display = 'none';
   document.getElementById('gateJoin').style.display = 'block';
@@ -4032,6 +4243,7 @@ function gateProgCreep(to) {
 // 创建房间：确认本机程序在跑，再由它当场开一个房间（房间码在这一刻才生成）。
 // 不再人为拖时间：后端开好 + 外网直连房主 Peer 注册成功就立刻进主界面。
 async function gateCreate() {
+  if (!requireAgree()) return;
   const btn = document.getElementById('gateCreateBtn');
   if (!btn || btn.disabled) return;
   const label = btn.querySelector('.gate-txt b');
@@ -4095,6 +4307,7 @@ async function gateCreate() {
 }
 // 加入房间：先真连一次，房间不存在或连不上就停在入口页
 async function gateJoin() {
+  if (!requireAgree()) return;
   const box = document.getElementById('gateRoom');
   const btn = document.getElementById('gateJoinBtn');
   const label = btn.querySelector('b');
@@ -4203,6 +4416,9 @@ window.addEventListener('online', () => { try { flushGuestRetry(); } catch (e) {
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) { try { flushGuestRetry(); } catch (e) {} }
 });
+
+// 入口页初始就有勾选框：先把「未勾选」的置灰态套上，别等用户点了才发现
+onAgreeChange();
 
 // 房间生命周期：临时房间（页面关闭 / 12 小时无通信 / 手动销毁），没有可设的选项了
 </script>
