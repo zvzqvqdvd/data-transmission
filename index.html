@@ -96,12 +96,33 @@ body {
 .pill.ghost { background:transparent; border-color:transparent; color:#3c7a57; }
 .pill.ghost:hover { background:#fff; color:#0a8f4a; border-color:#cfeada; }
 #inviteHint { font-size:11px; color:#6b8a78; margin-top:6px; }
-#hostHint { font-size:11.5px; color:#0a8f4a; margin-top:5px; }
-/* 房主端成员清单：谁走外网、谁走局域网，各自 IP */
-#memberList {
-  margin-top:7px; display:none; flex-wrap:wrap;
-  justify-content:center; gap:6px;
+/* 每条通道各自一块「已连接 N 台设备」+ 只属于该通道的设备清单 */
+.chan-state {
+  margin-top:8px; padding-top:7px; text-align:left;
+  border-top:1px dashed rgba(40,80,60,.14);
 }
+.chan-count { font-size:11.5px; font-weight:600; color:#0a8f4a; }
+#lanBanner .chan-count { color:#1a5fb4; }
+.chan-list {
+  display:none; flex-wrap:wrap; justify-content:flex-start;
+  gap:5px; margin-top:6px;
+}
+.chan-list.show { display:flex; }
+/* 房主端临时提示（连接中 / 传文件中 / 信令错误），单独一行，不占通道状态 */
+.side-notice {
+  margin-top:6px; padding:5px 8px; text-align:left;
+  font-size:11px; line-height:1.6; color:#a05a00;
+  background:#fff8e8; border-radius:6px;
+}
+/* 房间说明：独立卡片，不属于外网也不属于局域网 */
+.side-card.room-info {
+  flex-shrink:0; margin:10px 18px 0; padding:11px 14px;
+  background:#fff; border:1px solid #e2e6e9;
+  border-radius:12px; text-align:left;
+}
+.side-title { font-size:12px; font-weight:600; color:#41544a; margin-bottom:5px; }
+.room-info-text { font-size:11px; line-height:1.8; color:#7a858c; }
+.room-info .pill { margin-top:6px; font-size:11px; }
 .member-row {
   display:inline-flex; align-items:center; gap:6px;
   font-size:11px; color:#3c5a4a;
@@ -638,9 +659,7 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 .side-info > #guestGate,
 .side-info > #waitBar { text-align:left; }
 .side-info .p2p-line { justify-content:flex-start; }
-.side-info #memberList { justify-content:flex-start; }
 .side-info #inviteHint,
-.side-info #hostHint,
 .side-info #lanHint,
 .side-info #guestStatus,
 .side-info #qrBox,
@@ -734,9 +753,13 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
     </span>
   </div>
   <div id="lanHint"></div>
+  <div class="chan-state">
+    <div class="chan-count" id="lanCount">局域网已连接 0 台设备</div>
+    <div class="chan-list" id="lanMembers"></div>
+  </div>
   <div id="lanQrBox" style="display:none;">
     <div id="lanQrImg"></div>
-    <div class="qr-tip">同一 WiFi 下的设备扫码打开即可加入，房间码已带在链接里</div>
+    <div class="qr-tip">局域网：同一 WiFi 下的设备扫码即可加入，房间码已带在链接里</div>
   </div>
 </div>
 
@@ -746,19 +769,28 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
     <b id="roomCode" title="点击复制房间码" onclick="copyRoomCode()"></b>
     <button class="pill ghost" onclick="renewRoom()">新建房间</button>
     <button class="pill danger" id="dissolveBtn" onclick="askDissolve()">销毁房间</button>
-    <button class="pill ghost" id="ttlBtn" onclick="showTtl()">房间说明</button>
     <span id="inviteBox" style="display:none;gap:8px;">
       <a id="inviteLink" class="pill" href="#" target="_blank" rel="noopener">打开访问链接</a>
       <button class="pill" onclick="toggleQR()">二维码</button>
     </span>
   </div>
   <div id="inviteHint"></div>
-  <div id="hostHint">正在连接信令服务器…</div>
-  <div id="memberList" style="display:none;"></div>
+  <div id="hostNotice" class="side-notice" style="display:none;"></div>
+  <div class="chan-state">
+    <div class="chan-count" id="hostHint">外网已连接 0 台设备</div>
+    <div class="chan-list" id="memberList"></div>
+  </div>
   <div id="qrBox" style="display:none;">
     <div id="qrImg"></div>
-    <div style="font-size:11px;color:#6b8a78;margin-top:7px;">扫码即可直接连接，无需手输房间码</div>
+    <div class="qr-tip">外网：扫码即可直接加入，房间码已带在链接里</div>
   </div>
+</div>
+
+<!-- 房间说明单独一块，不塞进外网/局域网任何一张卡片 -->
+<div class="side-card room-info" id="roomInfoCard">
+  <div class="side-title">🕒 房间说明</div>
+  <div class="room-info-text">临时房间：关闭房主页面、连续 12 小时无通信或房主手动销毁时自动销毁；聊天记录与接收文件一并删除，不做保留。</div>
+  <button class="pill ghost" onclick="showTtl()">查看完整说明</button>
 </div>
 
 <div id="guestGate" style="display:block;">
@@ -1058,9 +1090,16 @@ function takeWarmPeer() {
   if (!p || p.destroyed) return null;
   return p;
 }
+// 房主端临时提示（连接中、正在接收文件、信令错误等）单独一行，
+// 不占用「外网已连接 N 台设备」这条通道状态；10 秒后自动收起，避免旧提示常驻
+let hostNoticeTimer = null;
 function showHostHint(m) {
-  const el = document.getElementById('hostHint');
-  if (el) el.textContent = m;
+  const el = document.getElementById('hostNotice');
+  if (!el) return;
+  el.textContent = m || '';
+  el.style.display = m ? 'block' : 'none';
+  clearTimeout(hostNoticeTimer);
+  if (m) hostNoticeTimer = setTimeout(() => { el.style.display = 'none'; }, 10000);
 }
 function showGuestTip(m) {
   const el = document.getElementById('guestTip');
@@ -1435,34 +1474,16 @@ function reportP2P(n) {
     body: 'p2p=' + n
   }).catch(() => {});
 }
-// 房主端房间提示：随时告诉你房间里现在有几台设备
+// 房主端：两条通道各自显示自己的连接数，互不混在一起
 function updateHostRoomHint() {
-  const el = document.getElementById('hostHint');
-  if (!el || MODE !== 'host') return;
-  if (roomClosed) return;
-  if (isLanClient) {
-    // 局域网设备看不到 P2P 直连，只能靠房主报上来的数字
-    const h = document.getElementById('lanHint');
-    if (h) {
-      h.textContent = hostP2PCount > 0
-        ? ('已加入这个房间，还有 ' + hostP2PCount + ' 台外网设备在线')
-        : '已加入这个房间，可以直接发消息';
-    }
-    return;
-  }
-  const p2p = hostList().length;
-  const lan = lanPeers;
-  renderMembers();     // 顺便刷新「谁走外网、谁走局域网」的清单
-  if (!p2p && !lan) {
-    el.textContent = '房间已开 · 等待设备加入';
-    return;
-  }
-  const parts = [];
-  if (p2p) parts.push('外网 ' + p2p + ' 台');
-  if (lan) parts.push('局域网 ' + lan + ' 台');
-  const relayN = hostList().filter(x => x.relay).length;
-  el.textContent = '已连接 ' + (p2p + lan) + ' 台设备 · ' + parts.join(' / ') +
-    (relayN ? ' · ' + relayN + ' 台走中继' : '');
+  if (MODE !== 'host' || roomClosed) return;
+  const wanEl = document.getElementById('hostHint');
+  const lanEl = document.getElementById('lanCount');
+  const wan = isLanClient ? 0 : hostList().length;   // 外网：本地 P2P 连接数
+  const lan = lanPeers;                              // 局域网：后端统计的在线设备数
+  if (wanEl) wanEl.textContent = '外网已连接 ' + wan + ' 台设备';
+  if (lanEl) lanEl.textContent = '局域网已连接 ' + lan + ' 台设备';
+  renderMembers();
 }
 
 // ===== 消息列表：房主端 = 服务端消息 + 本地 P2P 消息；访客端 = 纯本地 =====
@@ -2184,7 +2205,7 @@ function setupLanBanner(canHost, url) {
     document.getElementById('lanLabel').textContent = '🏠 局域网';
     document.getElementById('lanUrl').textContent = short(lanShareUrl);
     document.getElementById('lanHint').textContent =
-      '同一 WiFi 下的设备打开这个地址，输入房间码就能加入';
+      '局域网：同一 WiFi 下的设备打开这个地址，输入房间码即可加入';
     document.getElementById('lanActions').style.display = 'inline-flex';
     const addr = document.getElementById('serverUrl');
     addr.textContent = short(lanShareUrl);
@@ -2195,9 +2216,7 @@ function setupLanBanner(canHost, url) {
     document.getElementById('lanLabel').textContent = '🏠 局域网';
     document.getElementById('lanUrl').textContent = ROOM || location.host;
     document.getElementById('lanHint').textContent =
-      hostP2PCount > 0
-        ? ('已加入这个房间，还有 ' + hostP2PCount + ' 台外网设备在线')
-        : '已加入这个房间，可以直接发消息';
+      '局域网：已加入房间，可以直接发送消息';
     document.getElementById('lanActions').style.display = 'none';
     const addr = document.getElementById('serverUrl');
     addr.textContent = location.host;
@@ -2254,12 +2273,12 @@ function toggleLanQR() {
 function setupInvite(room) {
   const url = inviteUrl(room);
   if (!url) {
-    document.getElementById('inviteHint').textContent = '未配置在线地址：在程序目录的 client_url.txt 第一行写入在线页网址，保存后刷新页面即生效';
+    document.getElementById('inviteHint').textContent = '外网：未配置在线地址，在程序目录的 client_url.txt 第一行写入在线页网址，保存后刷新页面即生效';
     return;
   }
   document.getElementById('inviteLink').href = url;
   document.getElementById('inviteBox').style.display = 'inline-flex';
-  document.getElementById('inviteHint').textContent = '其他设备扫码或打开链接即可加入，无需手输房间码';
+  document.getElementById('inviteHint').textContent = '外网：扫码或打开链接即可加入，无需手输房间码';
   makeQR(url);
 }
 function toggleQR() {
@@ -2731,30 +2750,28 @@ function reportDevices() {
   } catch (e) {}
 }
 
-// 房间设备清单：不显示昵称，用「设备 N」+ 通道 + IP 的紧凑芯片
+// 设备清单按通道拆两份：外网卡片只列 P2P 设备，局域网卡片只列局域网设备。
+// 不显示昵称，统一「设备 N + IP」；通道由所属卡片说明，芯片里不再重复标注。
 function renderMembers() {
-  const box = document.getElementById('memberList');
-  if (!box || MODE !== 'host' || isLanClient || roomClosed) return;
-  const rows = [];
-  for (const x of hostList()) {
-    rows.push({ channel: 'p2p', ip: x.ip || '', relay: !!x.relay });
-  }
-  for (const d of roomDevices) {
-    if (!d) continue;
-    // 外网设备以本地连接为准：后端那份是上报过去的，断开时会慢一个轮询周期
-    if (d.channel === 'p2p') continue;
-    rows.push({ channel: 'lan', ip: d.ip || '', relay: false });
-  }
-  if (!rows.length) { box.innerHTML = ''; box.style.display = 'none'; return; }
-  box.style.display = 'flex';
-  box.innerHTML = rows.map((r, i) =>
-    '<span class="member-row">' +
-      '<span class="member-tag ' + (r.channel === 'p2p' ? 'wan' : 'lan') + '">' +
-        (r.channel === 'p2p' ? '外网' : '局域网') + '</span>' +
-      (r.relay ? '<span class="member-tag relay">中继</span>' : '') +
-      '<span class="member-name">设备 ' + (i + 1) + '</span>' +
-      '<span class="member-ip">' + esc(r.ip || 'IP 未知') + '</span>' +
-    '</span>').join('');
+  if (MODE !== 'host' || roomClosed) return;
+  const wan = isLanClient ? [] : hostList().map(x => ({ ip: x.ip || '', relay: !!x.relay }));
+  const lan = (roomDevices || [])
+    .filter(d => d && d.channel !== 'p2p')   // 外网以本地连接为准，后端那份上报会慢一拍
+    .map(d => ({ ip: d.ip || '', relay: false }));
+  const fill = (id, rows) => {
+    const box = document.getElementById(id);
+    if (!box) return;
+    if (!rows.length) { box.innerHTML = ''; box.classList.remove('show'); return; }
+    box.classList.add('show');
+    box.innerHTML = rows.map((r, i) =>
+      '<span class="member-row">' +
+        (r.relay ? '<span class="member-tag relay">中继</span>' : '') +
+        '<span class="member-name">设备 ' + (i + 1) + '</span>' +
+        '<span class="member-ip">' + esc(r.ip || 'IP 未知') + '</span>' +
+      '</span>').join('');
+  };
+  fill('memberList', wan);
+  fill('lanMembers', lan);
 }
 // 只断开某一条连接；byPeer=true 表示是对方主动发 BYE 过来的
 function dropHostConnById(id, byPeer) {
