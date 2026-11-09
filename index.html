@@ -219,10 +219,10 @@ body.no-peer #textInput { cursor:not-allowed; }
   display:flex; justify-content:center; align-items:center;
   gap:8px; margin-top:8px;
 }
-/* 其他设备的卡片只有「通道名 / 房间号 / 按钮」三行：
-   「✅ 已连接，可以互发文字与文件」这类状态文字不显示，
-   局域网端与外网端的信息保持一致（下载进度条和失败提示仍保留）。 */
-#guestStatus { display:none !important; font-size:11.5px; color:#3c7a57; margin-top:7px; line-height:1.6; }
+/* 连接状态行：只在「还没连上」时显示（正在连接 / 自动重连 / 连接失败），
+   连上之后立刻收起，不显示「✅ 已连接，可以互发文字与文件」这类文字，
+   也不让「接收中 / 已下载」挤进连接卡。局域网端与外网端保持同一套信息。 */
+#guestStatus { display:none; font-size:11.5px; color:#3c7a57; margin-top:7px; line-height:1.6; }
 #guestProg { display:none; height:4px; background:#d9ece2; border-radius:2px; margin-top:9px; overflow:hidden; }
 #guestBar { height:100%; width:0%; background:#07C160; transition:width .2s; }
 #guestTip {
@@ -1141,9 +1141,25 @@ function showGuestTip(m) {
   el.style.display = m ? 'block' : 'none';
   el.textContent = m || '';
 }
+// 连接卡的状态行：只在「还没连上」时显示，连上就整行收起。
+// 存一份文本是为了让按钮状态和文字状态互相独立：先写文字再改状态、或反过来都不会漏。
+let guestConnState = 'connecting';
+let guestStatusText = '';
+let guestStatusOk = false;
+function renderGuestStatus() {
+  const el = document.getElementById('guestStatus');
+  if (!el) return;
+  // 连上之后一律不留字；连接中若还没写具体阶段，至少给一句「正在连接…」
+  const text = guestConnState === 'connected' ? ''
+             : (guestStatusText || (guestConnState === 'connecting' ? '正在连接…' : ''));
+  el.textContent = text;
+  el.style.display = text ? 'block' : 'none';
+  el.style.color = guestStatusOk ? '#0a8f4a' : '#3c7a57';
+  el.style.fontWeight = guestStatusOk ? '600' : 'normal';
+}
 // 访客卡片上的按钮跟着连接状态走：
-//   connecting —— 还没连上，「重连 / 断开连接」都没意义，整排藏起来
-//   connected  —— 只留「断开连接」（重连按钮已经没用）
+//   connecting —— 还没连上，「重连 / 断开连接」都没意义，整排藏起来，只留连接进度文字
+//   connected  —— 只留「断开连接」（重连按钮已经没用），状态文字收起
 //   failed     —— 彻底停下来没在重试了，才给一个手动「重连」
 function setGuestActions(state) {
   const box = document.getElementById('guestActions');
@@ -1153,6 +1169,8 @@ function setGuestActions(state) {
   box.style.display = state === 'connecting' ? 'none' : 'flex';
   retry.style.display = state === 'failed' ? '' : 'none';
   drop.style.display = state === 'connected' ? '' : 'none';
+  guestConnState = state;
+  renderGuestStatus();
 }
 // 其他设备（外网访客 / 局域网设备）共用同一张连接卡：只有通道名不同，
 // 房间号、按钮、显示的信息完全一样，不再各写一套横幅和说明。
@@ -1206,11 +1224,16 @@ function broadcast(msg, excludeName) {
 }
 function notify(msg, ok) { if (MODE === 'guest') setStatus(msg, ok); else toast(msg); }
 function setStatus(m, ok) {
-  const el = document.getElementById('guestStatus');
-  if (!el) return;
-  el.textContent = m;
-  el.style.color = ok ? '#0a8f4a' : '#3c7a57';
-  el.style.fontWeight = ok ? '600' : 'normal';
+  // 已连接时的「接收中 / 已下载 / 走中继」等文字直接丢掉，不留底：
+  // 否则下一次掉线切回 connecting 时，会把上一条旧文字翻出来当作连接进度。
+  if (guestConnState === 'connected') {
+    guestStatusText = '';
+    guestStatusOk = false;
+  } else {
+    guestStatusText = m || '';
+    guestStatusOk = !!ok;
+  }
+  renderGuestStatus();
 }
 // ===== 传输进度：百分比 + 实时速度 + 剩余时间 =====
 // 速度用「每 0.35 秒采样一次、指数平滑」：瞬时值抖得厉害，直接显示会跳来跳去
@@ -2610,15 +2633,64 @@ function onNeedJoin() {
   gateMsg('房间码已经变了（房主新建或销毁了房间），请重新输入。', 'info');
 }
 let hostRetry = 0;
+// 创建房间时先在入口页把房主 Peer 注册好，PeerJS 报 open 才算「房间真的可用」，
+// 之后才切进主界面：不能让人已经进了房间，卡片上还挂着「正在连接信令服务器…」。
+let readyHostPeer = null;
+function prepareHostPeer(roomCode, timeoutMs) {
+  return new Promise(resolve => {
+    const ms = timeoutMs || 9000;
+    const deadline = Date.now() + ms;
+    let tries = 0, done = false, timer = null, current = null;
+    const kill = () => { if (current) { try { current.destroy(); } catch (e) {} current = null; } };
+    const finish = peer => {
+      if (done) return;
+      done = true;
+      if (timer) clearTimeout(timer);
+      if (peer && peer.open && !peer.destroyed) {
+        readyHostPeer = peer;
+        resolve(true);
+      } else {
+        kill();                 // 超时/报错的半成品 Peer 不能留着占房间码
+        readyHostPeer = null;
+        resolve(false);
+      }
+    };
+    const build = () => {
+      if (done) return;
+      let p;
+      try { p = new Peer('pc-' + roomCode, peerOpts()); }
+      catch (e) { finish(null); return; }
+      current = p;
+      p.on('open', () => finish(p));
+      p.on('error', err => {
+        if (done) return;
+        const t = (err && err.type) || 'unknown';
+        // 刷新页面时旧 Peer 还没被信令释放：等一下用同一个码重试，别急着换码
+        if (t === 'unavailable-id' && tries < 3 && Date.now() < deadline) {
+          tries++;
+          kill();
+          setTimeout(build, 700 * tries);
+          return;
+        }
+        finish(null);
+      });
+    };
+    timer = setTimeout(() => finish(null), ms);
+    build();
+  });
+}
 function startHostPeer(roomCode) {
-  showHostHint('正在连接信令服务器…');
-  pcPeer = new Peer('pc-' + roomCode, peerOpts());
-  pcPeer.on('open', () => {
+  // 入口页已经等到 open 的连接直接复用，不再建第二条，也不再显示任何开场状态文字
+  const reuse = readyHostPeer && !readyHostPeer.destroyed && readyHostPeer.open ? readyHostPeer : null;
+  readyHostPeer = null;
+  pcPeer = reuse || new Peer('pc-' + roomCode, peerOpts());
+  const onReady = () => {
     hostRetry = 0;
     setConn('wait');
-    showHostHint('房间已开 · 等待设备加入');
     refreshReady();
-  });
+  };
+  if (reuse) onReady();
+  else pcPeer.on('open', onReady);
   pcPeer.on('connection', c => {
     peerBye = false;
     // 连接元数据里带着对面是谁（昵称 + 设备 ID）：
@@ -2896,6 +2968,7 @@ function startHostUI(fromWeb, lanUrl, lanClient) {
   // 重新开房：把上一次「已解散」的状态清干净，否则界面会立刻又退回入口页
   roomClosed = false;
   applyDevicePrivacy();   // 局域网设备不是房主：设备数 / IP 清单不显示
+  showHostHint('');       // 重新进房不留上一轮的「正在…」临时提示
   dissolving = false;
   peerBye = false;
   msgFailStreak = 0;
@@ -3059,6 +3132,7 @@ function dropGuestConn() {
   if (MODE === 'host' && isLanClient) { leaveLanRoom(); return; }
   peerBye = true;
   setGuestActions('connecting');  // 点了就先收起按钮，避免连点
+  setStatus('正在断开连接…');
   if (guestAutoTimer) { clearTimeout(guestAutoTimer); guestAutoTimer = null; }
   const c = guestConn;
   try { if (c && c.open) c.send('BYE'); } catch (e) {}
@@ -3073,6 +3147,7 @@ function dropGuestConn() {
 function resetToGate() {
   applyDevicePrivacy();       // 退出房间后一律按「其他设备」处理
   setGuestActions('connecting');  // 回起始页，按钮复位成全隐藏
+  setStatus('');              // 入口页不残留上一次的连接进度文字
   currentRoom = '';
   guestAutoTry = 0;
   guestGoneHits = 0;
@@ -3191,9 +3266,9 @@ function connectOnce(room) {
 // 连接期内的失败处理：留在当前页面，给出可操作的提示
 function failGuest(msg, tip) {
   setConn('off');
+  setGuestActions('failed');       // 先切状态，失败原因才不会被「已连接」规则丢掉
   setStatus(msg);
   showGuestTip((tip || '') + ' 可点上方「重连」再试一次。');
-  setGuestActions('failed');       // 已经停下不再重试，才给手动重连
   refreshReady();
   renderAll();
 }
@@ -3303,11 +3378,11 @@ function markGuestConnected() {
   guestGoneHits = 0;
   peerBye = false;
   setConn('p2p');
-  // 连接卡不显示任何状态文字：连上了只把「断开连接」按钮放出来
-  setStatus('');
+  // 连上后状态行整行收起，卡片只留「通道名 / 房间号 / 断开连接」
+  setGuestActions('connected');    // 连上后只留「断开连接」
+  setStatus('');                   // 顺手清掉连接阶段文字，掉线重连时不会翻旧账
   showGuestTip('');
   document.getElementById('wxTip').style.display = 'none';
-  setGuestActions('connected');    // 连上后只留「断开连接」
   refreshReady();
   renderAll();
 }
@@ -3683,16 +3758,17 @@ async function resumeHostFromWeb() {
     gateMsg('房间已经结束，点「创建房间」开一个新房间。', 'info');
     return;
   }
-  // 房间还在：用现有房间码直接回主界面，不重新 create（否则会换码）
+  // 房间还在：用现有房间码直接回主界面，不重新 create（否则会换码）。
+  // 刷新同样先在入口页把房主 Peer 等就绪，避免恢复后卡片上又挂「正在连接信令服务器…」。
   ROOM = info.room;
   API = HOST_API;
+  gateMsg('正在恢复房间…', 'info');
+  await prepareHostPeer(ROOM, 9000);
   hideGate();
   startHostUI(true, info.ip ? ('http://' + info.ip + ':' + info.port) : '');
 }
-// 创建房间：确认本机程序在跑，再由它当场开一个房间（房间码在这一刻才生成）
-// 按钮会转圈并至少停 1 秒：本机接口通常几十毫秒就回来了，一闪就进主界面
-// 反而让人以为「没点上」，给一个看得见的「正在创建」过程更踏实。
-const CREATE_MIN_MS = 1000;
+// 创建房间：确认本机程序在跑，再由它当场开一个房间（房间码在这一刻才生成）。
+// 不再人为拖时间：后端开好 + 外网直连房主 Peer 注册成功就立刻进主界面。
 async function gateCreate() {
   const btn = document.getElementById('gateCreateBtn');
   if (!btn || btn.disabled) return;
@@ -3702,7 +3778,6 @@ async function gateCreate() {
   btn.classList.add('busy');
   if (label) label.textContent = '正在创建房间…';
   if (sub) sub.textContent = '请稍候，正在本机开一个房间';
-  const t0 = Date.now();
   gateMsg('正在检查本机程序…', 'info');
   try {
     let info;
@@ -3719,9 +3794,11 @@ async function gateCreate() {
     if (!j || !j.ok || !j.room) throw new Error((j && j.msg) || '创建房间失败');
     ROOM = j.room;
     API = HOST_API;
-    // 等够 1 秒再进主界面：动画要看得见，而不是闪一下
-    const left = CREATE_MIN_MS - (Date.now() - t0);
-    if (left > 0) await sleep(left);
+    gateMsg('房间已创建，正在等待连接就绪…', 'info');
+    // 房间完全就绪 = 后端开好房间 + 外网直连的房主 Peer 已经在信令服务器上注册成功。
+    // 只等这个真实条件，不再人为拖 1 秒：信令快就快进，慢就老实等在入口页。
+    // 信令实在连不上（超时 9 秒）也不能把人卡在入口页，届时仍进房，局域网可正常使用。
+    if (P2P_ENABLED || SEED_MODE !== 'host') await prepareHostPeer(ROOM, 9000);
     gateClearMsg();
     hideGate();
     // 记下「在在线页当房主」这件事，刷新后自动回到同一个房间
