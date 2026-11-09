@@ -195,8 +195,8 @@ body.no-peer .send-btn,
 body.no-peer .folder-btn { cursor:not-allowed; }
 body.no-peer #textInput { cursor:not-allowed; }
 
-/* 「断开连接」是常驻操作，做成一眼能认出的胶囊（浅红底 + 细描边），
-   而不是一行看着像链接的红字；连接中 / 已连接 / 失败时都不隐藏。 */
+/* 「断开连接」做成一眼能认出的胶囊（浅红底 + 细描边），而不是一行像链接的红字。
+   按钮只在连上之后出现，显隐由 setGuestActions 控制。 */
 .pill.danger { color:#d93025; border-color:#f5c6c2; background:#fff6f5; }
 .pill.danger:hover { background:#fdecea; color:#b3261e; border-color:#eeaba5; }
 .pill.danger:active { background:#f9d9d6; }
@@ -574,8 +574,15 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   background:#0d0f11; box-shadow:0 1px 4px rgba(0,0,0,.1);
 }
 #screenVideo { width:100%; aspect-ratio:16/9; max-height:30vh; display:block; background:#000; object-fit:contain; }
+/* 移动端自动播放被拦时的手势兜底：盖在画面上，点一下再 play() */
+.screen-play {
+  position:absolute; left:0; right:0; top:0; bottom:34px; z-index:1;
+  border:none; background:rgba(0,0,0,.62); color:#fff; font-size:13px;
+  font-family:inherit; cursor:pointer; line-height:1.6;
+}
+.screen-play:hover { background:rgba(0,0,0,.75); }
 .screen-bar {
-  position:absolute; left:0; right:0; bottom:0; padding:7px 10px;
+  position:absolute; left:0; right:0; bottom:0; padding:7px 10px; z-index:2;
   display:flex; align-items:center; justify-content:space-between; gap:8px;
   background:linear-gradient(transparent, rgba(0,0,0,.72)); color:#fff; font-size:11.5px;
 }
@@ -589,6 +596,7 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 .screen-bar button:hover { background:rgba(255,255,255,.3); }
 .screen-bar button.stop { background:#e5484d; }
 .screen-bar button.stop:hover { background:#d13b40; }
+.screen-bar button.full { padding:5px 9px; font-size:14px; line-height:1; }
 
 /* ===== 窄屏适配 ===== */
 @media (max-width:640px) {
@@ -597,8 +605,10 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   .topbar-addr { display:none; }
   #p2pBanner { margin:8px 12px 0; padding:10px 12px; }
   #lanBanner { margin:8px 12px 0; padding:10px 12px; }
+  /* 手机屏幕小：去掉头像占的宽度，把共享画面放大到接近半屏 */
+  #screenPanel > .msg-avatar { display:none; }
   .screen-body { width:100%; }
-  #screenVideo { max-height:26vh; }
+  #screenVideo { max-height:42vh; }
   .chat-scroll { padding:14px 12px 6px; }
   .input-bar { padding:8px 12px calc(8px + env(safe-area-inset-bottom)); }
   .file-card { width:100%; }
@@ -861,7 +871,7 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
     <span class="p2p-label" id="connChannel">🌍 外网直连</span>
   </div>
   <div class="guest-room">房间号：<b id="linkRoom"></b></div>
-  <div class="guest-actions" id="guestActions">
+  <div class="guest-actions" id="guestActions" style="display:none;">
     <button class="pill ghost" id="guestConnBtn" onclick="guestConnect()" style="display:none;">重连</button>
     <button class="pill danger" id="guestDropBtn" onclick="dropGuestConn()">断开连接</button>
   </div>
@@ -885,10 +895,12 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
       <div id="screenPanel">
         <div class="msg-avatar">💻</div>
         <div class="screen-body">
-          <video id="screenVideo" autoplay playsinline muted></video>
+          <video id="screenVideo" autoplay playsinline webkit-playsinline x5-playsinline muted></video>
+          <button id="screenPlay" class="screen-play" style="display:none;">▶ 点击播放共享画面</button>
           <div class="screen-bar">
             <span class="lb"><i class="dot"></i><span id="screenLabel">桌面共享中</span></span>
             <button id="screenAudio" class="stop audio" onclick="toggleScreenAudio()" style="display:none;">开启声音</button>
+            <button id="screenFull" class="stop full" onclick="toggleScreenFull()" title="全屏查看">⛶</button>
             <button id="screenStop" class="stop" onclick="stopScreenShare()">停止共享</button>
           </div>
         </div>
@@ -1206,18 +1218,19 @@ function renderGuestStatus() {
   el.style.color = guestStatusOk ? '#0a8f4a' : '#3c7a57';
   el.style.fontWeight = guestStatusOk ? '600' : 'normal';
 }
-// 「断开连接」是一颗常驻胶囊：从进入房间那一刻起一直显示，连接中、自动重连、
-// 连接失败时也能点，用来取消连接 / 退出房间；没连上时干等却不能退出最难受。
-// 只有「重连」跟着状态走：彻底停下来不再自动重试了才出现。
+// 连接卡上的按钮跟着状态走，「断开连接」只在真正连上之后才出现：
+//   connecting —— 还没连上，按钮没意义，整排藏起来，只留连接进度文字
+//   connected  —— 只留一颗「断开连接」胶囊
+//   failed     —— 彻底停下来不再自动重试了，才给一个手动「重连」
 let dropBusy = false;   // 点过一次就开始收尾，避免连点重复执行
 function setGuestActions(state) {
   const box = document.getElementById('guestActions');
   const retry = document.getElementById('guestConnBtn');
   const drop = document.getElementById('guestDropBtn');
   if (!box || !retry || !drop) return;
-  box.style.display = 'flex';
+  box.style.display = state === 'connecting' ? 'none' : 'flex';
   retry.style.display = state === 'failed' ? '' : 'none';
-  drop.style.display = '';
+  drop.style.display = state === 'connected' ? '' : 'none';
   guestConnState = state;
   renderGuestStatus();
 }
@@ -2108,14 +2121,57 @@ function refreshScreenAudioBtn() {
   ab.style.display = '';
   ab.textContent = (v && v.muted) ? '开启声音' : '静音';
 }
+// 移动端（iOS Safari / 微信等内置浏览器）只肯播放「已经可见」且带 playsinline
+// 的 video：元素还在 display:none 里就 play()，会被直接拒绝，之后也不会自己恢复。
+// 所以先让面板显示出来、把属性补齐，再挂流、再播；失败还要给一个手势入口。
+function playScreenVideo(v) {
+  const btn = document.getElementById('screenPlay');
+  const hide = () => { if (btn) btn.style.display = 'none'; };
+  v.addEventListener('playing', hide, { once: true });
+  let p;
+  try { p = v.play(); } catch (e) { p = null; }
+  if (p && p.catch) p.catch(() => {
+    if (!btn) return;
+    btn.style.display = 'block';
+    btn.onclick = () => {
+      v.muted = true;          // 用户手势触发也要保持静音，iOS 才肯播
+      try {
+        const q = v.play();
+        if (q && q.catch) q.catch(() => {});
+      } catch (e) {}
+      hide();
+      refreshScreenAudioBtn();
+    };
+  });
+}
 function attachStream(stream, muted) {
   const v = document.getElementById('screenVideo');
-  v.srcObject = stream;
-  v.muted = !!muted;
-  const p = v.play();
-  if (p && p.catch) p.catch(() => {});
+  if (!v) return;
+  screenSlot.classList.add('show');       // 必须先可见，否则手机上 play() 直接失败
+  v.playsInline = true;
+  v.setAttribute('playsinline', '');
+  v.setAttribute('webkit-playsinline', '');
+  v.autoplay = true;
+  v.muted = !!muted;                      // 自动播放的前提是静音，声音由「开启声音」按钮放
+  try { v.srcObject = stream; }
+  catch (e) {
+    try { v.src = URL.createObjectURL(stream); } catch (e2) {}   // 老浏览器只认 src
+  }
+  playScreenVideo(v);
   screenHasAudio = !!(stream && stream.getAudioTracks && stream.getAudioTracks().length);
   refreshScreenAudioBtn();
+}
+// 手机屏幕小，共享画面看不清：点一下进全屏（iOS Safari 只有 video 级全屏）
+function toggleScreenFull() {
+  const v = document.getElementById('screenVideo');
+  if (!v) return;
+  try {
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+      if (document.exitFullscreen) document.exitFullscreen();
+      else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+    } else if (v.requestFullscreen) v.requestFullscreen();
+    else if (v.webkitEnterFullscreen) v.webkitEnterFullscreen();
+  } catch (e) {}
 }
 function toggleScreenAudio() {
   const v = document.getElementById('screenVideo');
@@ -2138,7 +2194,11 @@ function showScreenPanel(role) {
 }
 function hideScreenPanel() {
   screenSlot.classList.remove('show');
-  document.getElementById('screenVideo').srcObject = null;
+  const v = document.getElementById('screenVideo');
+  try { v.pause(); } catch (e) {}
+  try { v.srcObject = null; } catch (e) {}
+  const play = document.getElementById('screenPlay');
+  if (play) { play.style.display = 'none'; play.onclick = null; }
   screenHasAudio = false;
   refreshScreenAudioBtn();
 }
@@ -2170,8 +2230,9 @@ async function toggleScreenShare() {
   screenStream = stream;
   const track = stream.getVideoTracks()[0];
   if (track) track.addEventListener('ended', () => stopScreenShare());
-  attachStream(stream, true);
+  // 先把面板显示出来再挂流：手机浏览器不给隐藏的 video 自动播放
   showScreenPanel('send');
+  attachStream(stream, true);
   // 房主共享：房间里每台外网设备都送一路；访客共享：只有房主这一路
   const targets = MODE === 'host'
     ? hostList().map(x => x.conn.peer).filter(Boolean)
@@ -2212,7 +2273,8 @@ function acceptScreenCall(call) {
   // 同一时间只显示一路；有人换了共享源就切到新的那路
   if (recvCall) { try { recvCall.close(); } catch (e) {} }
   recvCall = call;
-  call.on('stream', stream => { attachStream(stream, true); showScreenPanel('recv'); });
+  // 接收端（尤其是手机）同理：先让视频可见，再挂流播放
+  call.on('stream', stream => { showScreenPanel('recv'); attachStream(stream, true); });
   call.on('close', () => {
     if (recvCall === call) recvCall = null;
     if (screenRole === 'recv') { screenRole = ''; hideScreenPanel(); }
@@ -3219,7 +3281,7 @@ function flushGuestRetry() {
 // 访客主动断开：通知对方、关连接、回到入口页
 function dropGuestConn() {
   if (MODE === 'host' && isLanClient) { leaveLanRoom(); return; }
-  if (dropBusy) return;            // 按钮常驻，连点只收尾一次
+  if (dropBusy) return;            // 防连点：只收尾一次
   dropBusy = true;
   peerBye = true;
   setStatus('正在断开连接…');
@@ -3240,7 +3302,7 @@ function dropGuestConn() {
 function resetToGate() {
   applyDevicePrivacy();       // 退出房间后一律按「其他设备」处理
   dropBusy = false;           // 允许下一次进房重新点「断开连接」
-  setGuestActions('connecting');  // 回起始页，状态复位（按钮本身常驻）
+  setGuestActions('connecting');  // 回起始页，按钮整排复位为隐藏
   setStatus('');              // 入口页不残留上一次的连接进度文字
   currentRoom = '';
   guestAutoTry = 0;
