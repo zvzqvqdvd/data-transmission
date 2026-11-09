@@ -114,15 +114,18 @@ body {
   font-size:11px; line-height:1.6; color:#a05a00;
   background:#fff8e8; border-radius:6px;
 }
-/* 房间说明：独立卡片，不属于外网也不属于局域网 */
+/* 房间说明：独立一块，但只放按钮；整段规则收进 showTtl() 弹窗 */
 .side-card.room-info {
-  flex-shrink:0; margin:10px 18px 0; padding:11px 14px;
-  background:#fff; border:1px solid #e2e6e9;
-  border-radius:12px; text-align:left;
+  flex-shrink:0; margin:10px 18px 0; padding:0;
+  background:transparent; border:0; border-radius:0; text-align:left;
 }
-.side-title { font-size:12px; font-weight:600; color:#41544a; margin-bottom:5px; }
-.room-info-text { font-size:11px; line-height:1.8; color:#7a858c; }
-.room-info .pill { margin-top:6px; font-size:11px; }
+.room-info-btn {
+  display:block; width:100%; padding:8px 12px;
+  font-size:11.5px; line-height:1.5; font-family:inherit;
+  background:#fff; border:1px solid #e2e6e9; border-radius:10px;
+  color:#41544a; cursor:pointer;
+}
+.room-info-btn:hover { border-color:#07C160; color:#0a8f4a; }
 .member-row {
   display:inline-flex; align-items:center; gap:6px;
   font-size:11px; color:#3c5a4a;
@@ -677,6 +680,10 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   .side-info::-webkit-scrollbar { width:4px; }
   .side-info::-webkit-scrollbar-thumb { background:#cfd8d3; border-radius:2px; }
   .side-info > * { margin:0 !important; padding:10px 12px !important; }
+  /* 房间说明那一块本身只是容器，别被上面这条套出白底内边距 */
+  .side-info > .room-info {
+    padding:0 !important; background:transparent !important; border:0 !important;
+  }
   .side-info .p2p-line { gap:6px; }
   .side-info .pill { font-size:11px; padding:3px 8px; white-space:nowrap; }
   .side-info #roomCode { font-size:14px; letter-spacing:1px; padding:3px 8px; }
@@ -786,11 +793,9 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   </div>
 </div>
 
-<!-- 房间说明单独一块，不塞进外网/局域网任何一张卡片 -->
+<!-- 房间说明单独一块：只在侧栏放一个按钮，规则点开弹窗才看 -->
 <div class="side-card room-info" id="roomInfoCard">
-  <div class="side-title">🕒 房间说明</div>
-  <div class="room-info-text">临时房间：关闭房主页面、连续 12 小时无通信或房主手动销毁时自动销毁；聊天记录与接收文件一并删除，不做保留。</div>
-  <button class="pill ghost" onclick="showTtl()">查看完整说明</button>
+  <button class="room-info-btn" onclick="showTtl()">🕒 房间说明</button>
 </div>
 
 <div id="guestGate" style="display:block;">
@@ -997,6 +1002,9 @@ let lastRev = null;
 let pollTimer = null;        // 房主端的 /messages 轮询
 let roomClosed = false;      // 房主已解散房间，页面停在入口页
 let dissolving = false;      // 正在请求解散，避免轮询抢先提示
+let msgFailStreak = 0;       // /messages 连续失败次数（程序被关掉 / 网络断了）
+let guestGoneHits = 0;       // 访客端连续几次收到「房间不存在」，两次才判定真没了
+let guestGoneHandled = false;// 避免 ROOM_CLOSED 重复消息把起始页刷两遍
 let pendingFiles = [];
 let pcPeer = null;
 // 房主端：一个房间可以同时连多台外网设备，所以连接是一组而不是一条
@@ -1602,15 +1610,18 @@ function startPolling() {
 async function loadMessages() {
   if (MODE !== 'host' || roomClosed) return;
   try {
-    const r=await fetch(API + '/messages');
+    // no-store：房间状态必须每次都问后端，绝不能让浏览器缓存一份「房间还在」
+    const r = await fetch(API + '/messages', { cache: 'no-store' });
     // 房主换了房间码或解散了房间：这台设备的凭证失效，回入口页重新输码
     if (r.status === 403) {
       let d0 = {};
       try { d0 = await r.json(); } catch (e) {}
-      if (d0.code === 'NEED_JOIN') onNeedJoin();
-      return;
+      if (d0.code === 'NEED_JOIN') { msgFailStreak = 0; onNeedJoin(); return; }
+      throw new Error('forbidden');   // 其他 403 也算一次异常，攒够次数就回起始页
     }
-    const d=await r.json();
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    msgFailStreak = 0;               // 拿到后端的明确回应，失败计数清零
     if (!d.ok) return;
     // 本机 client_url.txt 改了：这份页面（尤其是线上那份）跟着换成新地址
     if (d.client_url) applyClientUrl(d.client_url);
@@ -1619,6 +1630,11 @@ async function loadMessages() {
       if (!dissolving) {
         onRoomClosed('房间已销毁，房间码已作废。点「创建房间」可以重新开一个。');
       }
+      return;
+    }
+    // 后端换了房间码（别处新建/销毁过房间），本机这份页面持有的码已过期
+    if (d.room && ROOM && d.room !== ROOM) {
+      onRoomClosed('房间码已经变更，请重新创建或加入房间。');
       return;
     }
     // 有人进来 / 离开都要立刻反映到输入区能不能用
@@ -1650,7 +1666,15 @@ async function loadMessages() {
     serverMsgs = d.messages || [];
     renderAll();
     relayNew(serverMsgs);
-  } catch(e) {}
+  } catch (e) {
+    // 以前这里是空 catch：程序被关掉 / 网络断开时页面会永远停在聊天主界面。
+    // 连续 3 次（约 6 秒）问不到后端就认定房间已不可达，退回起始页。
+    msgFailStreak++;
+    if (msgFailStreak >= 3) {
+      msgFailStreak = 0;
+      onRoomClosed('连接不到本机程序，房间可能已经关闭，已返回起始页。请确认程序仍在运行后重新创建或加入房间。');
+    }
+  }
 }
 
 // 房主是这个房间的中继：后端里出现的新消息，要转给所有外网设备
@@ -1744,7 +1768,7 @@ function handleData(data, ctx) {
         const w = JSON.parse(data.slice(8));
         if (w && w.name) {
           myName = w.name;
-          setStatus('已进入房间', true);
+          // 连接状态行保持「已连接」，不再写「已进入房间」这类重复提示
           renderAll();
         }
       } catch (e) {}
@@ -1771,9 +1795,7 @@ function handleData(data, ctx) {
       try {
         const p = JSON.parse(data.slice(6));
         guestNames = (p && p.names) || [];
-        if (MODE === 'guest' && guestNames.length && canP2P()) {
-          setStatus('已进入房间 · 共 ' + guestNames.length + ' 台设备', true);
-        }
+        // 人数由右侧外网卡片 / 局域网卡片各自显示，这里不报合并总数
         renderAll();
       } catch (e) {}
       return;
@@ -1831,15 +1853,7 @@ function handleData(data, ctx) {
     }
     // 房主解散了房间：房间码已作废，访客直接回入口页，不要自动重连
     if (data === 'ROOM_CLOSED') {
-      if (MODE !== 'guest') return;
-      peerBye = true;
-      if (guestAutoTimer) { clearTimeout(guestAutoTimer); guestAutoTimer = null; }
-      try { if (guestConn) guestConn.close(); } catch (e) {}
-      try { if (guestPeer) guestPeer.destroy(); } catch (e) {}
-      guestConn = null; guestPeer = null;
-      stopScreenShare();
-      resetToGate();
-      gateMsg('房主已销毁房间，房间码已作废。请联系房主获取新的房间码或邀请链接。', 'info');
+      guestRoomGone('房主已销毁房间，房间码已作废。请联系房主获取新的房间码或邀请链接。');
       return;
     }
     // 对端主动点了「断开」：房主端只收掉这一条连接（房间还在）；
@@ -2458,10 +2472,14 @@ function onRoomClosed(tip) {
   stopPolling();
   peerBye = true;
   stopScreenShare();                 // 必须先做：里面要用 hostConns 广播 SCREEN_END
-  // 先通知每一台外网设备再断开，否则对方会当成掉线而自动重连
+  // 先通知每一台外网设备再断开，否则对方会当成掉线而自动重连。
+  // 补发一次 + 把断开从 120ms 放宽到 600ms：DataConnection 在弱网下
+  // 首包可能丢失，以前偶有访客收不到通知、一直停在聊天主页面。
   for (const [, e] of [...hostConns.entries()]) {
-    try { e.conn.send('ROOM_CLOSED'); } catch (err) {}
-    setTimeout(() => { try { e.conn.close(); } catch (err) {} }, 120);
+    const c = e.conn;
+    try { c.send('ROOM_CLOSED'); } catch (err) {}
+    setTimeout(() => { try { c.send('ROOM_CLOSED'); } catch (err) {} }, 180);
+    setTimeout(() => { try { c.close(); } catch (err) {} }, 600);
   }
   hostConns.clear();
   recvBuf.clear();
@@ -2483,6 +2501,11 @@ function onRoomClosed(tip) {
   setConn('off');
   refreshReady();
   renderAll();
+  ROOM = '';
+  // 回到起始页就把「自动回房」的痕迹清掉：?host=1 / ?room= / 本地存的房间码，
+  // 否则刷新又会偷偷开一个新房间或连回已经作废的旧码
+  try { history.replaceState(null, '', location.pathname); } catch (e) {}
+  try { localStorage.removeItem('lanshare_room_code'); } catch (e) {}
   showGate();
   // 局域网设备只有「输入房间码」这一步，不能回到「创建房间」
   if (isLanClient || JOIN_REQUIRED) showLanGate();
@@ -2508,6 +2531,8 @@ function onNeedJoin() {
   setConn('off');
   refreshReady();
   renderAll();
+  try { history.replaceState(null, '', location.pathname); } catch (e) {}
+  try { localStorage.removeItem('lanshare_room_code'); } catch (e) {}
   showLanGate();
   gateMsg('房间码已经变了（房主新建或销毁了房间），请重新输入。', 'info');
 }
@@ -2798,6 +2823,9 @@ function startHostUI(fromWeb, lanUrl, lanClient) {
   roomClosed = false;
   dissolving = false;
   peerBye = false;
+  msgFailStreak = 0;
+  guestGoneHits = 0;
+  guestGoneHandled = false;
   lastRev = null;
   serverMsgs = [];
   localMsgs = [];
@@ -2864,6 +2892,7 @@ function initHost() {
 // existing: 入口页已经探通连接时传入 {peer, conn}，直接复用，避免重复握手
 function initGuest(room, existing) {
   MODE = 'guest';
+  guestGoneHandled = false;   // 重新进房，允许下一次「房间已不存在」再触发收尾
   document.getElementById('p2pBanner').style.display = 'none';
   document.getElementById('adminBtn').style.display = 'none';
   document.getElementById('serverUrl').style.display = 'none';
@@ -2889,7 +2918,10 @@ function initGuest(room, existing) {
     currentRoom = room;
     guestPeer = existing.peer;
     guestConn = existing.conn;
-    wireGuestPeer(guestPeer, room, (m, t) => failGuest(m, t));
+    wireGuestPeer(guestPeer, room, (m, t, r, g) => {
+      if (g) guestRoomGone('房间已不存在或房主页面已关闭，已返回起始页。');
+      else failGuest(m, t);
+    });
     wireGuestConn(guestConn, (m, t) => failGuest(m, t));
     // 入口页那一轮已经把 HELLO 发完了，房主也回过了 WELCOME：
     // 名字直接用探活时拿到的，别再发一遍 HELLO（房主那边会当成重复消息）
@@ -2902,7 +2934,6 @@ function initGuest(room, existing) {
       try { handleData(d, null); } catch (e) {}
     }
     markGuestConnected();
-    if (myName) setStatus('已进入房间', true);
     renderAll();
     return;
   }
@@ -2921,13 +2952,19 @@ function guestConnect(roomArg) {
   guestRetry = 0;
   peerBye = false;
   guestAutoTry = 0;
+  guestGoneHits = 0;
   if (guestAutoTimer) { clearTimeout(guestAutoTimer); guestAutoTimer = null; }
   showGuestTip('');
   connectOnce(room);
 }
 // 断线自动重连：最多 3 次，间隔递增；主动断开（peerBye）不重连
 function scheduleGuestRetry() {
-  if (guestAutoTimer || guestAutoTry >= 3) return false;
+  if (guestAutoTimer) return true;       // 已经有重连在排队，别重复
+  if (guestAutoTry >= 3) {
+    // 多次重连都找不到房主：房间多半已经关了，别留在聊天主页面
+    guestRoomGone('与房间的连接中断后多次重连都没有找到房主，房间可能已关闭，已返回起始页。');
+    return true;
+  }
   guestAutoTry++;
   const wait = 1500 * guestAutoTry;
   guestAutoTimer = setTimeout(() => {
@@ -2954,6 +2991,7 @@ function dropGuestConn() {
 function resetToGate() {
   currentRoom = '';
   guestAutoTry = 0;
+  guestGoneHits = 0;
   pullInFlight.clear(); pullQueue.length = 0;   // 清掉没完成的下载任务
   serverMsgs = []; localMsgs = [];
   seenIds = new Set();
@@ -2974,6 +3012,22 @@ function resetToGate() {
   // 回到入口页就顺手把信令长连接重新预热好，再次加入时不用从零握手
   setTimeout(prewarmSignal, 300);
 }
+// 房间确认已不存在（房主销毁、房主页面关掉、房间码作废、多次重连失败）：
+// 统一清干净连接并回到起始页，绝不让页面停在聊天主界面。
+// guestGoneHandled 用来吃掉房主补发的重复 ROOM_CLOSED。
+function guestRoomGone(tip) {
+  if (MODE !== 'guest' || guestGoneHandled) return;
+  guestGoneHandled = true;
+  peerBye = true;                    // 关连接时别再触发自动重连
+  if (guestTimer) { clearTimeout(guestTimer); guestTimer = null; }
+  if (guestAutoTimer) { clearTimeout(guestAutoTimer); guestAutoTimer = null; }
+  try { if (guestConn) guestConn.close(); } catch (e) {}
+  try { if (guestPeer) guestPeer.destroy(); } catch (e) {}
+  guestConn = null; guestPeer = null;
+  stopScreenShare();
+  resetToGate();                    // 里面把 guestGoneHandled 放开
+  if (tip) gateMsg(tip, 'info');
+}
 // 访客被房主断开 / 拒绝：清掉连接、退回入口页，并说明原因。
 // peerBye 必须置上，否则 conn 的 close 事件会把它当成掉线、自动重连回来。
 function guestReturnToGate(msg) {
@@ -2991,13 +3045,27 @@ function connectOnce(room) {
   try { if (guestConn) guestConn.close(); } catch (e) {}
   guestConn = null;
   setGuestProgress(-1);
-  const fail = (msg, tip, retry) => {
+  const fail = (msg, tip, retry, gone) => {
     if (guestTimer) clearTimeout(guestTimer);
+    // 信令说「这个房主 Peer 不存在」= 房间没了。但房主刷新页面时
+    // Peer ID 也会短暂注销，所以连着两次确认不到才判定真的关闭。
+    guestGoneHits = gone ? guestGoneHits + 1 : 0;
+    if (guestGoneHits >= 2) {
+      guestRoomGone('房间已不存在或房主页面已关闭，已返回起始页。可重新输入房间码加入。');
+      return;
+    }
     if (retry && guestRetry < 1) {
       guestRetry++;
       setStatus(msg + '，正在自动重试…');
       showGuestTip(tip);
       setTimeout(() => connectOnce(room), 1500);
+    } else if (gone) {
+      // 第一次没找到房间：几秒后再确认一次，不留在主页面干等
+      setStatus('正在确认房间是否还在…');
+      showGuestTip('房主页面可能正在刷新，稍等几秒再确认一次。');
+      setTimeout(() => {
+        if (MODE === 'guest' && !peerBye && currentRoom) connectOnce(room);
+      }, 2500);
     } else {
       failGuest(msg, tip);
     }
@@ -3013,12 +3081,12 @@ function connectOnce(room) {
   guestPeer = p;
   // 同一条信令连接可能被重试复用：事件只挂一次，回调走可替换的钩子，
   // 免得重试几次就挂上几份监听、报一个错弹好几次提示
-  p.__failHook = { fn: (m, t, r) => fail(m, t, r) };
+  p.__failHook = { fn: (m, t, r, g) => fail(m, t, r, g) };
   if (!p.__wired) {
     p.__wired = true;
-    wireGuestPeer(p, room, (m, t, r) => {
+    wireGuestPeer(p, room, (m, t, r, g) => {
       const h = p.__failHook;
-      if (h && h.fn) h.fn(m, t, r);
+      if (h && h.fn) h.fn(m, t, r, g);
     });
   }
   const peer = p;
@@ -3051,7 +3119,8 @@ function wireGuestPeer(peer, room, onFail) {
   peer.on('error', err => {
     const t = (err && err.type) || 'unknown';
     if (t === 'peer-unavailable') {
-      onFail('未找到对方设备', '请确认对端程序正在运行、页面保持打开，且房间码一致（对端若刚点过「新建房间」，需重新获取房间码）。', false);
+      // 信令明确找不到 pc-<房间码>：房间可能已销毁/换码，交给上层确认后回起始页
+      onFail('未找到对方设备', '正在确认房间是否还在…', true, true);
     } else if (t === 'network' || t === 'server-error' || t === 'socket-error') {
       onFail('信令服务器连不上', '当前网络访问 PeerJS 公共信令服务器失败，可切换 WiFi / 蜂窝网络，或用系统浏览器打开。', true);
     } else {
@@ -3144,6 +3213,7 @@ function markGuestConnected() {
   if (guestTimer) { clearTimeout(guestTimer); guestTimer = null; }
   if (guestAutoTimer) { clearTimeout(guestAutoTimer); guestAutoTimer = null; }
   guestAutoTry = 0;
+  guestGoneHits = 0;
   peerBye = false;
   setConn('p2p');
   setStatus('✅ 已连接，可以互发文字与文件', true);
@@ -3510,6 +3580,32 @@ function showLanGate() {
     setTimeout(() => { try { box.focus(); box.select(); } catch (e) {} }, 80);
   }
 }
+// 在线页当房主后刷新：先问本机程序房间还在不在。
+// 以前这里直接 gateCreate()，房间已经销毁时会偷偷开一个新房间又回到主页面，
+// 用户根本看不到「房间已结束」的起始页；房间还在时也会白白换一次房间码。
+async function resumeHostFromWeb() {
+  let info;
+  try {
+    info = await fetchHostInfo();
+  } catch (e) {
+    try { history.replaceState(null, '', location.pathname); } catch (e2) {}
+    gateShowChoices();
+    gateMsg('没有检测到本机程序，请先在电脑上运行「数据传输」再点创建房间。', 'err');
+    return;
+  }
+  if (info.client_url) applyClientUrl(info.client_url);
+  if (!info.has_room || !info.room) {
+    try { history.replaceState(null, '', location.pathname); } catch (e2) {}
+    gateShowChoices();
+    gateMsg('房间已经结束，点「创建房间」开一个新房间。', 'info');
+    return;
+  }
+  // 房间还在：用现有房间码直接回主界面，不重新 create（否则会换码）
+  ROOM = info.room;
+  API = HOST_API;
+  hideGate();
+  startHostUI(true, info.ip ? ('http://' + info.ip + ':' + info.port) : '');
+}
 // 创建房间：确认本机程序在跑，再由它当场开一个房间（房间码在这一刻才生成）
 // 按钮会转圈并至少停 1 秒：本机接口通常几十毫秒就回来了，一闪就进主界面
 // 反而让人以为「没点上」，给一个看得见的「正在创建」过程更踏实。
@@ -3653,11 +3749,15 @@ if (MODE === 'host') {
     hideGate();
     initGuest(invited);
   } else if (q.get('host') === '1') {
-    gateCreate();
+    // 在线页房主刷新：先确认房间还在，别一刷新就偷偷开个新房间
+    resumeHostFromWeb();
   } else if (saved.length >= 4) {
-    // 刚刚进过房间，刷新页面后自动回去，不用重新输码
-    hideGate();
-    initGuest(saved);
+    // 上次进过的房间可能已经被销毁：先探活，进得去才回主页面；
+    // 连不上就留在起始页说明原因，别停在「正在连接」的空白主界面
+    const box = document.getElementById('gateRoom');
+    if (box) box.value = saved;
+    gateMsg('正在检查上次加入的房间…', 'info');
+    setTimeout(() => { try { gateJoin(); } catch (e) {} }, 60);
   } else {
     // 留在入口页：趁用户输房间码的这几秒，先把到信令服务器的长连接建好，
     // 点「加入房间」时只需要「呼叫对方」这一步（省 0.3～1.5 秒）
