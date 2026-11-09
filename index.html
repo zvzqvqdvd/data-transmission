@@ -195,8 +195,11 @@ body.no-peer .send-btn,
 body.no-peer .folder-btn { cursor:not-allowed; }
 body.no-peer #textInput { cursor:not-allowed; }
 
-.pill.danger { color:#d93025; border-color:transparent; background:transparent; }
-.pill.danger:hover { background:#fdecea; color:#b3261e; border-color:#f5c6c2; }
+/* 「断开连接」是常驻操作，做成一眼能认出的胶囊（浅红底 + 细描边），
+   而不是一行看着像链接的红字；连接中 / 已连接 / 失败时都不隐藏。 */
+.pill.danger { color:#d93025; border-color:#f5c6c2; background:#fff6f5; }
+.pill.danger:hover { background:#fdecea; color:#b3261e; border-color:#eeaba5; }
+.pill.danger:active { background:#f9d9d6; }
 .pill:disabled { opacity:.45; cursor:not-allowed; }
 
 /* ===== 访客：连接状态条（与房主横幅同一套视觉） ===== */
@@ -858,8 +861,8 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
     <span class="p2p-label" id="connChannel">🌍 外网直连</span>
   </div>
   <div class="guest-room">房间号：<b id="linkRoom"></b></div>
-  <div class="guest-actions" id="guestActions" style="display:none;">
-    <button class="pill ghost" id="guestConnBtn" onclick="guestConnect()">重连</button>
+  <div class="guest-actions" id="guestActions">
+    <button class="pill ghost" id="guestConnBtn" onclick="guestConnect()" style="display:none;">重连</button>
     <button class="pill danger" id="guestDropBtn" onclick="dropGuestConn()">断开连接</button>
   </div>
   <div id="guestStatus"></div>
@@ -1125,12 +1128,18 @@ function guestPeerId() {
 // 入口页一打开就把这条长连接建好，用户输房间码的这几秒正好用来握手，
 // 点「加入房间」时只剩「呼叫对方设备」一步。
 let warmPeer = null;
+let warmPeerAt = 0;
+const WARM_MAX_AGE = 90000;   // 入口页停留太久，预热连接也会被信令服务器单方面断开
 function prewarmSignal() {
   if (MODE !== 'guest' || JOIN_REQUIRED) return null;   // 局域网设备走 HTTP，用不上
-  if (warmPeer && !warmPeer.destroyed) return warmPeer;
+  if (warmPeer && !warmPeer.destroyed && Date.now() - warmPeerAt < WARM_MAX_AGE) return warmPeer;
+  // 太旧的先收掉重建，否则点「加入」时会拿到一条已经废掉的长连接
+  if (warmPeer) { try { warmPeer.destroy(); } catch (e) {} }
   warmPeer = null;
+  warmPeerAt = 0;
   try {
     warmPeer = new Peer(guestPeerId(), peerOpts());
+    warmPeerAt = Date.now();
   } catch (e) {
     warmPeer = null;
     return null;                 // 预热失败不影响正常流程，真正连接时会再建
@@ -1140,6 +1149,7 @@ function prewarmSignal() {
   p.on('error', () => {
     if (warmPeer === p) {
       warmPeer = null;
+      warmPeerAt = 0;
       try { p.destroy(); } catch (e) {}
     }
   });
@@ -1150,9 +1160,15 @@ function prewarmSignal() {
 }
 // 取走预热好的连接（只取一次）；已经废掉的返回 null
 function takeWarmPeer() {
-  const p = warmPeer;
+  const p = warmPeer, age = Date.now() - warmPeerAt;
   warmPeer = null;
+  warmPeerAt = 0;
   if (!p || p.destroyed) return null;
+  // 放了很久却还没注册上信令：这条多半已经卡死，别拿去用
+  if (age > WARM_MAX_AGE && !p.open) {
+    try { p.destroy(); } catch (e) {}
+    return null;
+  }
   return p;
 }
 // 房主端临时提示（连接中、正在接收文件、信令错误等）单独一行，
@@ -1190,18 +1206,18 @@ function renderGuestStatus() {
   el.style.color = guestStatusOk ? '#0a8f4a' : '#3c7a57';
   el.style.fontWeight = guestStatusOk ? '600' : 'normal';
 }
-// 访客卡片上的按钮跟着连接状态走：
-//   connecting —— 还没连上，「重连 / 断开连接」都没意义，整排藏起来，只留连接进度文字
-//   connected  —— 只留「断开连接」（重连按钮已经没用），状态文字收起
-//   failed     —— 彻底停下来没在重试了，才给一个手动「重连」
+// 「断开连接」是一颗常驻胶囊：从进入房间那一刻起一直显示，连接中、自动重连、
+// 连接失败时也能点，用来取消连接 / 退出房间；没连上时干等却不能退出最难受。
+// 只有「重连」跟着状态走：彻底停下来不再自动重试了才出现。
+let dropBusy = false;   // 点过一次就开始收尾，避免连点重复执行
 function setGuestActions(state) {
   const box = document.getElementById('guestActions');
   const retry = document.getElementById('guestConnBtn');
   const drop = document.getElementById('guestDropBtn');
   if (!box || !retry || !drop) return;
-  box.style.display = state === 'connecting' ? 'none' : 'flex';
+  box.style.display = 'flex';
   retry.style.display = state === 'failed' ? '' : 'none';
-  drop.style.display = state === 'connected' ? '' : 'none';
+  drop.style.display = '';
   guestConnState = state;
   renderGuestStatus();
 }
@@ -1216,6 +1232,7 @@ function showOtherDeviceCard(label, room) {
 }
 // 局域网设备没有 P2P 连接可断：点「断开连接」就是退出房间、回输码页
 function leaveLanRoom() {
+  dropBusy = false;
   setGuestActions('connecting');
   stopPolling();
   document.getElementById('guestGate').style.display = 'none';
@@ -2709,7 +2726,8 @@ function prepareHostPeer(roomCode, timeoutMs) {
         if (t === 'unavailable-id' && tries < 3 && Date.now() < deadline) {
           tries++;
           kill();
-          setTimeout(build, 700 * tries);
+          // 信令释放旧 ID 一般几百毫秒就够，别让用户创建房间时干等
+          setTimeout(build, 350 * tries);
           return;
         }
         finish(null);
@@ -3149,17 +3167,33 @@ function guestConnect(roomArg) {
   showGuestTip('');
   connectOnce(room);
 }
-// 断线自动重连：最多 3 次，间隔递增；主动断开（peerBye）不重连
+// 断线重连：信令长连接还活着时，重开一条数据通道通常只要几百毫秒，
+// 所以第一次不等，直接连；信令也断了才按 0.6s / 1.5s / 3s 退避，最多 4 次。
+// 主动断开（peerBye）一律不重连。
+const RETRY_WAITS = [0, 600, 1500, 3000];
+function signalAlive() {
+  return !!(guestPeer && !guestPeer.destroyed && guestPeer.open);
+}
+// 判定这条信令已经没救了：连同还没被取走的预热连接一起收掉，
+// 下一轮 connectOnce 会老老实实新建一条，不再复用半死的 socket。
+function dropGuestSignal() {
+  try { if (guestPeer) guestPeer.destroy(); } catch (e) {}
+  guestPeer = null;
+  const w = takeWarmPeer();
+  if (w) { try { w.destroy(); } catch (e) {} }
+}
 function scheduleGuestRetry() {
   if (guestAutoTimer) return true;       // 已经有重连在排队，别重复
-  if (guestAutoTry >= 3) {
+  if (guestAutoTry >= RETRY_WAITS.length) {
     // 多次重连都找不到房主：房间多半已经关了，别留在聊天主页面
     guestRoomGone('与房间的连接中断后多次重连都没有找到房主，房间可能已关闭，已返回起始页。');
     return true;
   }
+  // 信令还在就立刻重连；否则按退避表等，且给一次「刚断线马上恢复」的机会
+  const wait = signalAlive() ? 0 : RETRY_WAITS[guestAutoTry];
   guestAutoTry++;
   setGuestActions('connecting');  // 自动重连期间仍算「连接中」
-  const wait = 1500 * guestAutoTry;
+  if (guestTimer) { clearTimeout(guestTimer); guestTimer = null; }
   guestAutoTimer = setTimeout(() => {
     guestAutoTimer = null;
     if (peerBye || MODE !== 'guest' || !currentRoom) return;
@@ -3167,12 +3201,31 @@ function scheduleGuestRetry() {
   }, wait);
   return true;
 }
+// 网络恢复 / 页面切回前台：退避定时器还没走完也立刻插队重试一次，
+// 不然手机解锁后还要干等好几秒才恢复聊天。
+function flushGuestRetry() {
+  if (MODE !== 'guest' || peerBye || !currentRoom) return false;
+  if (guestConnState === 'connected' && guestConn && guestConn.open) return false;
+  if (guestAutoTimer) { clearTimeout(guestAutoTimer); guestAutoTimer = null; }
+  if (guestTimer) { clearTimeout(guestTimer); guestTimer = null; }
+  try {
+    if (guestConn) { guestConn.__ignoreClose = true; guestConn.close(); }
+  } catch (e) {}
+  guestConn = null;
+  guestAutoTry = 0;             // 网络刚恢复，重新给满重试机会
+  connectOnce(currentRoom);
+  return true;
+}
 // 访客主动断开：通知对方、关连接、回到入口页
 function dropGuestConn() {
   if (MODE === 'host' && isLanClient) { leaveLanRoom(); return; }
+  if (dropBusy) return;            // 按钮常驻，连点只收尾一次
+  dropBusy = true;
   peerBye = true;
-  setGuestActions('connecting');  // 点了就先收起按钮，避免连点
   setStatus('正在断开连接…');
+  // 连接中点「断开连接」也要把探活/重连/超时定时器全停掉，
+  // 否则退回起始页后 16 秒的超时回调还会回来改状态。
+  if (guestTimer) { clearTimeout(guestTimer); guestTimer = null; }
   if (guestAutoTimer) { clearTimeout(guestAutoTimer); guestAutoTimer = null; }
   const c = guestConn;
   try { if (c && c.open) c.send('BYE'); } catch (e) {}
@@ -3186,7 +3239,8 @@ function dropGuestConn() {
 }
 function resetToGate() {
   applyDevicePrivacy();       // 退出房间后一律按「其他设备」处理
-  setGuestActions('connecting');  // 回起始页，按钮复位成全隐藏
+  dropBusy = false;           // 允许下一次进房重新点「断开连接」
+  setGuestActions('connecting');  // 回起始页，状态复位（按钮本身常驻）
   setStatus('');              // 入口页不残留上一次的连接进度文字
   currentRoom = '';
   guestAutoTry = 0;
@@ -3240,13 +3294,26 @@ function guestReturnToGate(msg) {
   if (msg) gateMsg(msg, 'err');
 }
 function connectOnce(room) {
-  if (guestTimer) clearTimeout(guestTimer);
-  try { if (guestConn) guestConn.close(); } catch (e) {}
+  if (guestTimer) { clearTimeout(guestTimer); guestTimer = null; }
+  // 这条旧通道是自己关的，别让它的 close 事件又触发一轮重连
+  try {
+    if (guestConn) { guestConn.__ignoreClose = true; guestConn.close(); }
+  } catch (e) {}
   guestConn = null;
   setGuestActions('connecting');   // 自动重试期间同样算「连接中」
   setGuestProgress(-1);
   const fail = (msg, tip, retry, gone) => {
-    if (guestTimer) clearTimeout(guestTimer);
+    // 已经主动断开 / 退回起始页了，迟到的超时或信令错误一律不再处理
+    if (peerBye || MODE !== 'guest' || !currentRoom) return;
+    if (guestTimer) { clearTimeout(guestTimer); guestTimer = null; }
+    // 失败时把还没打通的通道自己收掉：它的 close 事件不能再触发另一轮重连，
+    // 更不能因为「还没收到 WELCOME」把人直接踢回起始页，短重试才有机会生效。
+    // 已经打通的通道不在这里动，交给 close 事件走正常重连。
+    if (guestConn && !guestConn.open) {
+      guestConn.__ignoreClose = true;
+      try { guestConn.close(); } catch (e) {}
+      guestConn = null;
+    }
     // 信令说「这个房主 Peer 不存在」= 房间没了。但房主刷新页面时
     // Peer ID 也会短暂注销，所以连着两次确认不到才判定真的关闭。
     guestGoneHits = gone ? guestGoneHits + 1 : 0;
@@ -3254,11 +3321,14 @@ function connectOnce(room) {
       guestRoomGone('房间已不存在或房主页面已关闭，已返回起始页。可重新输入房间码加入。');
       return;
     }
-    if (retry && guestRetry < 1) {
+    if (retry && guestRetry < 2) {
       guestRetry++;
       setStatus(msg + '，正在自动重试…');
       showGuestTip(tip);
-      setTimeout(() => connectOnce(room), 1500);
+      // 连不上时别反复复用同一条半死的信令 socket（网络切换后它常常看着还 open，
+      // 其实已经收不到任何东西），换一条新的再试，成功率明显更高。
+      dropGuestSignal();
+      setTimeout(() => connectOnce(room), 400);
     } else if (gone) {
       // 第一次没找到房间：几秒后再确认一次，不留在主页面干等
       setStatus('正在确认房间是否还在…');
@@ -3291,17 +3361,31 @@ function connectOnce(room) {
   }
   const peer = p;
   const call = () => {
+    if (peerBye || MODE !== 'guest' || !currentRoom) return;
+    // 信令断线重连成功后也会再报一次 open：这时已经连着了就别再呼叫一遍，
+    // 否则房主那边会多出一条重复连接
+    if (guestConnState === 'connected' && guestConn && guestConn.open) return;
     setStatus('② 已连到信令，正在呼叫对方设备…');
+    // 复用已有信令时，入口页那条没用上的预热连接顺手收掉，别白占一条 WebSocket
+    const spare = takeWarmPeer();
+    if (spare && spare !== peer) { try { spare.destroy(); } catch (e) {} }
     guestConn = peer.connect('pc-' + room, { reliable: true, metadata: identityMeta() });
     wireGuestConn(guestConn, (msg, tip) => fail(msg, tip, true), () => {
-      if (guestTimer) clearTimeout(guestTimer);
+      if (guestTimer) { clearTimeout(guestTimer); guestTimer = null; }
       markGuestConnected();
     });
   };
   setStatus(peer.open ? '② 已连到信令，正在呼叫对方设备…' : '① 正在连接信令服务器…');
-  guestTimer = setTimeout(() => fail('连接超时', '未能与对方设备建立直连，多为 NAT 限制或信令不通。建议两台设备连同一 WiFi 用局域网模式，或点右上角 🌐 配一台 TURN 中继服务器。', true), 16000);
+  // 10 秒还没连上就判超时：以前 16 秒干等太久，早一点换条信令重试更省时间
+  guestTimer = setTimeout(() => fail('连接超时', '未能与对方设备建立直连，多为 NAT 限制或信令不通。建议两台设备连同一 WiFi 用局域网模式，或点右上角 🌐 配一台 TURN 中继服务器。', true), 10000);
+  // 同一条信令连接只挂一次 open 监听，靠可替换钩子调用「最新一次」的 call：
+  // 以前每次重试都新挂一个，open 一来会同时呼叫好几次，房主那边多出一堆幽灵连接
+  peer.__callHook = call;
+  if (!peer.__callWired) {
+    peer.__callWired = true;
+    peer.on('open', () => { const h = peer.__callHook; if (h) h(); });
+  }
   if (peer.open) call();
-  else peer.on('open', call);
 }
 // 连接期内的失败处理：留在当前页面，给出可操作的提示
 function failGuest(msg, tip) {
@@ -3391,7 +3475,7 @@ function wireGuestConn(conn, onFail, onOpen) {
   });
   conn.on('data', d => handleData(d, null));
   conn.on('close', () => {
-    if (peerBye) return;                    // 主动断开的，不自动恢复
+    if (conn.__ignoreClose || peerBye) return;  // 自己换掉 / 主动断开的，不自动恢复
     // 还没拿到 WELCOME 就被关掉：房主那句 WELCOME 没发过来（页面关了、网络断了），
     // 这种情况不自动重连，退回入口页让用户自己决定
     if (!myName) {
@@ -3409,7 +3493,10 @@ function wireGuestConn(conn, onFail, onOpen) {
       setStatus('连接已断开，可点「重连」再试');
     }
   });
-  conn.on('error', e => onFail('数据通道错误', String(e && e.message ? e.message : e)));
+  conn.on('error', e => {
+    if (conn.__ignoreClose) return;
+    onFail('数据通道错误', String(e && e.message ? e.message : e));
+  });
 }
 function markGuestConnected() {
   if (guestTimer) { clearTimeout(guestTimer); guestTimer = null; }
@@ -3688,12 +3775,12 @@ function probeRoom(room, timeoutMs) {
       if (!warm.open) {
         // 预热的那条还在握手（公共信令服务器在部分网络下要好几秒，属于正常）：
         // 就等它，别重开——重开等于把已经走了大半的握手推倒重来。
-        // 只有明显卡死（超过正常握手时间一倍）才换新的。
+        // 只有明显卡死（超过正常握手时间一倍）才换新的，4.5 秒足够分辨。
         fallbackTimer = setTimeout(() => {
           if (done || warm.open) return;
           try { warm.destroy(); } catch (e) {}
           if (peer === warm) fresh();
-        }, 6000);
+        }, 4500);
       }
     } else {
       fresh();
@@ -3724,6 +3811,8 @@ function gateShowJoin() {
   document.getElementById('gateChoices').style.display = 'none';
   document.getElementById('gateJoin').style.display = 'block';
   gateClearMsg();
+  // 若上一条预热连接失败过，趁用户输码再补一条，别让「加入」时从零握手
+  prewarmSignal();
   const box = document.getElementById('gateRoom');
   try { box.value = localStorage.getItem('lanshare_last_room') || ''; } catch (e) {}
   setTimeout(() => box.focus(), 60);
@@ -3997,6 +4086,9 @@ if (MODE === 'host') {
   else initHost();
 } else {
   showGate();
+  // 在线页所有入口都先预热信令：邀请链接、恢复上次房间、手动输码都用得上。
+  // 以前只有「停在入口页」那一个分支预热，邀请链接进来反而要等完整一轮握手。
+  prewarmSignal();
   const q = new URLSearchParams(location.search);
   const clean = s => String(s || '').toUpperCase().replace(/[^A-Z2-9]/g, '');
   const invited = clean(q.get('room'));
@@ -4016,12 +4108,16 @@ if (MODE === 'host') {
     if (box) box.value = saved;
     gateMsg('正在检查上次加入的房间…', 'info');
     setTimeout(() => { try { gateJoin(); } catch (e) {} }, 60);
-  } else {
-    // 留在入口页：趁用户输房间码的这几秒，先把到信令服务器的长连接建好，
-    // 点「加入房间」时只需要「呼叫对方」这一步（省 0.3～1.5 秒）
-    setTimeout(prewarmSignal, 200);
   }
+  // 没有邀请码、也没有上次房间：停在入口页等输码，预热已经在上面建好了，
+  // 用户输码的这几秒正好用来握手（省 0.3～1.5 秒）。
 }
+// 网络恢复 / 手机解锁回到前台：退避定时器还没走完也立刻再试一次，
+// 不用干等好几秒才恢复聊天。flushGuestRetry 自带房主/访客与连接状态守卫。
+window.addEventListener('online', () => { try { flushGuestRetry(); } catch (e) {} });
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) { try { flushGuestRetry(); } catch (e) {} }
+});
 
 // 房间生命周期：临时房间（页面关闭 / 12 小时无通信 / 手动销毁），没有可设的选项了
 </script>
