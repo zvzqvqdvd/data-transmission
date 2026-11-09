@@ -98,15 +98,20 @@ body {
 #inviteHint { font-size:11px; color:#6b8a78; margin-top:6px; }
 #hostHint { font-size:11.5px; color:#0a8f4a; margin-top:5px; }
 /* 房主端成员清单：谁走外网、谁走局域网，各自 IP */
-#memberList { margin-top:7px; display:flex; flex-direction:column; gap:3px; }
-.member-row {
-  display:flex; align-items:center; justify-content:center; gap:6px;
-  font-size:11.5px; color:#3c5a4a; flex-wrap:wrap;
+#memberList {
+  margin-top:7px; display:none; flex-wrap:wrap;
+  justify-content:center; gap:6px;
 }
-.member-tag { padding:1px 6px; border-radius:4px; font-size:10.5px; flex-shrink:0; }
+.member-row {
+  display:inline-flex; align-items:center; gap:6px;
+  font-size:11px; color:#3c5a4a;
+  background:rgba(255,255,255,.72); border:1px solid #d6ecdf;
+  border-radius:14px; padding:2px 9px;
+}
+.member-tag { padding:1px 6px; border-radius:4px; font-size:10px; flex-shrink:0; }
 .member-tag.wan { background:#e8f0fe; color:#1565c0; }
 .member-tag.lan { background:#e6f7ed; color:#0a8f4a; }
-.member-row b { font-weight:600; color:#22352b; }
+.member-name { font-weight:600; color:#22352b; }
 .member-ip { font-family:ui-monospace,Menlo,Consolas,monospace; color:#6b8a78; }
 #qrBox { padding:10px 0 2px; }
 #qrImg {
@@ -221,9 +226,11 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   font-size:15px; font-weight:600; color:#fff;
   margin-right:10px; background:#b9c2c9; user-select:none;
 }
+/* 匿名头像：所有设备同一个中性剪影，不显示昵称、不带姓名首字 */
+.msg-avatar.anon { background:#cdd8e0; color:#5f7486; }
+.msg-avatar.anon svg { display:block; }
 .msg-row.self .msg-avatar { margin-right:0; margin-left:10px; }
 .msg-side { flex:1; min-width:0; }
-.msg-sender { font-size:11px; color:#9aa0a6; margin-bottom:5px; }
 .bubble {
   background:#fff; padding:9px 13px; font-size:15px; line-height:1.55;
   word-break:break-word; white-space:pre-wrap; border-radius:10px;
@@ -247,7 +254,7 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   transition:box-shadow .18s, transform .18s;
 }
 .file-card:hover { box-shadow:0 4px 12px rgba(0,0,0,.1); transform:translateY(-1px); }
-/* 卡片右侧的独立下载按钮：点它才落盘，点卡片本体是预览 */
+/* 卡片右侧的独立下载按钮：点它才下载，卡片本体不响应 */
 .file-dl {
   flex-shrink:0; margin-left:auto; width:30px; height:30px;
   border-radius:50%; border:1px solid #bfe6cf; background:#e9f8ef;
@@ -1401,15 +1408,15 @@ function updateHostRoomHint() {
   const lan = lanPeers;
   renderMembers();     // 顺便刷新「谁走外网、谁走局域网」的清单
   if (!p2p && !lan) {
-    el.textContent = '✅ 房间已开，还没有其他设备加入（你现在发的消息会留在房间里，别人进来就能看到）';
+    el.textContent = '房间已开 · 等待设备加入';
     return;
   }
   const parts = [];
   if (p2p) parts.push('外网 ' + p2p + ' 台');
   if (lan) parts.push('局域网 ' + lan + ' 台');
   const relayN = hostList().filter(x => x.relay).length;
-  el.textContent = '✅ 房间里现在有 ' + (p2p + lan) + ' 台设备（' + parts.join(' + ') + '）' +
-    (relayN ? '，其中 ' + relayN + ' 台走中继' : '') + '，大家都能收到消息';
+  el.textContent = '已连接 ' + (p2p + lan) + ' 台设备 · ' + parts.join(' / ') +
+    (relayN ? ' · ' + relayN + ' 台走中继' : '');
 }
 
 // ===== 消息列表：房主端 = 服务端消息 + 本地 P2P 消息；访客端 = 纯本地 =====
@@ -1458,13 +1465,16 @@ function fileUrl(msg) {
 
 // ===== 消息渲染：微信式左右分栏 =====
 // 自己发的靠右、绿色气泡；别人的靠左。判定依据：消息的发送者名字 == 本机在房间里的名字
-const AVATAR_COLORS = ['#07C160','#0aa571','#1296db','#f0a020','#e65100','#8e6cd9','#d4576e','#5b8def'];
-function avatarColor(name) {
-  let h = 0; const s = String(name || '?');
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
-  return AVATAR_COLORS[h % AVATAR_COLORS.length];
-}
 function isSelfMsg(msg) { return !!myName && !!msg.ip && msg.ip === myName; }
+
+// 统一匿名头像：所有设备同一个中性剪影，不带昵称首字、不泄露身份
+const ANON_AVATAR =
+  '<div class="msg-avatar anon" title="匿名设备" aria-label="匿名设备">' +
+    '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true">' +
+      '<circle cx="12" cy="8" r="3.7"/>' +
+      '<path d="M4.6 20.3c0-3.9 3.3-6.6 7.4-6.6s7.4 2.7 7.4 6.6a.8.8 0 0 1-.8.8H5.4a.8.8 0 0 1-.8-.8z"/>' +
+    '</svg>' +
+  '</div>';
 
 function renderMsg(msg) {
   const self = isSelfMsg(msg);
@@ -1472,38 +1482,47 @@ function renderMsg(msg) {
   if (msg.type==='text') {
     bubble = '<div class="bubble'+(self?' me':'')+'">'+esc(msg.content)+'</div>';
   } else {
-    // 文件消息：统一一张文件卡片，不做在线预览；访客靠 ⬇ 按钮按需拉取
-    const dl = fileUrl(msg);
+    // 文件消息：统一一张文件卡片，不做在线预览；点右侧 ⬇ 才下载
     const nm = esc(msg.name), sz = esc(msg.size || '');
     const ext=String(msg.name||'').split('.').pop().toUpperCase().slice(0,4);
-    const pullable = MODE === 'guest' && msg.id;
-    if (pullable) {
-      bubble = '<div class="file-card" title="点右侧 ⬇ 下载">'+
-        '<div class="file-icon">'+esc(ext)+'</div>'+
-        '<div class="file-info"><div class="file-name">'+nm+'</div>'+
-        '<div class="file-size">'+sz+'</div></div>'+
+    const inner = '<div class="file-icon">'+esc(ext)+'</div>'+
+      '<div class="file-info"><div class="file-name">'+nm+'</div>'+
+      '<div class="file-size">'+sz+'</div></div>';
+    if (MODE === 'guest' && msg.id) {
+      // 访客：文件在房主磁盘上，点 ⬇ 走 FILE_PULL 按需拉取
+      bubble = '<div class="file-card" title="点右侧 ⬇ 下载">'+ inner +
         '<button class="file-dl" title="下载到本机" onclick="pullFile(\'' + esc(msg.id) + '\')">⬇</button></div>';
     } else {
-      bubble = '<a class="file-card" href="'+esc(dl)+'" download="'+nm+'" title="下载">'+
-        '<div class="file-icon">'+esc(ext)+'</div>'+
-        '<div class="file-info"><div class="file-name">'+nm+'</div>'+
-        '<div class="file-size">'+sz+'</div></div></a>';
+      // 房主 / 局域网：文件就在本机后端，点 ⬇ 直接下载
+      bubble = '<div class="file-card" title="点右侧 ⬇ 下载">'+ inner +
+        '<button class="file-dl" title="下载到本机" data-name="'+esc(msg.name)+'" ' +
+        'onclick="downloadLocal(this)">⬇</button></div>';
     }
   }
-  // 头像：名字首字 + 按名字稳定取色；自己发的名字不重复显示（气泡已经靠右）
-  const name = self ? myName : (msg.ip || '');
-  const avatar = '<div class="msg-avatar" style="background:'+avatarColor(name)+'">'+
-    esc((name || '？').slice(0, 1).toUpperCase())+'</div>';
-  const sender = (!self && msg.ip) ? '<div class="msg-sender">'+esc(msg.ip)+'</div>' : '';
   // 访客文件卡片正下方的下载进度条（平时隐藏，下载中由 txRender 填充）
   const bar = (msg.type === 'file' && MODE === 'guest' && msg.id)
     ? '<div class="pull-wrap" id="pullwrap-' + esc(msg.id) + '">'+
       '<div class="pull-bar"><i></i></div><div class="pull-text"></div></div>'
     : '';
-  const side = '<div class="msg-side">'+sender+bubble+bar+
+  // 不显示昵称，只保留发送时间
+  const side = '<div class="msg-side">'+bubble+bar+
     '<div class="msg-time">'+esc(msg.time)+'</div></div>';
-  return '<div class="msg-row'+(self?' self':'')+'">'+
-    (self ? side+avatar : avatar+side)+'</div>';
+  // 统一 DOM 顺序「头像 + 内容」：自己的行由 CSS row-reverse 镜像，
+  // 头像自然贴在气泡右侧，不会再跑到屏幕另一头
+  return '<div class="msg-row'+(self?' self':'')+'">'+ ANON_AVATAR + side +'</div>';
+}
+
+// 房主 / 局域网端：文件在本机后端，点 ⬇ 触发浏览器下载
+function downloadLocal(btn) {
+  const name = btn.getAttribute('data-name') || '';
+  if (!name) return;
+  const a = document.createElement('a');
+  a.href = fileUrl({ name: name });
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  toast('开始下载：' + name);
 }
 
 function stopPolling() {
@@ -1658,7 +1677,7 @@ function handleData(data, ctx) {
         const w = JSON.parse(data.slice(8));
         if (w && w.name) {
           myName = w.name;
-          setStatus('✅ 已进入房间，你的名字是「' + w.name + '」', true);
+          setStatus('已进入房间', true);
           renderAll();
         }
       } catch (e) {}
@@ -1686,7 +1705,7 @@ function handleData(data, ctx) {
         const p = JSON.parse(data.slice(6));
         guestNames = (p && p.names) || [];
         if (MODE === 'guest' && guestNames.length && canP2P()) {
-          setStatus('✅ 已在房间里（' + guestNames.length + ' 台设备）', true);
+          setStatus('已进入房间 · 共 ' + guestNames.length + ' 台设备', true);
         }
         renderAll();
       } catch (e) {}
@@ -2194,7 +2213,7 @@ function setupInvite(room) {
   }
   document.getElementById('inviteLink').href = url;
   document.getElementById('inviteBox').style.display = 'inline-flex';
-  document.getElementById('inviteHint').textContent = '其他设备打开链接或扫码即可连接，无需手输房间码';
+  document.getElementById('inviteHint').textContent = '其他设备扫码或打开链接即可加入，无需手输房间码';
   makeQR(url);
 }
 function toggleQR() {
@@ -2434,7 +2453,7 @@ function startHostPeer(roomCode) {
   pcPeer.on('open', () => {
     hostRetry = 0;
     setConn('wait');
-    showHostHint('✅ 房间已开，等待其他设备加入（刷新页面房间码不变）');
+    showHostHint('房间已开 · 等待设备加入');
     refreshReady();
   });
   pcPeer.on('connection', c => {
@@ -2473,8 +2492,8 @@ function startHostPeer(roomCode) {
       hostConns.delete(id);
       recvBuf.delete(id);
       if (wasIn) {
-        broadcast('NOTE:' + JSON.stringify({ t: n + ' 离开了房间' }));
-        toast(n + ' 离开了房间');
+        broadcast('NOTE:' + JSON.stringify({ t: '有设备离开了房间' }));
+        toast('有设备离开了房间');
       }
       sendPeers();
       refreshReady();
@@ -2548,8 +2567,8 @@ function registerGuest(ctx, nick, dev) {
   ctx.name = name;
   try { e.conn.send('WELCOME:' + JSON.stringify({ name: name, proto: PROTOCOL })); } catch (err) {}
   pushHistoryTo(e.conn);
-  broadcast('NOTE:' + JSON.stringify({ t: name + ' 加入了房间' }), name);
-  toast(name + ' 加入了房间');
+  broadcast('NOTE:' + JSON.stringify({ t: '有设备加入了房间' }), name);
+  toast('有设备加入了房间');
   sendPeers();
   refreshReady();
   renderAll();
@@ -2666,32 +2685,30 @@ function reportDevices() {
   } catch (e) {}
 }
 
-// 房主端成员清单：每条写明走的是外网还是局域网，以及各自的 IP
+// 房间设备清单：不显示昵称，用「设备 N」+ 通道 + IP 的紧凑芯片
 function renderMembers() {
   const box = document.getElementById('memberList');
   if (!box || MODE !== 'host' || isLanClient || roomClosed) return;
   const rows = [];
   for (const x of hostList()) {
-    if (!x.name) continue;
-    rows.push({ name: x.name, channel: 'p2p', ip: x.ip || '', relay: !!x.relay });
+    rows.push({ channel: 'p2p', ip: x.ip || '', relay: !!x.relay });
   }
   for (const d of roomDevices) {
-    if (!d || !d.name) continue;
-    // 外网设备以本地连接为准：后端那份是上报过去的，断开时会慢一个轮询周期，
-    // 直接信它会出现「设备已经走了但清单里还留着」的幽灵条目
+    if (!d) continue;
+    // 外网设备以本地连接为准：后端那份是上报过去的，断开时会慢一个轮询周期
     if (d.channel === 'p2p') continue;
-    rows.push({ name: d.name, channel: 'lan', ip: d.ip || '' });
+    rows.push({ channel: 'lan', ip: d.ip || '', relay: false });
   }
   if (!rows.length) { box.innerHTML = ''; box.style.display = 'none'; return; }
-  box.style.display = 'block';
-  box.innerHTML = rows.map(r =>
-    '<div class="member-row">' +
+  box.style.display = 'flex';
+  box.innerHTML = rows.map((r, i) =>
+    '<span class="member-row">' +
       '<span class="member-tag ' + (r.channel === 'p2p' ? 'wan' : 'lan') + '">' +
         (r.channel === 'p2p' ? '外网' : '局域网') + '</span>' +
       (r.relay ? '<span class="member-tag relay">中继</span>' : '') +
-      '<b>' + esc(r.name) + '</b>' +
+      '<span class="member-name">设备 ' + (i + 1) + '</span>' +
       '<span class="member-ip">' + esc(r.ip || 'IP 未知') + '</span>' +
-    '</div>').join('');
+    '</span>').join('');
 }
 // 只断开某一条连接；byPeer=true 表示是对方主动发 BYE 过来的
 function dropHostConnById(id, byPeer) {
@@ -2702,7 +2719,7 @@ function dropHostConnById(id, byPeer) {
   if (!byPeer) { try { e.conn.send('BYE'); } catch (err) {} }
   setTimeout(() => { try { e.conn.close(); } catch (err) {} }, 80);
   stopScreenShare();
-  broadcast('NOTE:' + JSON.stringify({ t: (e.name || '有设备') + ' 离开了房间' }));
+  broadcast('NOTE:' + JSON.stringify({ t: '有设备离开了房间' }));
   sendPeers();
   refreshReady();
   renderAll();
@@ -2822,7 +2839,7 @@ function initGuest(room, existing) {
       try { handleData(d, null); } catch (e) {}
     }
     markGuestConnected();
-    if (myName) setStatus('✅ 已进入房间，你的名字是「' + myName + '」', true);
+    if (myName) setStatus('已进入房间', true);
     renderAll();
     return;
   }
@@ -3262,6 +3279,9 @@ async function sendAll() {
       }
     }
     txEnd();
+    // 发送完成的项立刻从列表清掉，不再留一栏「已完成」等手动清空；
+    // 失败的项保留，方便点右侧 ↻ 重试
+    pendingFiles = pendingFiles.filter(x => x.status !== 'done');
     renderPending();
     if (!failed) {
       toast(done > 1 ? ('已发送 ' + done + ' 个文件') : '发送完成');
@@ -3314,7 +3334,7 @@ async function loadDevices() {
     for (const x of (d.p2p || [])) {
       items.push(
         '<li><div class="dev-info">' +
-        '<div class="dev-name">' + esc(x.name) +
+        '<div class="dev-name">设备' +
         ' <span class="badge wan">外网</span><span class="badge online">在线</span></div>' +
         '<div class="dev-ip">IP: ' + esc(x.ip || 'IP 未知（NAT 后拿不到）') + ' · 点对点直连</div>' +
         '</div></li>'
@@ -3326,7 +3346,7 @@ async function loadDevices() {
       else if (!x.joined) badge += '<span class="badge idle">未进房间</span>';
       items.push(
         '<li><div class="dev-info">' +
-        '<div class="dev-name">' + esc(x.name) + ' ' + badge + '</div>' +
+        '<div class="dev-name">设备 ' + badge + '</div>' +
         '<div class="dev-ip">IP: ' + esc(x.ip) + ' · 最后活动: ' + esc(x.last || '') + '</div>' +
         '</div></li>'
       );
