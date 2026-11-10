@@ -196,7 +196,6 @@ body:not(.is-room-owner) #connStatus { display:none !important; }
   line-height:0; box-shadow:0 1px 5px rgba(0,0,0,.08);
 }
 #lanQrImg canvas { width:80px; height:80px; }
-.qr-tip { font-size:11px; color:#6b8a78; margin-top:7px; }
 
 /* ===== 等待对方加入（房间已开、还没人进来时唯一的提示） ===== */
 #waitBar {
@@ -1862,8 +1861,10 @@ function startPolling() {
 async function loadMessages() {
   if (MODE !== 'host' || roomClosed) return;
   try {
-    // no-store：房间状态必须每次都问后端，绝不能让浏览器缓存一份「房间还在」
-    const r = await fetch(API + '/messages', { cache: 'no-store' });
+    // no-store：房间状态必须每次都问后端，绝不能让浏览器缓存一份「房间还在」。
+    // 带上上次的内容指纹：没变化时后端只回状态字段，不重复发整包聊天记录
+    const r = await fetch(API + '/messages' + (lastRev ? '?rev=' + encodeURIComponent(lastRev) : ''),
+                          { cache: 'no-store' });
     // 房主换了房间码或解散了房间：这台设备的凭证失效，回入口页重新输码
     if (r.status === 403) {
       let d0 = {};
@@ -2665,7 +2666,7 @@ function toggleQR() {
 // ===== 房间码由本机程序持有，页面只负责显示 =====
 async function fetchHostInfo() {
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), 4000);
+  const timer = setTimeout(() => ctl.abort(), 2500);   // 本机请求毫秒级返回；2.5s 还不通就是程序没开，早点失败别让人干等
   try {
     const r = await fetch(HOST_API + '/api/host', { cache: 'no-store', signal: ctl.signal });
     if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -4241,16 +4242,19 @@ async function gateCreate() {
     : ['检查本机程序', '创建房间']);
   gateProgress(0, 8);
   try {
-    let info;
+    // 检查本机程序 + 开房间并行发出：两次都是本机请求，串行纯属白等；
+    // 程序没开时两个请求一起失败，直接给出同一条提示
+    let info, r;
     try {
-      info = await fetchHostInfo();     // 程序没开就直接失败，别白开一个房间
+      [info, r] = await Promise.all([
+        fetchHostInfo(),
+        fetch(HOST_API + '/api/room/create', { method: 'POST' }),
+      ]);
     } catch (e) {
       throw new Error('没有检测到本机程序。请先在这台设备上双击运行「数据传输」程序，再回来点「创建房间」。');
     }
     // 邀请链接以本机程序当前的 client_url.txt 为准（在线页那份是导出时的旧值）
     applyClientUrl(info.client_url);
-    gateProgress(1, 40);
-    const r = await fetch(HOST_API + '/api/room/create', { method: 'POST' });
     const j = await r.json();
     if (!j || !j.ok || !j.room) throw new Error((j && j.msg) || '创建房间失败');
     ROOM = j.room;
@@ -4258,8 +4262,8 @@ async function gateCreate() {
     // 房间完全就绪 = 后端开好房间 + 外网直连的房主 Peer 已经在信令服务器上注册成功。
     // 只等这个真实条件，不再人为拖时间：信令快就快进，慢就老实等在入口页。
     // 信令实在连不上（超时 9 秒）也不能把人卡在入口页，届时仍进房，局域网可正常使用。
+    gateProgress(needP2P ? 2 : 1, needP2P ? 68 : 80);
     if (needP2P) {
-      gateProgress(2, 68);
       gateProgCreep(92);
       await prepareHostPeer(ROOM, 9000);
     }
