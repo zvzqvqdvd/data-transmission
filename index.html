@@ -774,6 +774,12 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   .side-info #qrImg canvas, .side-info #lanQrImg canvas { max-width:100%; height:auto; }
   #waitBar { flex-direction:column; align-items:flex-start; gap:4px; }
 }
+
+/* ===== 二维码模式：卡片内容整体切换，二维码与返回按钮居中 ===== */
+#lanBanner #lanQrBox, #p2pBanner #qrBox { text-align:center; padding:6px 0 2px; }
+#lanBanner .qr-back, #p2pBanner .qr-back {
+  display:block; margin:12px auto 0; padding:5px 30px; white-space:nowrap;
+}
 </style>
 </head>
 <body>
@@ -785,7 +791,7 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
     <div class="gate-sub">任意设备之间互发文字、文件与桌面</div>
 
     <div class="gate-list" id="gateChoices">
-      <button class="gate-btn primary" id="gateCreateBtn" onclick="gateCreate()">
+      <button class="gate-btn primary" id="gateCreateBtn" onclick="agreeThen(gateCreate)">
         <span class="gate-ico">＋</span>
         <span class="gate-txt">
           <b>创建房间</b>
@@ -857,13 +863,14 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
     <button class="pill" onclick="copyLanUrl()">复制访问地址</button>
     <button class="pill" onclick="toggleLanQR()">二维码</button>
   </div>
-  <div class="chan-state">
+  <div class="chan-state" id="lanState">
     <div class="chan-count" id="lanCount">局域网已连接 0 台设备</div>
     <div class="chan-list" id="lanMembers"></div>
   </div>
+  <!-- 二维码模式：点「二维码」时卡片内容整体切换成这一块，点「返回」还原 -->
   <div id="lanQrBox" style="display:none;">
     <div id="lanQrImg"></div>
-    <div class="qr-tip">扫码即可加入，房间码已带在链接里</div>
+    <button class="pill qr-back" onclick="toggleLanQR()">返回</button>
   </div>
 </div>
 
@@ -878,13 +885,14 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   </div>
   <div id="inviteHint"></div>
   <div id="hostNotice" class="side-notice" style="display:none;"></div>
-  <div class="chan-state">
+  <div class="chan-state" id="p2pState">
     <div class="chan-count" id="hostHint">外网已连接 0 台设备</div>
     <div class="chan-list" id="memberList"></div>
   </div>
+  <!-- 二维码模式：同局域网卡，卡片内容整体切换 -->
   <div id="qrBox" style="display:none;">
     <div id="qrImg"></div>
-    <div class="qr-tip">扫码即可直接加入，房间码已带在链接里</div>
+    <button class="pill qr-back" onclick="toggleQR()">返回</button>
   </div>
 </div>
 
@@ -2616,6 +2624,8 @@ function toggleLanQR() {
     makeQR(url, 'lanQrImg');
     box.dataset.url = url;
   }
+  // 卡片内切换：二维码模式隐藏地址框/按钮/设备数，只留标题 + 二维码 + 返回
+  setShown(['lanUrl', 'lanActions', 'lanState'], !show);
   box.style.display = show ? 'block' : 'none';
 }
 function setupInvite(room) {
@@ -2639,7 +2649,19 @@ function copyInviteUrl() {
 }
 function toggleQR() {
   const b = document.getElementById('qrBox');
-  b.style.display = b.style.display === 'none' ? 'block' : 'none';
+  const show = !b.style.display || b.style.display === 'none';
+  // 卡片内切换：同局域网卡。p2pUrl 平时靠内联 display 控制，还原时要放回 block
+  setShown(['p2pUrl', 'inviteActions', 'inviteHint', 'hostNotice', 'p2pState'], !show, { p2pUrl: 'block' });
+  b.style.display = show ? 'block' : 'none';
+}
+// 批量显隐：restore 指定显示回来时的 display 值（缺省恢复 CSS 默认 ''）
+function setShown(ids, visible, restore) {
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.style.display = visible && restore && restore[id] != null ? restore[id]
+                     : visible ? '' : 'none';
+  });
 }
 // ===== 房间码由本机程序持有，页面只负责显示 =====
 async function fetchHostInfo() {
@@ -4016,20 +4038,19 @@ function hideGate() {
   document.getElementById('hostView').style.display = 'flex';
 }
 // ===== 免责声明：点「创建房间 / 加入房间」先弹条款 =====
-// 条款滚到底部后「阅读并同意」才会亮；同意后本次页面内的创建 / 加入不再重复弹，
-// 刷新 / 重开页面要重新同意（不写 localStorage，不长期记住）。
+// 每次点击入口页这两枚按钮都要重新弹（用户 11-10 定稿：不同意任何静默放行）；
+// 输码页的「连接」属于同一次加入动作（刚同意过），不重复弹。
 // 房间内的新建 / 销毁房间不弹声明。
-let agreeAccepted = false;
-let pendingAgreeAction = null;   // 同意后要继续的动作（gateCreate / gateJoin / gateShowJoin）
+let agreeAccepted = false;       // 本次页面内同意过至少一次；刷新 / 重开页面要重新同意
+let pendingAgreeAction = null;   // 同意后要继续的动作（gateCreate / gateShowJoin / 邀请链接直进）
 let agreePollTimer = null;       // 弹窗打开期间兜底轮询：某些环境 scroll 事件不可靠（手机惯性滚动也会丢）
-// 统一入口：fn 前先确保看过声明，本会话同意过就静默放行
+// 统一入口：无论本会话有没有同意过，每次都先弹声明
 function agreeThen(fn) {
-  if (agreeAccepted) { fn(); return; }
   pendingAgreeAction = fn;
   showDisclaimer();
 }
 const AGREE_HINT_WAIT = '请先滑动阅读完下方全部条款';
-const AGREE_HINT_DONE = '已读完全部条款，可以同意了';
+const AGREE_HINT_DONE = '点击阅读并同意 即可继续使用';
 function onDisclaimerScroll() {
   const body = document.getElementById('disclaimerBody');
   const btn = document.getElementById('agreeAcceptBtn');
@@ -4356,9 +4377,7 @@ if (MODE === 'host') {
   try { saved = clean(localStorage.getItem('lanshare_room_code')); } catch (e) {}
   if (invited) {
     // 邀请链接：按访客身份连过去。加入房间同样要先过免责声明（没同意过就先弹）
-    if (agreeAccepted) { hideGate(); initGuest(invited); }
-    else agreeThen(() => { hideGate(); initGuest(invited); });
-  } else if (q.get('host') === '1') {
+    agreeThen(() => { hideGate(); initGuest(invited); });  } else if (q.get('host') === '1') {
     // 在线页房主刷新：先确认房间还在，别一刷新就偷偷开个新房间
     resumeHostFromWeb();
   } else if (saved.length >= 4) {
