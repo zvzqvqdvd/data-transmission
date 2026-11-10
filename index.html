@@ -2627,15 +2627,16 @@ function lanQrUrl() {
 }
 function toggleLanQR() {
   const box = document.getElementById('lanQrBox');
-  const show = !box.style.display || box.style.display === 'none';
+  // 判断依据只用显式的 'none'：打开时内联写 'flex'，关闭写 'none'。
+  // 不能写 ''（空字符串读回来会被当成隐藏态，点「返回」会变成重新打开，永远关不上）
+  const show = box.style.display === 'none';
   const url = lanQrUrl();
   // 换过房间码就要重画，否则扫出来还是旧码
   if (show && box.dataset.url !== url) {
     makeQR(url, 'lanQrImg');
     box.dataset.url = url;
   }
-  // 浮层盖在卡片上：卡片自身尺寸不变，不用显隐其他内容
-  box.style.display = show ? '' : 'none';
+  box.style.display = show ? 'flex' : 'none';
 }
 function setupInvite(room) {
   const base = inviteBase();
@@ -2658,9 +2659,8 @@ function copyInviteUrl() {
 }
 function toggleQR() {
   const b = document.getElementById('qrBox');
-  const show = !b.style.display || b.style.display === 'none';
-  // 浮层盖在卡片上：卡片自身尺寸不变
-  b.style.display = show ? '' : 'none';
+  const show = b.style.display === 'none';
+  b.style.display = show ? 'flex' : 'none';
 }
 // ===== 房间码由本机程序持有，页面只负责显示 =====
 async function fetchHostInfo() {
