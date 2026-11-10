@@ -1138,6 +1138,10 @@ const PROTOCOL = 4;          // v4：连接元数据带上昵称与设备 ID，�
 // 在线页（GitHub 上那份）写的是导出那一刻的值，只能靠运行时从本机接口拿最新值覆盖，
 // 见 applyClientUrl()。所以改 client_url.txt 不用重新导出、也不用重新上传静态页。
 let CLIENT_URL = 'https://zvzqvqdvd.github.io/data-transmission/';
+// 页面源文件指纹（由程序按 web/ 源文件现算，在线页 = 导出那一刻的值）。
+// 邀请链接 / 二维码 / 复制的访问地址都带 ?v=<指纹>：手机浏览器对页面缓存
+// 非常顽固，URL 不变就拿旧缓存页连新程序，轻则变慢、重则连不上。
+const PAGE_BUILD = '8f6af3752f';
 let lastRev = null;
 let pollTimer = null;        // 房主端的 /messages 轮询
 let roomClosed = false;      // 房主已解散房间，页面停在入口页
@@ -2526,8 +2530,10 @@ function inviteBase() {
 function inviteUrl(room) {
   const base = inviteBase();
   if (!base) return '';
-  // 只带房间码：v 参数没人读，纯粹白占二维码容量
-  return base + '?room=' + encodeURIComponent(room);
+  // v=页面指纹：手机浏览器（微信 X5 / iOS Safari）缓存很顽固，程序更新后
+  // URL 不变就会拿旧缓存页连新程序——旧页轻则没有连接提速、重则直接连不上。
+  // 指纹随页面内容变化，URL 一变缓存即失效；页面本身不读这个参数。
+  return base + '?room=' + encodeURIComponent(room) + '&v=' + PAGE_BUILD;
 }
 function makeQR(text, boxId) {
   try {
@@ -2594,9 +2600,12 @@ function setupLanBanner(url) {
 }
 
 function copyLanUrl() {
-  const text = lanShareUrl || LAN_URL || (location.protocol + '//' + location.host);
+  const base = (lanShareUrl || LAN_URL || (location.protocol + '//' + location.host))
+    .replace(/[?#].*$/, '');
+  // 复制的地址带 ?v= 指纹：程序热更新后，别人浏览器里缓存的旧页面连不上新程序
+  const text = base + '?v=' + PAGE_BUILD;
   copyText(text, ok => {
-    const short = text.replace(/^https?:\/\//, '');
+    const short = base.replace(/^https?:\/\//, '');
     if (ok) toast('已复制局域网地址：' + short);
     else toast('复制失败，请手动记下：' + short);
   });
@@ -2624,7 +2633,7 @@ function lanQrUrl() {
   let base = (lanShareUrl || LAN_URL || (location.protocol + '//' + location.host))
     .replace(/[?#].*$/, '');
   if (!/\/$/.test(base)) base += '/';      // http://ip:8000 → http://ip:8000/
-  return ROOM ? (base + '?room=' + encodeURIComponent(ROOM)) : base;
+  return ROOM ? (base + '?room=' + encodeURIComponent(ROOM) + '&v=' + PAGE_BUILD) : base;
 }
 function toggleLanQR() {
   const box = document.getElementById('lanQrBox');
@@ -2651,12 +2660,14 @@ function setupInvite(room) {
   document.getElementById('inviteHint').textContent = '';
   makeQR(inviteUrl(room));   // 二维码带房间码：扫码免输直接进房
 }
-// 复制的是不带房间码的基础地址：外网设备打开后自己输房间码加入
+// 复制的是不带房间码的基础地址：外网设备打开后自己输房间码加入。
+// 带 ?v= 页面指纹防旧缓存（二维码同款），提示里展示的仍是干净短地址
 function copyInviteUrl() {
   const base = inviteBase();
   if (!base) return;
   const short = base.replace(/^https?:\/\//, '');
-  copyText(base, ok => toast(ok ? '已复制访问地址：' + short : '复制失败，请手动记下：' + short));
+  copyText(base + '?v=' + PAGE_BUILD,
+           ok => toast(ok ? '已复制访问地址：' + short : '复制失败，请手动记下：' + short));
 }
 function toggleQR() {
   const b = document.getElementById('qrBox');
@@ -4049,6 +4060,11 @@ function agreeThen(fn) {
   pendingAgreeAction = fn;
   showDisclaimer();
 }
+// 本标签页是否同意过条款：sessionStorage 跟着标签页走，刷新保留、关页清空。
+// 正好对上「不关页面只刷新就不用重新读条款」：重新打开 / 新开扫码才是新的一次。
+function sessionAgreed() {
+  try { return sessionStorage.getItem('lanshare_agree') === '1'; } catch (e) { return false; }
+}
 const AGREE_HINT_WAIT = '请先滑动阅读完下方全部条款';
 const AGREE_HINT_DONE = '点击阅读并同意 即可继续使用';
 function onDisclaimerScroll() {
@@ -4066,6 +4082,7 @@ function onDisclaimerScroll() {
 }
 function acceptDisclaimer() {
   agreeAccepted = true;
+  try { sessionStorage.setItem('lanshare_agree', '1'); } catch (e) {}
   const act = pendingAgreeAction;   // 先取走挂起动作，hideDisclaimer 会把它清掉
   pendingAgreeAction = null;
   hideDisclaimer();
@@ -4080,6 +4097,8 @@ function showDisclaimer() {
   const hint = document.getElementById('agreeHint');
   if (hint) { hint.textContent = AGREE_HINT_WAIT; hint.classList.remove('done'); }
   if (!agreePollTimer) agreePollTimer = setInterval(onDisclaimerScroll, 300);
+  // 读条款这几秒正好把信令长连接续上/重建：读完点同意立刻就能呼叫房主，不用再等握手
+  prewarmSignal();
 }
 function hideDisclaimer() {
   pendingAgreeAction = null;             // 「不同意」= 放弃这次创建/加入
@@ -4147,7 +4166,8 @@ function showLanGate() {
   if (scanned.length >= 4) {
     box.value = scanned;
     gateMsg('正在加入房间 ' + scanned + '…', 'info');
-    setTimeout(() => { try { gateJoin(); } catch (e) {} }, 60);
+    // 扫码首次进入照常弹声明；同一标签页刷新重进（已同意过）就静默直连
+    setTimeout(() => { try { gateJoin(sessionAgreed()); } catch (e) {} }, 60);
   } else {
     setTimeout(() => { try { box.focus(); box.select(); } catch (e) {} }, 80);
   }
@@ -4291,9 +4311,11 @@ async function gateCreate() {
     if (sub) sub.textContent = '在本机开一个房间';
   }
 }
-// 加入房间：先真连一次，房间不存在或连不上就停在入口页
-async function gateJoin() {
-  if (!agreeAccepted) { pendingAgreeAction = gateJoin; showDisclaimer(); return; }
+// 加入房间：先真连一次，房间不存在或连不上就停在入口页。
+// skipAgree=true 只给「刷新后自动回房」的路径用：同一个标签页已经同意过条款，
+// 刷新重连不再弹声明；手动点「连接」永远走弹窗。
+async function gateJoin(skipAgree) {
+  if (!agreeAccepted && !skipAgree) { pendingAgreeAction = gateJoin; showDisclaimer(); return; }
   const box = document.getElementById('gateRoom');
   const btn = document.getElementById('gateJoinBtn');
   const label = btn.querySelector('b');
@@ -4379,17 +4401,22 @@ if (MODE === 'host') {
   let saved = '';
   try { saved = clean(localStorage.getItem('lanshare_room_code')); } catch (e) {}
   if (invited) {
-    // 邀请链接：按访客身份连过去。加入房间同样要先过免责声明（没同意过就先弹）
-    agreeThen(() => { hideGate(); initGuest(invited); });  } else if (q.get('host') === '1') {
+    // 邀请链接：按访客身份连过去，加入房间先过免责声明。
+    // 同一标签页里同意过（sessionStorage 还在）= 刷新重连，直接进房不再弹
+    const goInvite = () => { hideGate(); initGuest(invited); };
+    if (sessionAgreed()) goInvite();
+    else agreeThen(goInvite);
+  } else if (q.get('host') === '1') {
     // 在线页房主刷新：先确认房间还在，别一刷新就偷偷开个新房间
     resumeHostFromWeb();
   } else if (saved.length >= 4) {
     // 上次进过的房间可能已经被销毁：先探活，进得去才回主页面；
-    // 连不上就留在起始页说明原因，别停在「正在连接」的空白主界面
+    // 连不上就留在起始页说明原因，别停在「正在连接」的空白主界面。
+    // 同一标签页刷新（sessionStorage 还在）不重弹声明；关页重开才会再弹
     const box = document.getElementById('gateRoom');
     if (box) box.value = saved;
     gateMsg('正在检查上次加入的房间…', 'info');
-    setTimeout(() => { try { gateJoin(); } catch (e) {} }, 60);
+    setTimeout(() => { try { gateJoin(sessionAgreed()); } catch (e) {} }, 60);
   }
   // 没有邀请码、也没有上次房间：停在入口页等输码，预热已经在上面建好了，
   // 用户输码的这几秒正好用来握手（省 0.3～1.5 秒）。
