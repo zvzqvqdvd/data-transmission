@@ -838,8 +838,8 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   <div class="room-card-title">房间</div>
   <b id="roomCode" title="点击复制房间码" onclick="copyRoomCode()"></b>
   <div class="room-actions">
-    <button class="pill ghost" onclick="agreeThen(renewRoom, true)">新建房间</button>
-    <button class="pill danger" id="dissolveBtn" onclick="agreeThen(askDissolve, true)">销毁房间</button>
+    <button class="pill ghost" onclick="renewRoom()">新建房间</button>
+    <button class="pill danger" id="dissolveBtn" onclick="askDissolve()">销毁房间</button>
   </div>
 </div>
 
@@ -3977,21 +3977,20 @@ function hideGate() {
   document.getElementById('hostView').style.display = 'flex';
 }
 // ===== 免责声明：点「创建房间 / 加入房间」先弹条款 =====
-// 条款滚到底部后「阅读并同意」才会亮；同意后本次页面内的创建 / 加入不再重复弹。
-// 但房间内的「新建房间 / 销毁房间」每次都要重新过一遍声明（always = true），不豁免。
+// 条款滚到底部后「阅读并同意」才会亮；同意后本次页面内的创建 / 加入不再重复弹，
 // 刷新 / 重开页面要重新同意（不写 localStorage，不长期记住）。
+// 房间内的新建 / 销毁房间不弹声明。
 let agreeAccepted = false;
-let pendingAgreeAction = null;   // 同意后要继续的动作（gateCreate / gateJoin / gateShowJoin / 新建 / 销毁）
+let pendingAgreeAction = null;   // 同意后要继续的动作（gateCreate / gateJoin / gateShowJoin）
 let agreePollTimer = null;       // 弹窗打开期间兜底轮询：某些环境 scroll 事件不可靠（手机惯性滚动也会丢）
-// 统一入口：anyAction 前先确保看过声明。always = true 表示即使本次页面已同意过也要再弹
-// 一次（房间内新建 / 销毁用）；false 时同意过就静默放行（入口页创建 / 加入用）。
-function agreeThen(fn, always) {
-  if (agreeAccepted && !always) { fn(); return; }
+// 统一入口：fn 前先确保看过声明，本会话同意过就静默放行
+function agreeThen(fn) {
+  if (agreeAccepted) { fn(); return; }
   pendingAgreeAction = fn;
   showDisclaimer();
 }
-const AGREE_HINT_WAIT = '⬇ 请先滑动阅读完下方全部条款';
-const AGREE_HINT_DONE = '✓ 已读完全部条款，可以同意了';
+const AGREE_HINT_WAIT = '请先滑动阅读完下方全部条款';
+const AGREE_HINT_DONE = '已读完全部条款，可以同意了';
 function onDisclaimerScroll() {
   const body = document.getElementById('disclaimerBody');
   const btn = document.getElementById('agreeAcceptBtn');
@@ -4363,7 +4362,7 @@ document.addEventListener('visibilitychange', () => {
       <p><b>6. 责任限制</b>　对于因使用或无法使用本服务而产生的任何直接或间接损失（包括但不限于数据损失、业务中断、利润损失），开发者在其法律允许的最大范围内不承担任何责任。</p>
       <p><b>7. 声明生效</b>　点击「阅读并同意」并继续使用本服务，即视为您已完整阅读、充分理解并接受上述全部条款。如您不同意任何一项，请立即停止使用本服务。</p>
     </div>
-    <div class="agree-hint" id="agreeHint">⬇ 请先滑动阅读完下方全部条款</div>
+    <div class="agree-hint" id="agreeHint">请先滑动阅读完下方全部条款</div>
     <div class="modal-btns">
       <button class="btn-plain" onclick="hideDisclaimer()">不同意</button>
       <button class="btn-primary" id="agreeAcceptBtn" disabled onclick="acceptDisclaimer()">阅读并同意</button>
