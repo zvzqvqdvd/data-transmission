@@ -440,13 +440,34 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 .btn-danger:hover { background:#b3261e; filter:none; }
 .modal-tip { font-size:13px; line-height:1.75; color:#5c6b62; margin:-4px 0 4px; }
 /* 免责声明弹窗正文：段落分条、行距放宽，认真读得下去 */
-/* 免责声明：点创建/加入先弹条款，滚到底部才能点「阅读并同意」 */
-.disclaimer { max-height:52vh; overflow-y:auto; overscroll-behavior:contain; text-align:left; font-size:12.5px; line-height:1.9; color:#41544a; padding-right:6px; }
-.disclaimer p { margin:0 0 10px; }
-.disclaimer b { color:#22352b; }
-/* 提示条常驻占位（只换文案不隐藏）：读完瞬间弹窗高度不变，不会「跳」一下 */
-.agree-hint { font-size:11.5px; color:#9aa0a6; text-align:center; margin-top:10px; min-height:17px; line-height:17px; }
-.agree-hint.done { color:#07C160; }
+/* 免责声明：默认只显示复选框一行，点「《免责声明》」在下方展开全文，不弹窗 */
+.gate-disc { margin-top:14px; text-align:left; }
+.gd-body { max-height:0; overflow:hidden; transition:max-height .25s ease;
+  font-size:11.5px; line-height:1.8; color:#5c6b62; }
+.gate-disc.open .gd-body { max-height:40vh; overflow-y:auto; overscroll-behavior:contain;
+  margin-top:10px; padding-right:4px; }
+.gd-body p { margin:0 0 8px; }
+.gd-body b { color:#22352b; }
+/* 展开后才出现的收起按钮 */
+.gd-collapse { display:none; margin:8px auto 0; padding:2px 14px; border:1px solid #d5ddd6;
+  border-radius:999px; background:#fff; font-size:11.5px; color:#5c6b62; cursor:pointer; }
+.gd-collapse:hover { color:#22352b; border-color:#b9c4ba; }
+.gate-disc.open .gd-collapse { display:block; }
+/* 复选框：微信风圆形勾选（绿底白勾），原生 input 隐藏只当状态用 */
+.agree-check { display:flex; align-items:center; justify-content:center; gap:7px;
+  margin-top:12px; font-size:12.5px; color:#41544a; cursor:pointer; user-select:none; position:relative; }
+.agree-check input[type=checkbox] { position:absolute; opacity:0; pointer-events:none; width:0; height:0; }
+.gd-box { flex:none; width:18px; height:18px; border-radius:50%;
+  border:1.5px solid #c2ccc4; background:#fff;
+  display:inline-flex; align-items:center; justify-content:center;
+  transition:background .18s ease, border-color .18s ease; }
+.gd-box::after { content:''; width:9px; height:5px;
+  border-left:2px solid #fff; border-bottom:2px solid #fff;
+  transform:rotate(-45deg) translate(0, -1px); opacity:0; transition:opacity .15s ease; }
+.agree-check input:checked + .gd-box { background:#07C160; border-color:#07C160; }
+.agree-check input:checked + .gd-box::after { opacity:1; }
+.agree-check input:focus-visible + .gd-box { box-shadow:0 0 0 3px rgba(7,193,96,.18); }
+.gd-link { color:#07C160; cursor:pointer; }
 .btn-primary { background:#07C160; color:#fff; }
 .btn-primary:disabled { background:#a8dcbc; color:rgba(255,255,255,.9); cursor:not-allowed; }
 .dev-list { list-style:none; }
@@ -827,6 +848,26 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
     </div>
 
     <div id="gateMsg"></div>
+
+    <!-- 免责声明：默认只显示复选框一行，点「《免责声明》」才展开全文。不弹窗 -->
+    <div class="gate-disc" id="gateDisc">
+      <label class="agree-check">
+        <input type="checkbox" id="agreeCheck" checked>
+        <i class="gd-box" aria-hidden="true"></i>
+        <span>我已阅读并同意<a class="gd-link" onclick="toggleDisclaimer(event)">《免责声明》</a>并同意继续使用</span>
+      </label>
+      <div class="gd-body" id="disclaimerBody">
+        <p><b>1. 用途限制</b>　本软件（含桌面程序与本网页，以下统称「本服务」）仅供个人学习、研究与技术交流使用，严禁用于任何商业用途或盈利活动，严禁用于企业生产环境。</p>
+        <p><b>2. 遵守法律</b>　使用本服务必须遵守《中华人民共和国网络安全法》《数据安全法》《个人信息保护法》及其他适用法律法规。不得利用本服务实施任何违法活动，包括但不限于：危害国家安全、传播淫秽色情与暴力恐怖信息、赌博诈骗、侵犯知识产权、传播木马病毒、非法侵入或干扰他人网络与系统。</p>
+        <p><b>3. 内容责任</b>　用户通过本服务创建、发送、接收的文字、文件与共享画面等内容均由用户自行产生，相应法律责任完全由内容发布者自行承担。请勿传输涉密信息、他人隐私或任何不适宜共享的内容。</p>
+        <p><b>4. 数据与隐私</b>　本服务基于局域网与点对点直连技术，数据在设备之间直接传输，不经由第三方服务器长期保存。房间内的聊天记录与接收文件只做临时存放，房间销毁或新建后即被删除且不可恢复，请自行备份重要数据。</p>
+        <p><b>5. 无担保</b>　本服务按「现状」提供，不作任何明示或默示的保证，包括但不限于可用性、无错误、准确性、完整性与特定用途适用性。因网络环境、系统故障或操作不当导致的数据丢失、传输中断等，开发者不承担责任。</p>
+        <p><b>6. 责任限制</b>　对于因使用或无法使用本服务而产生的任何直接或间接损失（包括但不限于数据损失、业务中断、利润损失），开发者在其法律允许的最大范围内不承担任何责任。</p>
+        <p><b>7. 声明生效</b>　勾选下方复选框并继续使用本服务，即视为您已完整阅读、充分理解并接受上述全部条款。如您不同意任何一项，请立即停止使用本服务。</p>
+      </div>
+      <button class="gd-collapse" onclick="toggleDisclaimer(event)">收起 ▴</button>
+    </div>
+
     <div class="gate-foot">创建房间需要本机已运行程序<br>加入房间不需要，任何设备都能加入</div>
   </div>
 </div>
@@ -1078,30 +1119,6 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 <div class="toast" id="toast"></div>
 </div><!-- /hostView -->
 
-<!-- 免责声明弹窗：必须在 body 顶层（在线页打开时 #hostView 是 display:none，
-     放在里面弹窗永远显示不出来），且必须放在 <script> 之前——脚本解析时就会
-     同步访问这个节点（扫邀请链接进来要先弹声明），放在后面节点还没解析到、
-     getElementById 拿到 null 会把脚本整个打断，访客就卡在入口页进不了房 -->
-<div class="modal-mask" id="disclaimerModal">
-  <div class="modal wide">
-    <h3>免责声明</h3>
-    <div class="disclaimer" id="disclaimerBody">
-      <p><b>1. 用途限制</b>　本软件（含桌面程序与本网页，以下统称「本服务」）仅供个人学习、研究与技术交流使用，严禁用于任何商业用途或盈利活动，严禁用于企业生产环境。</p>
-      <p><b>2. 遵守法律</b>　使用本服务必须遵守《中华人民共和国网络安全法》《数据安全法》《个人信息保护法》及其他适用法律法规。不得利用本服务实施任何违法活动，包括但不限于：危害国家安全、传播淫秽色情与暴力恐怖信息、赌博诈骗、侵犯知识产权、传播木马病毒、非法侵入或干扰他人网络与系统。</p>
-      <p><b>3. 内容责任</b>　用户通过本服务创建、发送、接收的文字、文件与共享画面等内容均由用户自行产生，相应法律责任完全由内容发布者自行承担。请勿传输涉密信息、他人隐私或任何不适宜共享的内容。</p>
-      <p><b>4. 数据与隐私</b>　本服务基于局域网与点对点直连技术，数据在设备之间直接传输，不经由第三方服务器长期保存。房间内的聊天记录与接收文件只做临时存放，房间销毁或新建后即被删除且不可恢复，请自行备份重要数据。</p>
-      <p><b>5. 无担保</b>　本服务按「现状」提供，不作任何明示或默示的保证，包括但不限于可用性、无错误、准确性、完整性与特定用途适用性。因网络环境、系统故障或操作不当导致的数据丢失、传输中断等，开发者不承担责任。</p>
-      <p><b>6. 责任限制</b>　对于因使用或无法使用本服务而产生的任何直接或间接损失（包括但不限于数据损失、业务中断、利润损失），开发者在其法律允许的最大范围内不承担任何责任。</p>
-      <p><b>7. 声明生效</b>　点击「阅读并同意」并继续使用本服务，即视为您已完整阅读、充分理解并接受上述全部条款。如您不同意任何一项，请立即停止使用本服务。</p>
-    </div>
-    <div class="agree-hint" id="agreeHint">请先滑动阅读完下方全部条款</div>
-    <div class="modal-btns">
-      <button class="btn-plain" onclick="hideDisclaimer()">不同意</button>
-      <button class="btn-primary" id="agreeAcceptBtn" disabled onclick="acceptDisclaimer()">阅读并同意</button>
-    </div>
-  </div>
-</div>
-
 <script>
 const chatInner = document.getElementById('chatInner');
 const chatScroll = document.getElementById('chatScroll');
@@ -1141,7 +1158,7 @@ let CLIENT_URL = 'https://zvzqvqdvd.github.io/data-transmission/';
 // 页面源文件指纹（由程序按 web/ 源文件现算，在线页 = 导出那一刻的值）。
 // 邀请链接 / 二维码 / 复制的访问地址都带 ?v=<指纹>：手机浏览器对页面缓存
 // 非常顽固，URL 不变就拿旧缓存页连新程序，轻则变慢、重则连不上。
-const PAGE_BUILD = 'a741c29ad8';
+const PAGE_BUILD = 'dbbe44336a';
 let lastRev = null;
 let pollTimer = null;        // 房主端的 /messages 轮询
 let roomClosed = false;      // 房主已解散房间，页面停在入口页
@@ -4048,62 +4065,35 @@ function hideGate() {
   document.getElementById('gateView').classList.remove('show');
   document.getElementById('hostView').style.display = 'flex';
 }
-// ===== 免责声明：点「创建房间 / 加入房间」先弹条款 =====
-// 每次点击入口页这两枚按钮都要重新弹（用户 11-10 定稿：不同意任何静默放行）；
-// 输码页的「连接」属于同一次加入动作（刚同意过），不重复弹。
-// 房间内的新建 / 销毁房间不弹声明。
-let agreeAccepted = false;       // 本次页面内同意过至少一次；刷新 / 重开页面要重新同意
-let pendingAgreeAction = null;   // 同意后要继续的动作（gateCreate / gateShowJoin / 邀请链接直进）
-let agreePollTimer = null;       // 弹窗打开期间兜底轮询：某些环境 scroll 事件不可靠（手机惯性滚动也会丢）
-// 统一入口：无论本会话有没有同意过，每次都先弹声明
-function agreeThen(fn) {
-  pendingAgreeAction = fn;
-  showDisclaimer();
+// ===== 免责声明：内嵌在入口页下方，文本展示 + 复选框（默认勾选），不弹窗 =====
+// 复选框勾着 → 点创建/加入直接继续；没勾 → 展开声明区并提示先勾选。
+// 房间内的新建 / 销毁房间不涉及声明。
+let agreeAccepted = false;       // 本次页面内同意过至少一次（与复选框状态保持一致）
+// 复选框当前是否勾着（页面刷新后恢复默认勾选）
+function agreeChecked() {
+  const chk = document.getElementById('agreeCheck');
+  return !!(chk && chk.checked);
 }
-// 本标签页是否同意过条款：sessionStorage 跟着标签页走，刷新保留、关页清空。
-// 正好对上「不关页面只刷新就不用重新读条款」：重新打开 / 新开扫码才是新的一次。
-function sessionAgreed() {
-  try { return sessionStorage.getItem('lanshare_agree') === '1'; } catch (e) { return false; }
-}
-const AGREE_HINT_WAIT = '请先滑动阅读完下方全部条款';
-const AGREE_HINT_DONE = '点击阅读并同意 即可继续使用';
-function onDisclaimerScroll() {
-  const body = document.getElementById('disclaimerBody');
-  const btn = document.getElementById('agreeAcceptBtn');
-  if (!body || !btn) return;
-  const bottom = body.scrollTop + body.clientHeight >= body.scrollHeight - 24;
-  btn.disabled = !bottom;
-  // 提示条不隐藏、只换文案：占位高度不变，弹窗就不会在读完瞬间「跳」一下
-  const hint = document.getElementById('agreeHint');
-  if (hint) {
-    hint.textContent = bottom ? AGREE_HINT_DONE : AGREE_HINT_WAIT;
-    hint.classList.toggle('done', bottom);
+// 没勾选就想继续：滚动到复选框，toast 提示
+function agreeHintFlash() {
+  const sec = document.getElementById('gateDisc');
+  if (sec) {
+    try { sec.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+    catch (e) { try { sec.scrollIntoView(); } catch (e2) {} }
   }
+  toast('请先勾选「我已阅读并同意《免责声明》并同意继续使用」');
 }
-function acceptDisclaimer() {
-  agreeAccepted = true;
-  try { sessionStorage.setItem('lanshare_agree', '1'); } catch (e) {}
-  const act = pendingAgreeAction;   // 先取走挂起动作，hideDisclaimer 会把它清掉
-  pendingAgreeAction = null;
-  hideDisclaimer();
-  if (act) act();
+// 点「《免责声明》」展开/收起全文（不弹窗，就在复选框下方展开）
+function toggleDisclaimer(e) {
+  if (e) { e.preventDefault(); e.stopPropagation(); }   // 别触发复选框
+  const sec = document.getElementById('gateDisc');
+  if (!sec) return;
+  sec.classList.toggle('open');
 }
-function showDisclaimer() {
-  const body = document.getElementById('disclaimerBody');
-  const btn = document.getElementById('agreeAcceptBtn');
-  document.getElementById('disclaimerModal').classList.add('show');
-  if (body) body.scrollTop = 0;          // 先显示再归零：隐藏状态下 scrollTop 赋值无效
-  if (btn) btn.disabled = true;
-  const hint = document.getElementById('agreeHint');
-  if (hint) { hint.textContent = AGREE_HINT_WAIT; hint.classList.remove('done'); }
-  if (!agreePollTimer) agreePollTimer = setInterval(onDisclaimerScroll, 300);
-  // 读条款这几秒正好把信令长连接续上/重建：读完点同意立刻就能呼叫房主，不用再等握手
-  prewarmSignal();
-}
-function hideDisclaimer() {
-  pendingAgreeAction = null;             // 「不同意」= 放弃这次创建/加入
-  if (agreePollTimer) { clearInterval(agreePollTimer); agreePollTimer = null; }
-  document.getElementById('disclaimerModal').classList.remove('show');
+// 统一入口：勾选了直接继续，没勾选就提示
+function agreeThen(fn) {
+  if (agreeChecked()) { agreeAccepted = true; fn(); return; }
+  agreeHintFlash();
 }
 function gateShowJoin() {
   document.getElementById('gateChoices').style.display = 'none';
@@ -4166,8 +4156,8 @@ function showLanGate() {
   if (scanned.length >= 4) {
     box.value = scanned;
     gateMsg('正在加入房间 ' + scanned + '…', 'info');
-    // 扫码首次进入照常弹声明；同一标签页刷新重进（已同意过）就静默直连
-    setTimeout(() => { try { gateJoin(sessionAgreed()); } catch (e) {} }, 60);
+    // 扫码进入：复选框默认勾选 = 已同意，直接静默连；没勾选会在 gateJoin 里提示
+    setTimeout(() => { try { gateJoin(); } catch (e) {} }, 60);
   } else {
     setTimeout(() => { try { box.focus(); box.select(); } catch (e) {} }, 80);
   }
@@ -4246,7 +4236,7 @@ function gateProgCreep(to) {
 // 创建房间：确认本机程序在跑，再由它当场开一个房间（房间码在这一刻才生成）。
 // 不再人为拖时间：后端开好 + 外网直连房主 Peer 注册成功就立刻进主界面。
 async function gateCreate() {
-  if (!agreeAccepted) { pendingAgreeAction = gateCreate; showDisclaimer(); return; }
+  if (!agreeChecked()) { agreeHintFlash(); return; }
   const btn = document.getElementById('gateCreateBtn');
   if (!btn || btn.disabled) return;
   const label = btn.querySelector('.gate-txt b');
@@ -4312,10 +4302,9 @@ async function gateCreate() {
   }
 }
 // 加入房间：先真连一次，房间不存在或连不上就停在入口页。
-// skipAgree=true 只给「刷新后自动回房」的路径用：同一个标签页已经同意过条款，
-// 刷新重连不再弹声明；手动点「连接」永远走弹窗。
-async function gateJoin(skipAgree) {
-  if (!agreeAccepted && !skipAgree) { pendingAgreeAction = gateJoin; showDisclaimer(); return; }
+// 复选框没勾（非默认状态）时点连接：展开声明区并提示，不往下走。
+async function gateJoin() {
+  if (!agreeChecked()) { agreeHintFlash(); return; }
   const box = document.getElementById('gateRoom');
   const btn = document.getElementById('gateJoinBtn');
   const label = btn.querySelector('b');
@@ -4401,22 +4390,22 @@ if (MODE === 'host') {
   let saved = '';
   try { saved = clean(localStorage.getItem('lanshare_room_code')); } catch (e) {}
   if (invited) {
-    // 邀请链接：按访客身份连过去，加入房间先过免责声明。
-    // 同一标签页里同意过（sessionStorage 还在）= 刷新重连，直接进房不再弹
+    // 邀请链接：按访客身份连过去。复选框默认勾选 = 已同意，直接进；
+    // 被手动取消勾选过就停在入口页提示
     const goInvite = () => { hideGate(); initGuest(invited); };
-    if (sessionAgreed()) goInvite();
-    else agreeThen(goInvite);
+    if (agreeChecked()) { agreeAccepted = true; goInvite(); }
+    else agreeHintFlash();
   } else if (q.get('host') === '1') {
     // 在线页房主刷新：先确认房间还在，别一刷新就偷偷开个新房间
     resumeHostFromWeb();
   } else if (saved.length >= 4) {
     // 上次进过的房间可能已经被销毁：先探活，进得去才回主页面；
     // 连不上就留在起始页说明原因，别停在「正在连接」的空白主界面。
-    // 同一标签页刷新（sessionStorage 还在）不重弹声明；关页重开才会再弹
+    // 复选框没勾（非默认状态）就留在入口页提示
     const box = document.getElementById('gateRoom');
     if (box) box.value = saved;
     gateMsg('正在检查上次加入的房间…', 'info');
-    setTimeout(() => { try { gateJoin(sessionAgreed()); } catch (e) {} }, 60);
+    setTimeout(() => { try { gateJoin(); } catch (e) {} }, 60);
   }
   // 没有邀请码、也没有上次房间：停在入口页等输码，预热已经在上面建好了，
   // 用户输码的这几秒正好用来握手（省 0.3～1.5 秒）。
@@ -4427,12 +4416,6 @@ window.addEventListener('online', () => { try { flushGuestRetry(); } catch (e) {
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) { try { flushGuestRetry(); } catch (e) {} }
 });
-
-// 免责声明条款区滚动监听：滚到底才点亮「阅读并同意」
-(() => {
-  const db = document.getElementById('disclaimerBody');
-  if (db) db.addEventListener('scroll', onDisclaimerScroll);
-})();
 
 // 房间生命周期：临时房间（页面关闭 / 12 小时无通信 / 手动销毁），没有可设的选项了
 </script>
