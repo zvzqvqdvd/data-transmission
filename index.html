@@ -179,12 +179,16 @@ body:not(.is-room-owner) #connStatus { display:none !important; }
   border:1px solid #d3e0f5; border-radius:12px; text-align:center;
 }
 #lanLabel { color:#3b6ea5; }
-#lanUrl {
-  font-family:Menlo,Consolas,monospace; font-size:13px; color:#1a5fb4;
-  background:#fff; padding:3px 10px; border-radius:7px; border:1px solid #d3e0f5;
-  word-break:break-all;
+/* 地址框整行独占（和房号框同款布局），点击框本身也能复制 */
+#lanUrl, #p2pUrl {
+  display:block; margin-top:9px; padding:6px 9px;
+  font-family:Menlo,Consolas,monospace; font-size:13px;
+  background:#fff; border-radius:8px; word-break:break-all; cursor:pointer;
 }
-#lanHint { font-size:11px; color:#5c7799; margin-top:6px; }
+#lanUrl { color:#1a5fb4; border:1px solid #d3e0f5; }
+#lanUrl:hover { background:#f6f9fe; }
+#p2pUrl { color:#0a8f4a; border:1px solid #cfeada; }
+#p2pUrl:hover { background:#f5fbf7; }
 #lanQrBox { padding:10px 0 2px; }
 #lanQrImg {
   display:inline-block; background:#fff; padding:8px; border-radius:10px;
@@ -739,7 +743,6 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 .side-info .guest-room { text-align:left; }
 .side-info .guest-actions { justify-content:flex-start; }
 .side-info #inviteHint,
-.side-info #lanHint,
 .side-info #guestStatus,
 .side-info #qrBox,
 .side-info #lanQrBox,
@@ -762,9 +765,11 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   }
   .side-info .p2p-line { gap:6px; }
   .side-info .pill { font-size:11px; padding:3px 8px; white-space:nowrap; }
+  /* 通道卡里的操作按钮：两枚等分一行，和房间卡按钮同款 */
+  .side-info .side-actions .pill { flex:1; min-width:0; padding:5px 0; text-align:center; }
   .side-info #roomCode { font-size:16px; letter-spacing:1.2px; padding:6px 8px; }
-  .side-info #lanUrl { font-size:12px; padding:3px 8px; }
-  .side-info #inviteBox, .side-info #lanActions { gap:6px !important; }
+  .side-info #lanUrl, .side-info #p2pUrl { font-size:12px; padding:5px 8px; }
+  .side-info #inviteActions, .side-info #lanActions { gap:6px !important; }
   .side-info #qrImg, .side-info #lanQrImg { padding:5px; }
   .side-info #qrImg canvas, .side-info #lanQrImg canvas { max-width:100%; height:auto; }
   #waitBar { flex-direction:column; align-items:flex-start; gap:4px; }
@@ -838,7 +843,7 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   <div class="room-card-title">房间</div>
   <b id="roomCode" title="点击复制房间码" onclick="copyRoomCode()"></b>
   <div class="room-actions">
-    <button class="pill ghost" onclick="renewRoom()">新建房间</button>
+    <button class="pill ghost" onclick="copyRoomCode()">复制房间码</button>
     <button class="pill danger" id="dissolveBtn" onclick="askDissolve()">销毁房间</button>
   </div>
 </div>
@@ -846,20 +851,19 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 <div id="lanBanner" style="display:none;">
   <div class="p2p-line">
     <span class="p2p-label" id="lanLabel">🏠 局域网</span>
-    <code id="lanUrl">—</code>
-    <span id="lanActions" style="display:none;gap:8px;">
-      <button class="pill ghost" onclick="copyLanUrl()">复制</button>
-      <button class="pill" onclick="toggleLanQR()">二维码</button>
-    </span>
   </div>
-  <div id="lanHint"></div>
+  <code id="lanUrl" title="点击复制局域网地址" onclick="copyLanUrl()">—</code>
+  <div class="side-actions" id="lanActions" style="display:none;">
+    <button class="pill" onclick="copyLanUrl()">复制访问地址</button>
+    <button class="pill" onclick="toggleLanQR()">二维码</button>
+  </div>
   <div class="chan-state">
     <div class="chan-count" id="lanCount">局域网已连接 0 台设备</div>
     <div class="chan-list" id="lanMembers"></div>
   </div>
   <div id="lanQrBox" style="display:none;">
     <div id="lanQrImg"></div>
-    <div class="qr-tip">局域网：同一 WiFi 下的设备扫码即可加入，房间码已带在链接里</div>
+    <div class="qr-tip">扫码即可加入，房间码已带在链接里</div>
   </div>
 </div>
 
@@ -867,8 +871,9 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   <div class="p2p-line">
     <span class="p2p-label">🌍 外网直连</span>
   </div>
-  <div id="inviteBox" class="side-actions" style="display:none;">
-    <a id="inviteLink" class="pill" href="#" target="_blank" rel="noopener">打开访问链接</a>
+  <code id="p2pUrl" title="点击复制访问地址" style="display:none;"></code>
+  <div id="inviteActions" class="side-actions" style="display:none;">
+    <button class="pill" onclick="copyInviteUrl()">复制访问地址</button>
     <button class="pill" onclick="toggleQR()">二维码</button>
   </div>
   <div id="inviteHint"></div>
@@ -879,7 +884,7 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   </div>
   <div id="qrBox" style="display:none;">
     <div id="qrImg"></div>
-    <div class="qr-tip">外网：扫码即可直接加入，房间码已带在链接里</div>
+    <div class="qr-tip">扫码即可直接加入，房间码已带在链接里</div>
   </div>
 </div>
 
@@ -1056,6 +1061,30 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 </div>
 <div class="toast" id="toast"></div>
 </div><!-- /hostView -->
+
+<!-- 免责声明弹窗：必须在 body 顶层（在线页打开时 #hostView 是 display:none，
+     放在里面弹窗永远显示不出来），且必须放在 <script> 之前——脚本解析时就会
+     同步访问这个节点（扫邀请链接进来要先弹声明），放在后面节点还没解析到、
+     getElementById 拿到 null 会把脚本整个打断，访客就卡在入口页进不了房 -->
+<div class="modal-mask" id="disclaimerModal">
+  <div class="modal wide">
+    <h3>免责声明</h3>
+    <div class="disclaimer" id="disclaimerBody">
+      <p><b>1. 用途限制</b>　本软件（含桌面程序与本网页，以下统称「本服务」）仅供个人学习、研究与技术交流使用，严禁用于任何商业用途或盈利活动，严禁用于企业生产环境。</p>
+      <p><b>2. 遵守法律</b>　使用本服务必须遵守《中华人民共和国网络安全法》《数据安全法》《个人信息保护法》及其他适用法律法规。不得利用本服务实施任何违法活动，包括但不限于：危害国家安全、传播淫秽色情与暴力恐怖信息、赌博诈骗、侵犯知识产权、传播木马病毒、非法侵入或干扰他人网络与系统。</p>
+      <p><b>3. 内容责任</b>　用户通过本服务创建、发送、接收的文字、文件与共享画面等内容均由用户自行产生，相应法律责任完全由内容发布者自行承担。请勿传输涉密信息、他人隐私或任何不适宜共享的内容。</p>
+      <p><b>4. 数据与隐私</b>　本服务基于局域网与点对点直连技术，数据在设备之间直接传输，不经由第三方服务器长期保存。房间内的聊天记录与接收文件只做临时存放，房间销毁或新建后即被删除且不可恢复，请自行备份重要数据。</p>
+      <p><b>5. 无担保</b>　本服务按「现状」提供，不作任何明示或默示的保证，包括但不限于可用性、无错误、准确性、完整性与特定用途适用性。因网络环境、系统故障或操作不当导致的数据丢失、传输中断等，开发者不承担责任。</p>
+      <p><b>6. 责任限制</b>　对于因使用或无法使用本服务而产生的任何直接或间接损失（包括但不限于数据损失、业务中断、利润损失），开发者在其法律允许的最大范围内不承担任何责任。</p>
+      <p><b>7. 声明生效</b>　点击「阅读并同意」并继续使用本服务，即视为您已完整阅读、充分理解并接受上述全部条款。如您不同意任何一项，请立即停止使用本服务。</p>
+    </div>
+    <div class="agree-hint" id="agreeHint">请先滑动阅读完下方全部条款</div>
+    <div class="modal-btns">
+      <button class="btn-plain" onclick="hideDisclaimer()">不同意</button>
+      <button class="btn-primary" id="agreeAcceptBtn" disabled onclick="acceptDisclaimer()">阅读并同意</button>
+    </div>
+  </div>
+</div>
 
 <script>
 const chatInner = document.getElementById('chatInner');
@@ -2471,10 +2500,14 @@ function applyClientUrl(url) {
   return true;
 }
 
-function inviteUrl(room) {
+// 在线页基础地址（不带房间码）：复制 / 展示用它，邀请链接和二维码才追加房间码
+function inviteBase() {
   let base = CLIENT_URL || localStorage.getItem('lanshare_client_url') || '';
+  return base.trim().replace(/[?#].*$/, '');
+}
+function inviteUrl(room) {
+  const base = inviteBase();
   if (!base) return '';
-  base = base.trim().replace(/[?#].*$/, '');
   return base + '?room=' + encodeURIComponent(room) + '&v=' + PROTOCOL;
 }
 function makeQR(text, boxId) {
@@ -2533,9 +2566,7 @@ function setupLanBanner(url) {
   lanShareUrl = url || LAN_URL || here;
   document.getElementById('lanLabel').textContent = '🏠 局域网';
   document.getElementById('lanUrl').textContent = short(lanShareUrl);
-  document.getElementById('lanHint').textContent =
-    '局域网：同一 WiFi 下的设备打开这个地址，输入房间码即可加入';
-  document.getElementById('lanActions').style.display = 'inline-flex';
+  document.getElementById('lanActions').style.display = 'flex';
   const addr = document.getElementById('serverUrl');
   addr.textContent = short(lanShareUrl);
   addr.title = '点击复制局域网地址';
@@ -2588,15 +2619,23 @@ function toggleLanQR() {
   box.style.display = show ? 'block' : 'none';
 }
 function setupInvite(room) {
-  const url = inviteUrl(room);
-  if (!url) {
+  const base = inviteBase();
+  if (!base) {
     document.getElementById('inviteHint').textContent = '外网：未配置在线地址，在程序目录的 client_url.txt 第一行写入在线页网址，保存后刷新页面即生效';
     return;
   }
-  document.getElementById('inviteLink').href = url;
-  document.getElementById('inviteBox').style.display = 'flex';
-  document.getElementById('inviteHint').textContent = '外网：扫码或打开链接即可加入，无需手输房间码';
-  makeQR(url);
+  document.getElementById('p2pUrl').textContent = base.replace(/^https?:\/\//, '');
+  document.getElementById('p2pUrl').style.display = 'block';
+  document.getElementById('inviteActions').style.display = 'flex';
+  document.getElementById('inviteHint').textContent = '';
+  makeQR(inviteUrl(room));   // 二维码带房间码：扫码免输直接进房
+}
+// 复制的是不带房间码的基础地址：外网设备打开后自己输房间码加入
+function copyInviteUrl() {
+  const base = inviteBase();
+  if (!base) return;
+  const short = base.replace(/^https?:\/\//, '');
+  copyText(base, ok => toast(ok ? '已复制访问地址：' + short : '复制失败，请手动记下：' + short));
 }
 function toggleQR() {
   const b = document.getElementById('qrBox');
@@ -4348,26 +4387,5 @@ document.addEventListener('visibilitychange', () => {
 
 // 房间生命周期：临时房间（页面关闭 / 12 小时无通信 / 手动销毁），没有可设的选项了
 </script>
-<!-- 免责声明弹窗必须在 body 顶层：在线页打开时 #hostView 是 display:none，
-     放在里面弹窗永远显示不出来（入口页也要弹出它做同意拦截） -->
-<div class="modal-mask" id="disclaimerModal">
-  <div class="modal wide">
-    <h3>免责声明</h3>
-    <div class="disclaimer" id="disclaimerBody">
-      <p><b>1. 用途限制</b>　本软件（含桌面程序与本网页，以下统称「本服务」）仅供个人学习、研究与技术交流使用，严禁用于任何商业用途或盈利活动，严禁用于企业生产环境。</p>
-      <p><b>2. 遵守法律</b>　使用本服务必须遵守《中华人民共和国网络安全法》《数据安全法》《个人信息保护法》及其他适用法律法规。不得利用本服务实施任何违法活动，包括但不限于：危害国家安全、传播淫秽色情与暴力恐怖信息、赌博诈骗、侵犯知识产权、传播木马病毒、非法侵入或干扰他人网络与系统。</p>
-      <p><b>3. 内容责任</b>　用户通过本服务创建、发送、接收的文字、文件与共享画面等内容均由用户自行产生，相应法律责任完全由内容发布者自行承担。请勿传输涉密信息、他人隐私或任何不适宜共享的内容。</p>
-      <p><b>4. 数据与隐私</b>　本服务基于局域网与点对点直连技术，数据在设备之间直接传输，不经由第三方服务器长期保存。房间内的聊天记录与接收文件只做临时存放，房间销毁或新建后即被删除且不可恢复，请自行备份重要数据。</p>
-      <p><b>5. 无担保</b>　本服务按「现状」提供，不作任何明示或默示的保证，包括但不限于可用性、无错误、准确性、完整性与特定用途适用性。因网络环境、系统故障或操作不当导致的数据丢失、传输中断等，开发者不承担责任。</p>
-      <p><b>6. 责任限制</b>　对于因使用或无法使用本服务而产生的任何直接或间接损失（包括但不限于数据损失、业务中断、利润损失），开发者在其法律允许的最大范围内不承担任何责任。</p>
-      <p><b>7. 声明生效</b>　点击「阅读并同意」并继续使用本服务，即视为您已完整阅读、充分理解并接受上述全部条款。如您不同意任何一项，请立即停止使用本服务。</p>
-    </div>
-    <div class="agree-hint" id="agreeHint">请先滑动阅读完下方全部条款</div>
-    <div class="modal-btns">
-      <button class="btn-plain" onclick="hideDisclaimer()">不同意</button>
-      <button class="btn-primary" id="agreeAcceptBtn" disabled onclick="acceptDisclaimer()">阅读并同意</button>
-    </div>
-  </div>
-</div>
 </body>
 </html>
