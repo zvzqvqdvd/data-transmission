@@ -167,9 +167,10 @@ body:not(.is-room-owner) #connStatus { display:none !important; }
 .member-ip { font-family:ui-monospace,Menlo,Consolas,monospace; color:#6b8a78; }
 #qrBox { padding:10px 0 2px; }
 #qrImg {
-  display:inline-block; background:#fff; padding:8px; border-radius:10px;
+  display:inline-block; background:#fff; padding:4px; border-radius:8px;
   line-height:0; box-shadow:0 1px 5px rgba(0,0,0,.08);
 }
+#qrImg canvas { width:80px; height:80px; }
 
 /* ===== 局域网入口 ===== */
 /* 和「外网直连」用不同色系区分：局域网是同一 WiFi 内的直连，优先级更高 */
@@ -191,9 +192,10 @@ body:not(.is-room-owner) #connStatus { display:none !important; }
 #p2pUrl:hover { background:#f5fbf7; }
 #lanQrBox { padding:10px 0 2px; }
 #lanQrImg {
-  display:inline-block; background:#fff; padding:8px; border-radius:10px;
+  display:inline-block; background:#fff; padding:4px; border-radius:8px;
   line-height:0; box-shadow:0 1px 5px rgba(0,0,0,.08);
 }
+#lanQrImg canvas { width:80px; height:80px; }
 .qr-tip { font-size:11px; color:#6b8a78; margin-top:7px; }
 
 /* ===== 等待对方加入（房间已开、还没人进来时唯一的提示） ===== */
@@ -770,15 +772,22 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   .side-info #roomCode { font-size:16px; letter-spacing:1.2px; padding:6px 8px; }
   .side-info #lanUrl, .side-info #p2pUrl { font-size:12px; padding:5px 8px; }
   .side-info #inviteActions, .side-info #lanActions { gap:6px !important; }
-  .side-info #qrImg, .side-info #lanQrImg { padding:5px; }
-  .side-info #qrImg canvas, .side-info #lanQrImg canvas { max-width:100%; height:auto; }
+  .side-info #qrImg, .side-info #lanQrImg { padding:4px; }
+  .side-info #qrImg canvas, .side-info #lanQrImg canvas { width:80px; height:80px; }
   #waitBar { flex-direction:column; align-items:flex-start; gap:4px; }
 }
 
-/* ===== 二维码模式：卡片内容整体切换，二维码与返回按钮居中 ===== */
-#lanBanner #lanQrBox, #p2pBanner #qrBox { text-align:center; padding:6px 0 2px; }
+/* ===== 二维码模式：浮层盖在卡片上，卡片自身尺寸完全不变（不撑大侧栏） ===== */
+#lanBanner, #p2pBanner { position:relative; }
+#lanBanner .qr-float, #p2pBanner .qr-float {
+  position:absolute; inset:0; z-index:3; overflow:hidden;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:5px; padding:6px 10px; text-align:center;
+}
+#lanBanner .qr-float { background:linear-gradient(180deg,#f4f8ff,#eef4ff); border-radius:12px; }
+#p2pBanner .qr-float { background:linear-gradient(180deg,#f3fbf7,#eaf7f0); border-radius:12px; }
 #lanBanner .qr-back, #p2pBanner .qr-back {
-  display:block; margin:12px auto 0; padding:5px 30px; white-space:nowrap;
+  margin:0; padding:3px 26px; white-space:nowrap; flex-shrink:0;
 }
 </style>
 </head>
@@ -867,8 +876,8 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
     <div class="chan-count" id="lanCount">局域网已连接 0 台设备</div>
     <div class="chan-list" id="lanMembers"></div>
   </div>
-  <!-- 二维码模式：点「二维码」时卡片内容整体切换成这一块，点「返回」还原 -->
-  <div id="lanQrBox" style="display:none;">
+  <!-- 二维码模式：浮层盖在卡片上（卡片自身尺寸不变），点「返回」关掉 -->
+  <div id="lanQrBox" class="qr-float" style="display:none;">
     <div id="lanQrImg"></div>
     <button class="pill qr-back" onclick="toggleLanQR()">返回</button>
   </div>
@@ -889,8 +898,8 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
     <div class="chan-count" id="hostHint">外网已连接 0 台设备</div>
     <div class="chan-list" id="memberList"></div>
   </div>
-  <!-- 二维码模式：同局域网卡，卡片内容整体切换 -->
-  <div id="qrBox" style="display:none;">
+  <!-- 二维码模式：浮层盖在卡片上，卡片自身尺寸不变 -->
+  <div id="qrBox" class="qr-float" style="display:none;">
     <div id="qrImg"></div>
     <button class="pill qr-back" onclick="toggleQR()">返回</button>
   </div>
@@ -2516,11 +2525,12 @@ function inviteBase() {
 function inviteUrl(room) {
   const base = inviteBase();
   if (!base) return '';
-  return base + '?room=' + encodeURIComponent(room) + '&v=' + PROTOCOL;
+  // 只带房间码：v 参数没人读，纯粹白占二维码容量
+  return base + '?room=' + encodeURIComponent(room);
 }
 function makeQR(text, boxId) {
   try {
-    const qr = qrcode(0, 'M');
+    const qr = qrcode(0, 'L');   // 屏显干净，L 级冗余最低、码点最大，小尺寸下最好扫
     qr.addData(text);
     qr.make();
     const n = qr.getModuleCount(), cell = 4, pad = 8;
@@ -2624,9 +2634,8 @@ function toggleLanQR() {
     makeQR(url, 'lanQrImg');
     box.dataset.url = url;
   }
-  // 卡片内切换：二维码模式隐藏地址框/按钮/设备数，只留标题 + 二维码 + 返回
-  setShown(['lanUrl', 'lanActions', 'lanState'], !show);
-  box.style.display = show ? 'block' : 'none';
+  // 浮层盖在卡片上：卡片自身尺寸不变，不用显隐其他内容
+  box.style.display = show ? '' : 'none';
 }
 function setupInvite(room) {
   const base = inviteBase();
@@ -2650,18 +2659,8 @@ function copyInviteUrl() {
 function toggleQR() {
   const b = document.getElementById('qrBox');
   const show = !b.style.display || b.style.display === 'none';
-  // 卡片内切换：同局域网卡。p2pUrl 平时靠内联 display 控制，还原时要放回 block
-  setShown(['p2pUrl', 'inviteActions', 'inviteHint', 'hostNotice', 'p2pState'], !show, { p2pUrl: 'block' });
-  b.style.display = show ? 'block' : 'none';
-}
-// 批量显隐：restore 指定显示回来时的 display 值（缺省恢复 CSS 默认 ''）
-function setShown(ids, visible, restore) {
-  ids.forEach(id => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.style.display = visible && restore && restore[id] != null ? restore[id]
-                     : visible ? '' : 'none';
-  });
+  // 浮层盖在卡片上：卡片自身尺寸不变
+  b.style.display = show ? '' : 'none';
 }
 // ===== 房间码由本机程序持有，页面只负责显示 =====
 async function fetchHostInfo() {
