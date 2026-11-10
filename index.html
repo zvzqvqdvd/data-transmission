@@ -50,18 +50,6 @@ body {
 .topbar-title { font-size:15px; font-weight:600; letter-spacing:.2px; line-height:1.2; }
 .topbar-sub { font-size:11px; color:#9aa0a6; margin-top:2px; }
 .topbar-right { display:flex; align-items:center; gap:8px; flex-shrink:0; }
-.conn-status {
-  font-size:11px; padding:4px 10px; border-radius:20px; font-weight:500;
-  background:#f1f3f4; color:#80868b;
-  display:inline-flex; align-items:center; gap:5px; white-space:nowrap;
-}
-.conn-status::before { content:''; width:6px; height:6px; border-radius:50%; background:currentColor; opacity:.9; }
-.conn-status.p2p { background:#e6f7ed; color:#0a8f4a; }
-.conn-status.http { background:#fff4e5; color:#c86a00; }
-.topbar-addr {
-  font-size:11px; color:#5f6368; font-family:Menlo,Consolas,monospace;
-  background:#f1f3f4; padding:4px 9px; border-radius:7px; white-space:nowrap;
-}
 .icon-btn {
   width:32px; height:32px; border-radius:9px; border:none; background:#f1f3f4;
   font-size:15px; cursor:pointer; color:#5f6368;
@@ -134,8 +122,7 @@ body {
 body:not(.is-room-owner) .chan-state,
 body:not(.is-room-owner) .side-notice,
 body:not(.is-room-owner) #waitBar,
-body:not(.is-room-owner) #roomCard,
-body:not(.is-room-owner) #connStatus { display:none !important; }
+body:not(.is-room-owner) #roomCard { display:none !important; }
 /* 房主端临时提示（连接中 / 传文件中 / 信令错误），单独一行，不占通道状态 */
 .side-notice {
   margin-top:6px; padding:5px 8px; text-align:left;
@@ -155,7 +142,8 @@ body:not(.is-room-owner) #connStatus { display:none !important; }
 }
 .room-info-btn:hover { border-color:#07C160; color:#0a8f4a; }
 .member-row {
-  display:inline-flex; align-items:center; gap:6px;
+  display:inline-flex; flex-wrap:wrap; align-items:center; gap:6px;
+  max-width:100%; min-width:0;
   font-size:11px; color:#3c5a4a;
   background:rgba(255,255,255,.72); border:1px solid #d6ecdf;
   border-radius:14px; padding:2px 9px;
@@ -163,8 +151,10 @@ body:not(.is-room-owner) #connStatus { display:none !important; }
 .member-tag { padding:1px 6px; border-radius:4px; font-size:10px; flex-shrink:0; }
 .member-tag.wan { background:#e8f0fe; color:#1565c0; }
 .member-tag.lan { background:#e6f7ed; color:#0a8f4a; }
-.member-name { font-weight:600; color:#22352b; }
-.member-ip { font-family:ui-monospace,Menlo,Consolas,monospace; color:#6b8a78; }
+.member-name { font-weight:600; color:#22352b; flex-shrink:0; }
+/* IPv6 一长串没有空格、不可软换行，不放开 word-break 会把卡片撑破 */
+.member-ip { font-family:ui-monospace,Menlo,Consolas,monospace; color:#6b8a78;
+  min-width:0; overflow-wrap:anywhere; word-break:break-all; text-align:left; }
 #qrBox { padding:10px 0 2px; }
 #qrImg {
   display:inline-block; background:#fff; padding:4px; border-radius:8px;
@@ -482,8 +472,9 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 }
 .dev-list li:last-child { border-bottom:none; }
 .dev-info { flex:1; min-width:0; }
-.dev-name { font-size:14px; font-weight:500; white-space:nowrap; }
-.dev-ip { font-size:12px; color:#9aa0a6; margin-top:3px; white-space:nowrap; }
+.dev-name { font-size:14px; font-weight:500; }
+.dev-ip { font-size:12px; color:#9aa0a6; margin-top:3px;
+  overflow-wrap:anywhere; word-break:break-all; }   /* IPv6 长串防溢出 */
 .badge { display:inline-block; padding:2px 8px; border-radius:4px; font-size:11px; margin-left:6px; vertical-align:middle; }
 .badge.online, .badge.lan { background:#e6f7ed; color:#0a8f4a; }
 .badge.self, .badge.wan { background:#e8f0fe; color:#1565c0; }
@@ -647,7 +638,6 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 @media (max-width:640px) {
   .topbar { padding:8px 12px; }
   .topbar-sub { display:none; }
-  .topbar-addr { display:none; }
   #roomCard, #p2pBanner, #lanBanner { margin:8px 12px 0; padding:10px 12px; }
   /* 手机屏幕小：去掉头像占的宽度，把共享画面放大到接近半屏 */
   #screenPanel > .msg-avatar { display:none; }
@@ -830,7 +820,7 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
         <span class="gate-txt">
           <b>创建房间</b>
           <i>在本机开一个房间</i>
-          <span class="gate-prog" id="gateProgress">
+          <span class="gate-prog">
             <span class="gate-prog-line"><span id="gateProgText"></span><b id="gateProgPct">0%</b></span>
             <span class="gate-prog-bar" id="gateProgBar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="gate-prog-fill" id="gateProgFill"></span></span>
           </span>
@@ -878,8 +868,6 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
     </span>
   </div>
   <div class="topbar-right">
-    <span class="conn-status" id="connStatus">连接中…</span>
-    <span class="topbar-addr" id="serverUrl"></span>
     <button class="icon-btn" id="netBtn" onclick="showNet()" title="网络与中继设置">🌐</button>
     <button class="icon-btn" id="helpBtn" onclick="showHelp()" title="使用帮助">?</button>
     <button class="icon-btn" id="adminBtn" onclick="onAdminClick()" title="设备管理">⚙</button>
@@ -1142,7 +1130,6 @@ const screenSlot = document.getElementById('screenSlot');
 const fi = document.getElementById('fileInput');
 const textInput = document.getElementById('textInput');
 const pendingArea = document.getElementById('pendingArea');
-const connStatus = document.getElementById('connStatus');
 // 两种进入方式共用一套界面：
 //   host  —— 本机页面（8000），或在线页点「创建房间」探活成功
 //   guest —— 在线页点「加入房间」，只走 P2P，不碰任何后端
@@ -1173,7 +1160,7 @@ let CLIENT_URL = 'https://zvzqvqdvd.github.io/data-transmission/';
 // 页面源文件指纹（由程序按 web/ 源文件现算，在线页 = 导出那一刻的值）。
 // 邀请链接 / 二维码 / 复制的访问地址都带 ?v=<指纹>：手机浏览器对页面缓存
 // 非常顽固，URL 不变就拿旧缓存页连新程序，轻则变慢、重则连不上。
-const PAGE_BUILD = '87596c45c1';
+const PAGE_BUILD = '2d34252614';
 let lastRev = null;
 let pollTimer = null;        // 房主端的 /messages 轮询
 let roomClosed = false;      // 房主已解散房间，页面停在入口页
@@ -1663,14 +1650,6 @@ function toast(m) {
   const t=document.getElementById('toast'); t.textContent=m; t.classList.add('show');
   setTimeout(()=>t.classList.remove('show'),1800);
 }
-function setConn(mode, n) {
-  if (mode === 'p2p') {
-    connStatus.textContent = (MODE === 'host' && n > 1) ? ('P2P 直连 × ' + n) : 'P2P 直连';
-  } else {
-    connStatus.textContent = mode==='wait' ? '房间已开' : mode==='http' ? '局域网' : mode==='off' ? '未连接' : '连接中…';
-  }
-  connStatus.className = 'conn-status ' + (mode==='p2p' ? 'p2p' : mode==='http' ? 'http' : '');
-}
 
 
 // ===== room.js — 房间内逻辑 =====
@@ -1701,9 +1680,6 @@ function clearDeviceLists() {
 function applyDevicePrivacy() {
   const owner = isRoomOwner();
   document.body.classList.toggle('is-room-owner', owner);
-  // 顶栏那串「当前访问地址」在别的设备上就是房主的局域网 IP，也一并收起来
-  const addr = document.getElementById('serverUrl');
-  if (addr) addr.style.display = owner ? '' : 'none';
   if (owner) return;
   roomDevices = [];
   clearDeviceLists();
@@ -1748,11 +1724,7 @@ function refreshReady() {
   fi.disabled = !ok;
   if (MODE === 'host') {
     const n = hostList().length;
-    if (isLanClient) {
-      setConn('http');          // 局域网设备永远走 HTTP，没有 P2P 可显示
-    } else {
-      if (n > 0) setConn('p2p', n);
-      else setConn(lanPeers > 0 ? 'http' : 'wait');
+    if (!isLanClient) {
       reportP2P(n);             // 房主把「外网有几台」报给后端，局域网设备才知道
     }
     updateHostRoomHint();
@@ -2624,10 +2596,6 @@ function setupLanBanner(url) {
   document.getElementById('lanLabel').textContent = '🏠 局域网';
   document.getElementById('lanUrl').textContent = short(lanShareUrl);
   document.getElementById('lanActions').style.display = 'flex';
-  const addr = document.getElementById('serverUrl');
-  addr.textContent = short(lanShareUrl);
-  addr.title = '点击复制局域网地址';
-  addr.onclick = copyLanUrl;
   box.style.display = 'block';
 }
 
@@ -2909,14 +2877,12 @@ function onRoomClosed(tip) {
   document.getElementById('guestGate').style.display = 'none';
   const lb = document.getElementById('lanBanner');
   if (lb) lb.style.display = 'none';
-  setConn('off');
   refreshReady();
   renderAll();
   ROOM = '';
-  // 回到起始页就把「自动回房」的痕迹清掉：?host=1 / ?room= / 本地存的房间码，
+  // 回到起始页就把「自动回房」的痕迹清掉：?host=1 / ?room=，
   // 否则刷新又会偷偷开一个新房间或连回已经作废的旧码
   try { history.replaceState(null, '', location.pathname); } catch (e) {}
-  try { localStorage.removeItem('lanshare_room_code'); } catch (e) {}
   showGate();
   // 局域网设备只有「输入房间码」这一步，不能回到「创建房间」
   if (isLanClient || JOIN_REQUIRED) showLanGate();
@@ -2941,11 +2907,9 @@ function onNeedJoin() {
   const lb2 = document.getElementById('lanBanner');
   if (lb2) lb2.style.display = 'none';
   document.getElementById('guestGate').style.display = 'none';
-  setConn('off');
   refreshReady();
   renderAll();
   try { history.replaceState(null, '', location.pathname); } catch (e) {}
-  try { localStorage.removeItem('lanshare_room_code'); } catch (e) {}
   showLanGate();
   gateMsg('房间码已经变了（房主新建或销毁了房间），请重新输入。', 'info');
 }
@@ -3004,7 +2968,6 @@ function startHostPeer(roomCode) {
   pcPeer = reuse || new Peer('pc-' + roomCode, peerOpts());
   const onReady = () => {
     hostRetry = 0;
-    setConn('wait');
     refreshReady();
   };
   if (reuse) onReady();
@@ -3058,7 +3021,6 @@ function startHostPeer(roomCode) {
   // 对方发起桌面共享时在这里接住
   pcPeer.on('call', acceptScreenCall);
   pcPeer.on('disconnected', () => {
-    setConn('connecting');
     showHostHint('信令连接断开，正在自动重连…');
     try { pcPeer.reconnect(); } catch (e) {}
   });
@@ -3335,7 +3297,6 @@ function startHostUI(fromWeb, lanUrl, lanClient) {
     // 别人从局域网 IP 打开本机服务：只走 HTTP，不当房主。
     // 它自己就是房间成员，可以直接发（后端会把它算进 peers）
     lanPeers = Math.max(lanPeers, 1);
-    setConn('http');
     // 与外网访客用同一张连接卡：只有通道名不同，别的文字一概不多写
     showOtherDeviceCard('🏠 局域网', ROOM);
     setGuestActions('connected');   // 走 HTTP，进来就是已连接
@@ -3346,7 +3307,6 @@ function startHostUI(fromWeb, lanUrl, lanClient) {
     if (lanUrl) {
       setupLanBanner(lanUrl);
     } else {
-      document.getElementById('serverUrl').style.display = 'none';
     }
   } else if (!isLanClient) {
     setupLanBanner();
@@ -3375,22 +3335,18 @@ function initGuest(room, existing) {
   applyDevicePrivacy();       // 访客只看得到自己的连接状态，看不到设备数 / IP
   guestGoneHandled = false;   // 重新进房，允许下一次「房间已不存在」再触发收尾
   document.getElementById('adminBtn').style.display = 'none';
-  document.getElementById('serverUrl').style.display = 'none';
   showOtherDeviceCard('🌍 外网直连', room || '');
   setGuestActions('connecting');   // 连接中先不给按钮
 
   if (/MicroMessenger|QQ\/|Weibo/.test(navigator.userAgent)) {
     document.getElementById('wxTip').style.display = 'block';
   }
-  // 记住这次进的是哪个房间：刷新页面后自动回来，不用重新输码
-  try { localStorage.setItem('lanshare_room_code', room); } catch (e) {}
   peerBye = false;
   guestAutoTry = 0;
   myName = '';                 // 房间里的名字等房主分配回来
   guestNames = [];
   seenIds = new Set();
   localMsgs = [];
-  setConn('off');
   setStatus('正在连接房间…');
   refreshReady();
   renderAll();
@@ -3528,10 +3484,8 @@ function resetToGate() {
   showGuestTip('');
   setGuestProgress(-1);
   hideScreenPanel();
-  try { localStorage.removeItem('lanshare_room_code'); } catch (e) {}
   // 邀请链接带来的 ?room= 也要清掉，否则刷新又会自动连回去
   try { history.replaceState(null, '', location.pathname); } catch (e) {}
-  setConn('off');
   renderAll();
   showGate();
   gateShowChoices();
@@ -3662,7 +3616,6 @@ function connectOnce(room) {
 }
 // 连接期内的失败处理：留在当前页面，给出可操作的提示
 function failGuest(msg, tip) {
-  setConn('off');
   setGuestActions('failed');       // 先切状态，失败原因才不会被「已连接」规则丢掉
   setStatus(msg);
   showGuestTip((tip || '') + ' 可点上方「重连」再试一次。');
@@ -3755,7 +3708,6 @@ function wireGuestConn(conn, onFail, onOpen) {
       guestReturnToGate('没进得去：房间那边没有回应（房主的页面可能已经关闭）。请稍后重新加入。');
       return;
     }
-    setConn('off');
     setGuestActions('connecting');
     refreshReady();
     renderAll();
@@ -3777,7 +3729,6 @@ function markGuestConnected() {
   guestAutoTry = 0;
   guestGoneHits = 0;
   peerBye = false;
-  setConn('p2p');
   // 连上后状态行整行收起，卡片只留「通道名 / 房间号 / 断开连接」
   setGuestActions('connected');    // 连上后只留「断开连接」
   setStatus('');                   // 顺手清掉连接阶段文字，掉线重连时不会翻旧账
@@ -4119,7 +4070,6 @@ function gateShowJoin() {
   // 若上一条预热连接失败过，趁用户输码再补一条，别让「加入」时从零握手
   prewarmSignal();
   const box = document.getElementById('gateRoom');
-  try { box.value = localStorage.getItem('lanshare_last_room') || ''; } catch (e) {}
   setTimeout(() => box.focus(), 60);
 }
 function gateShowChoices() {
@@ -4161,9 +4111,6 @@ function showLanGate() {
   if (back) back.style.display = 'none';
   gateClearMsg();
   const box = document.getElementById('gateRoom');
-  let savedRoom = '';
-  try { savedRoom = localStorage.getItem('lanshare_last_room') || ''; } catch (e) {}
-  box.value = savedRoom;
   // 扫的是局域网二维码：链接里已经带着房间码，填好并自动加入，不用手输
   let scanned = '';
   try {
@@ -4297,8 +4244,6 @@ async function gateCreate() {
     if (gateProgTimer) { clearInterval(gateProgTimer); gateProgTimer = null; }
     gateProgress(gateSteps.length, 100, true);
     hideGate();
-    // 记下「在在线页当房主」这件事，刷新后自动回到同一个房间
-    try { localStorage.removeItem('lanshare_room_code'); } catch (e) {}
     if (SEED_MODE !== 'host') {
       try { history.replaceState(null, '', '?host=1'); } catch (e) {}
     }
@@ -4343,7 +4288,6 @@ async function gateJoin() {
       try { box.select(); } catch (e) {}
       return;
     }
-    try { localStorage.setItem('lanshare_last_room', room); } catch (e) {}
     gateClearMsg();
     hideGate();
     // 二维码带的 ?room= 已经用掉了，清掉地址避免刷新又自动提交一次
@@ -4365,7 +4309,6 @@ async function gateJoin() {
     prewarmSignal();      // 这次的信令连接已经销毁了，先建好下一条，重试时不用再等
     return;
   }
-  try { localStorage.setItem('lanshare_last_room', room); } catch (e) {}
   gateClearMsg();
   hideGate();
   initGuest(room, { peer: res.peer, conn: res.conn, name: res.name, pending: res.pending });
@@ -4398,14 +4341,14 @@ if (MODE === 'host') {
   else initHost();
 } else {
   showGate();
+  // 房间号不再缓存（16:43 定稿）：旧版本遗留的键一并清掉，省得老用户浏览器里留死数据
+  try { localStorage.removeItem('lanshare_last_room'); localStorage.removeItem('lanshare_room_code'); } catch (e) {}
   // 在线页所有入口都先预热信令：邀请链接、恢复上次房间、手动输码都用得上。
   // 以前只有「停在入口页」那一个分支预热，邀请链接进来反而要等完整一轮握手。
   prewarmSignal();
   const q = new URLSearchParams(location.search);
   const clean = s => String(s || '').toUpperCase().replace(/[^A-Z2-9]/g, '');
   const invited = clean(q.get('room'));
-  let saved = '';
-  try { saved = clean(localStorage.getItem('lanshare_room_code')); } catch (e) {}
   if (invited) {
     // 邀请链接：按访客身份连过去。复选框默认勾选 = 已同意，直接进；
     // 被手动取消勾选过就停在入口页提示
@@ -4415,17 +4358,9 @@ if (MODE === 'host') {
   } else if (q.get('host') === '1') {
     // 在线页房主刷新：先确认房间还在，别一刷新就偷偷开个新房间
     resumeHostFromWeb();
-  } else if (saved.length >= 4) {
-    // 上次进过的房间可能已经被销毁：先探活，进得去才回主页面；
-    // 连不上就留在起始页说明原因，别停在「正在连接」的空白主界面。
-    // 复选框没勾（非默认状态）就留在入口页提示
-    const box = document.getElementById('gateRoom');
-    if (box) box.value = saved;
-    gateMsg('正在检查上次加入的房间…', 'info');
-    setTimeout(() => { try { gateJoin(); } catch (e) {} }, 60);
   }
-  // 没有邀请码、也没有上次房间：停在入口页等输码，预热已经在上面建好了，
-  // 用户输码的这几秒正好用来握手（省 0.3～1.5 秒）。
+  // 其余情况一律停在入口页等手动输码：房间号不再缓存（用户 16:43 定稿），
+  // 预热已经在上面建好了，用户输码的这几秒正好用来握手（省 0.3～1.5 秒）。
 }
 // 网络恢复 / 手机解锁回到前台：退避定时器还没走完也立刻再试一次，
 // 不用干等好几秒才恢复聊天。flushGuestRetry 自带房主/访客与连接状态守卫。
