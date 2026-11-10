@@ -439,20 +439,8 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 .btn-danger { background:#d93025; color:#fff; }
 .btn-danger:hover { background:#b3261e; filter:none; }
 .modal-tip { font-size:13px; line-height:1.75; color:#5c6b62; margin:-4px 0 4px; }
-/* 免责声明弹窗正文：段落分条、行距放宽，认真读得下去 */
-/* 免责声明：默认只显示复选框一行，点「《免责声明》」在下方展开全文，不弹窗 */
+/* 免责声明：入口页只显示复选框一行；点「《免责声明》」整页打开独立声明页 */
 .gate-disc { margin-top:14px; text-align:left; }
-.gd-body { max-height:0; overflow:hidden; transition:max-height .25s ease;
-  font-size:11.5px; line-height:1.8; color:#5c6b62; }
-.gate-disc.open .gd-body { max-height:40vh; overflow-y:auto; overscroll-behavior:contain;
-  margin-top:10px; padding-right:4px; }
-.gd-body p { margin:0 0 8px; }
-.gd-body b { color:#22352b; }
-/* 展开后才出现的收起按钮 */
-.gd-collapse { display:none; margin:8px auto 0; padding:2px 14px; border:1px solid #d5ddd6;
-  border-radius:999px; background:#fff; font-size:11.5px; color:#5c6b62; cursor:pointer; }
-.gd-collapse:hover { color:#22352b; border-color:#b9c4ba; }
-.gate-disc.open .gd-collapse { display:block; }
 /* 复选框：微信风圆形勾选（绿底白勾），原生 input 隐藏只当状态用 */
 .agree-check { display:flex; align-items:center; justify-content:center; gap:7px;
   margin-top:12px; font-size:12.5px; color:#41544a; cursor:pointer; user-select:none; position:relative; }
@@ -468,6 +456,23 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 .agree-check input:checked + .gd-box::after { opacity:1; }
 .agree-check input:focus-visible + .gd-box { box-shadow:0 0 0 3px rgba(7,193,96,.18); }
 .gd-link { color:#07C160; cursor:pointer; }
+/* 免责声明独立页：盖满全屏，全文单独展示，头部返回按钮 */
+.disc-page { position:fixed; inset:0; z-index:320; background:#f2f5f3;
+  display:none; flex-direction:column; }
+.disc-page.show { display:flex; }
+.dp-head { flex:none; display:flex; align-items:center; gap:10px;
+  padding:14px 16px; background:#fff; border-bottom:1px solid #e3e9e4; }
+.dp-back { flex:none; padding:4px 12px; border:1px solid #d5ddd6; border-radius:999px;
+  background:#fff; font-size:13px; color:#41544a; cursor:pointer; }
+.dp-back:hover { color:#22352b; border-color:#b9c4ba; }
+.dp-back:active { background:#eef3ef; }
+.dp-title { flex:1; text-align:center; font-size:15px; font-weight:600; color:#22352b; }
+.dp-spacer { flex:none; width:64px; }        /* 与返回按钮等宽，标题保持居中 */
+.dp-body { flex:1; overflow-y:auto; overscroll-behavior:contain;
+  padding:20px 18px 32px; max-width:640px; margin:0 auto; width:100%;
+  box-sizing:border-box; font-size:13px; line-height:2; color:#41544a; }
+.dp-body p { margin:0 0 14px; text-align:justify; }
+.dp-body b { color:#22352b; }
 .btn-primary { background:#07C160; color:#fff; }
 .btn-primary:disabled { background:#a8dcbc; color:rgba(255,255,255,.9); cursor:not-allowed; }
 .dev-list { list-style:none; }
@@ -849,23 +854,13 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 
     <div id="gateMsg"></div>
 
-    <!-- 免责声明：默认只显示复选框一行，点「《免责声明》」才展开全文。不弹窗 -->
+    <!-- 免责声明：只显示复选框一行；点「《免责声明》」打开独立声明页 -->
     <div class="gate-disc" id="gateDisc">
       <label class="agree-check">
         <input type="checkbox" id="agreeCheck" checked>
         <i class="gd-box" aria-hidden="true"></i>
-        <span>我已阅读并同意<a class="gd-link" onclick="toggleDisclaimer(event)">《免责声明》</a>并同意继续使用</span>
+        <span>我已阅读并同意<a class="gd-link" onclick="openDiscPage(event)">《免责声明》</a>并同意继续使用</span>
       </label>
-      <div class="gd-body" id="disclaimerBody">
-        <p><b>1. 用途限制</b>　本软件（含桌面程序与本网页，以下统称「本服务」）仅供个人学习、研究与技术交流使用，严禁用于任何商业用途或盈利活动，严禁用于企业生产环境。</p>
-        <p><b>2. 遵守法律</b>　使用本服务必须遵守《中华人民共和国网络安全法》《数据安全法》《个人信息保护法》及其他适用法律法规。不得利用本服务实施任何违法活动，包括但不限于：危害国家安全、传播淫秽色情与暴力恐怖信息、赌博诈骗、侵犯知识产权、传播木马病毒、非法侵入或干扰他人网络与系统。</p>
-        <p><b>3. 内容责任</b>　用户通过本服务创建、发送、接收的文字、文件与共享画面等内容均由用户自行产生，相应法律责任完全由内容发布者自行承担。请勿传输涉密信息、他人隐私或任何不适宜共享的内容。</p>
-        <p><b>4. 数据与隐私</b>　本服务基于局域网与点对点直连技术，数据在设备之间直接传输，不经由第三方服务器长期保存。房间内的聊天记录与接收文件只做临时存放，房间销毁或新建后即被删除且不可恢复，请自行备份重要数据。</p>
-        <p><b>5. 无担保</b>　本服务按「现状」提供，不作任何明示或默示的保证，包括但不限于可用性、无错误、准确性、完整性与特定用途适用性。因网络环境、系统故障或操作不当导致的数据丢失、传输中断等，开发者不承担责任。</p>
-        <p><b>6. 责任限制</b>　对于因使用或无法使用本服务而产生的任何直接或间接损失（包括但不限于数据损失、业务中断、利润损失），开发者在其法律允许的最大范围内不承担任何责任。</p>
-        <p><b>7. 声明生效</b>　勾选下方复选框并继续使用本服务，即视为您已完整阅读、充分理解并接受上述全部条款。如您不同意任何一项，请立即停止使用本服务。</p>
-      </div>
-      <button class="gd-collapse" onclick="toggleDisclaimer(event)">收起 ▴</button>
     </div>
 
     <div class="gate-foot">创建房间需要本机已运行程序<br>加入房间不需要，任何设备都能加入</div>
@@ -1119,6 +1114,26 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 <div class="toast" id="toast"></div>
 </div><!-- /hostView -->
 
+<!-- 免责声明独立页：点入口页「《免责声明》」整页打开，全文单独展示。
+     放在 body 顶层、<script> 之前（与弹窗同样的解析期安全规则） -->
+<div class="disc-page" id="discPage">
+  <header class="dp-head">
+    <button class="dp-back" onclick="closeDiscPage(event)">返回</button>
+    <span class="dp-title">免责声明</span>
+    <i class="dp-spacer"></i>
+  </header>
+  <div class="dp-body">
+    <p style="text-align:center"><b>发布日期：2026年11月10日　适用范围：数据传输网页版及桌面程序</b></p>
+    <p><b>一、用途限制</b><br>本服务仅供个人学习、研究与技术交流使用。严禁将本服务用于任何商业或盈利活动，严禁用于企业生产环境或对外提供服务。</p>
+    <p><b>二、合法使用</b><br>使用本服务须遵守《中华人民共和国网络安全法》《数据安全法》《个人信息保护法》等法律法规。不得利用本服务从事任何违法活动，包括但不限于：危害国家安全、传播违法违规信息、赌博诈骗、侵犯他人知识产权或隐私、传播木马病毒、非法侵入或干扰他人网络与系统。</p>
+    <p><b>三、内容责任</b><br>您通过本服务发送、接收的文字、文件及共享画面等内容，均由您自行产生并自行负责，相应法律责任由内容发布者承担。请勿传输涉密信息、他人隐私或依法不应传播的内容。</p>
+    <p><b>四、数据与隐私</b><br>本服务基于局域网与点对点直连技术，数据在设备之间直接传输，不经由第三方服务器长期保存。房间内的聊天记录与接收文件仅作临时存放，房间销毁、重建或程序退出后即被删除且不可恢复，请提前自行备份重要数据。</p>
+    <p><b>五、服务无担保</b><br>本服务按「现状」提供，不对可用性、无错误、准确性、完整性或特定用途适用性作任何明示或默示的保证。因网络环境、系统故障或操作不当导致的数据丢失、传输中断等，开发者不承担责任。</p>
+    <p><b>六、责任限制</b><br>对于因使用或无法使用本服务而产生的任何直接或间接损失（包括但不限于数据损失、业务中断、利润损失），开发者在法律允许的最大范围内不承担责任。</p>
+    <p><b>七、条款变更与生效</b><br>本声明可能不时更新，更新后在页面公布。您勾选下方复选框并继续使用本服务，即视为已完整阅读、充分理解并接受本声明全部条款；如您不同意任何一项，请立即停止使用本服务。</p>
+  </div>
+</div>
+
 <script>
 const chatInner = document.getElementById('chatInner');
 const chatScroll = document.getElementById('chatScroll');
@@ -1158,7 +1173,7 @@ let CLIENT_URL = 'https://zvzqvqdvd.github.io/data-transmission/';
 // 页面源文件指纹（由程序按 web/ 源文件现算，在线页 = 导出那一刻的值）。
 // 邀请链接 / 二维码 / 复制的访问地址都带 ?v=<指纹>：手机浏览器对页面缓存
 // 非常顽固，URL 不变就拿旧缓存页连新程序，轻则变慢、重则连不上。
-const PAGE_BUILD = 'dbbe44336a';
+const PAGE_BUILD = '87596c45c1';
 let lastRev = null;
 let pollTimer = null;        // 房主端的 /messages 轮询
 let roomClosed = false;      // 房主已解散房间，页面停在入口页
@@ -4083,12 +4098,14 @@ function agreeHintFlash() {
   }
   toast('请先勾选「我已阅读并同意《免责声明》并同意继续使用」');
 }
-// 点「《免责声明》」展开/收起全文（不弹窗，就在复选框下方展开）
-function toggleDisclaimer(e) {
+// 点「《免责声明》」整页打开独立声明页
+function openDiscPage(e) {
   if (e) { e.preventDefault(); e.stopPropagation(); }   // 别触发复选框
-  const sec = document.getElementById('gateDisc');
-  if (!sec) return;
-  sec.classList.toggle('open');
+  document.getElementById('discPage').classList.add('show');
+}
+function closeDiscPage(e) {
+  if (e) { e.preventDefault(); e.stopPropagation(); }
+  document.getElementById('discPage').classList.remove('show');
 }
 // 统一入口：勾选了直接继续，没勾选就提示
 function agreeThen(fn) {
