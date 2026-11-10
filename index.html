@@ -1141,7 +1141,7 @@ let CLIENT_URL = 'https://zvzqvqdvd.github.io/data-transmission/';
 // 页面源文件指纹（由程序按 web/ 源文件现算，在线页 = 导出那一刻的值）。
 // 邀请链接 / 二维码 / 复制的访问地址都带 ?v=<指纹>：手机浏览器对页面缓存
 // 非常顽固，URL 不变就拿旧缓存页连新程序，轻则变慢、重则连不上。
-const PAGE_BUILD = '8f6af3752f';
+const PAGE_BUILD = 'a741c29ad8';
 let lastRev = null;
 let pollTimer = null;        // 房主端的 /messages 轮询
 let roomClosed = false;      // 房主已解散房间，页面停在入口页
@@ -2600,12 +2600,12 @@ function setupLanBanner(url) {
 }
 
 function copyLanUrl() {
-  const base = (lanShareUrl || LAN_URL || (location.protocol + '//' + location.host))
+  // 复制的就是干净地址（用户 11-10 定稿：不带任何参数）；
+  // 缓存参数只放在二维码/邀请链接里，复制地址给电脑或浏览器打开足够新鲜
+  const text = (lanShareUrl || LAN_URL || (location.protocol + '//' + location.host))
     .replace(/[?#].*$/, '');
-  // 复制的地址带 ?v= 指纹：程序热更新后，别人浏览器里缓存的旧页面连不上新程序
-  const text = base + '?v=' + PAGE_BUILD;
   copyText(text, ok => {
-    const short = base.replace(/^https?:\/\//, '');
+    const short = text.replace(/^https?:\/\//, '');
     if (ok) toast('已复制局域网地址：' + short);
     else toast('复制失败，请手动记下：' + short);
   });
@@ -2660,13 +2660,13 @@ function setupInvite(room) {
   document.getElementById('inviteHint').textContent = '';
   makeQR(inviteUrl(room));   // 二维码带房间码：扫码免输直接进房
 }
-// 复制的是不带房间码的基础地址：外网设备打开后自己输房间码加入。
-// 带 ?v= 页面指纹防旧缓存（二维码同款），提示里展示的仍是干净短地址
+// 复制的是不带房间码、不带参数的干净基础地址：外网设备打开后自己输房间码加入
+// （用户 11-10 定稿：复制 = 纯地址；缓存参数只放二维码/邀请链接里）
 function copyInviteUrl() {
   const base = inviteBase();
   if (!base) return;
   const short = base.replace(/^https?:\/\//, '');
-  copyText(base + '?v=' + PAGE_BUILD,
+  copyText(base,
            ok => toast(ok ? '已复制访问地址：' + short : '复制失败，请手动记下：' + short));
 }
 function toggleQR() {
