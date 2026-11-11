@@ -1187,6 +1187,7 @@ body.fs-locked { overflow:hidden; }
       · 房主点「销毁房间」<br>
       销毁时房间码作废，本机的聊天记录与接收文件也一并删除，不做保留。</p>
     <div class="modal-btns"><button class="btn-plain" onclick="hideTtl()">知道了</button></div>
+    <p style="text-align:center;font-size:11px;color:#b0b3b8;margin:10px 0 0;">页面版本 fcb2b366e1（反馈问题时请带上这一行）</p>
   </div>
 </div>
 
@@ -1305,7 +1306,7 @@ let CLIENT_URL = 'https://zvzqvqdvd.github.io/data-transmission/';
 // 页面源文件指纹（由程序按 web/ 源文件现算，在线页 = 导出那一刻的值）。
 // 邀请链接 / 二维码 / 复制的访问地址都带 ?v=<指纹>：手机浏览器对页面缓存
 // 非常顽固，URL 不变就拿旧缓存页连新程序，轻则变慢、重则连不上。
-const PAGE_BUILD = 'afb5dced22';
+const PAGE_BUILD = 'fcb2b366e1';
 let lastRev = null;
 let pollTimer = null;        // 房主端的 /messages 轮询
 let roomClosed = false;      // 房主已解散房间，页面停在入口页
