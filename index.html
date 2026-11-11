@@ -328,18 +328,10 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   padding:12px; width:min(280px,100%); text-decoration:none; color:inherit;
   position:relative; box-shadow:0 1px 3px rgba(0,0,0,.06);
   transition:box-shadow .18s, transform .18s;
+  cursor:pointer;   /* 11-11 定稿：不放下载图标，点卡片本身下载 */
 }
 .file-card:hover { box-shadow:0 4px 12px rgba(0,0,0,.1); transform:translateY(-1px); }
-/* 卡片右侧的独立下载按钮：点它才下载，卡片本体不响应 */
-.file-dl {
-  flex-shrink:0; margin-left:auto; width:30px; height:30px;
-  border-radius:50%; border:1px solid #bfe6cf; background:#e9f8ef;
-  color:#0a8f4a; font-size:14px; line-height:1; cursor:pointer;
-  display:inline-flex; align-items:center; justify-content:center;
-  transition:background .15s, transform .15s;
-}
-.file-dl:hover { background:#07C160; border-color:#07C160; color:#fff; transform:scale(1.08); }
-.file-dl:active { transform:scale(.94); }
+.file-card:active { transform:scale(.985); }
 /* 文件卡片正下方的拉取进度条（访客端） */
 .pull-wrap { display:none; margin-top:6px; }
 .pull-bar {
@@ -756,20 +748,13 @@ body.fs-locked { overflow:hidden; }
   background:#eef0f1; box-shadow:0 1px 4px rgba(0,0,0,.08); cursor:zoom-in;
 }
 .img-card img { display:block; max-width:100%; max-height:240px; width:auto; height:auto; }
-.img-dl {
-  position:absolute; right:8px; top:8px; width:26px; height:26px;
-  border:none; border-radius:50%; background:rgba(0,0,0,.55); color:#fff;
-  font-size:13px; cursor:pointer; font-family:inherit; line-height:1;
-  display:flex; align-items:center; justify-content:center;
-}
-.img-dl:hover { background:rgba(0,0,0,.75); }
 .img-fb {
   display:none; flex-direction:column; align-items:center; justify-content:center;
   gap:5px; padding:22px 18px; font-size:12px; color:#888780;
 }
 .img-fb b { font-weight:500; color:#5f5e5a; word-break:break-all; }
 .img-card.img-fail { cursor:default; }
-.img-card.img-fail img, .img-card.img-fail .img-dl { display:none; }
+.img-card.img-fail img { display:none; }
 .img-card.img-fail .img-fb { display:flex; }
 /* 访客未拉取本体的图片占位卡：点卡片就走 FILE_PULL */
 .file-card.img-pending { cursor:pointer; }
@@ -1181,7 +1166,7 @@ body.fs-locked { overflow:hidden; }
       </details>
       <details>
         <summary>收到的文件存在哪了？</summary>
-        <p>房主那台设备上：<code>数据\房间\&lt;房间码&gt;\接收文件\</code>。其他设备不会自动下载聊天里的文件，点文件卡片右侧的「⬇」按钮才从房主传过来，存在系统的下载目录里。</p>
+        <p>房主那台设备上：<code>数据\房间\&lt;房间码&gt;\接收文件\</code>。其他设备不会自动下载聊天里的文件，点一下文件卡片就会从房主传过来，存在系统的下载目录里；图片会自动加载预览。</p>
       </details>
       <details>
         <summary>大文件能传多大？</summary>
@@ -1320,7 +1305,7 @@ let CLIENT_URL = 'https://zvzqvqdvd.github.io/data-transmission/';
 // 页面源文件指纹（由程序按 web/ 源文件现算，在线页 = 导出那一刻的值）。
 // 邀请链接 / 二维码 / 复制的访问地址都带 ?v=<指纹>：手机浏览器对页面缓存
 // 非常顽固，URL 不变就拿旧缓存页连新程序，轻则变慢、重则连不上。
-const PAGE_BUILD = 'a373a08b35';
+const PAGE_BUILD = 'afb5dced22';
 let lastRev = null;
 let pollTimer = null;        // 房主端的 /messages 轮询
 let roomClosed = false;      // 房主已解散房间，页面停在入口页
@@ -1963,6 +1948,7 @@ function renderAll() {
   mountScreenVideo(all);      // 共享画面挂到聊天卡上
   autoWatchLiveCards(all);    // 共享进行中：没流的一端自动请求补推
   ensureScDurTimer(all);      // 直播时长走秒（没有直播卡时会顺带收掉全屏层）
+  autoPullImages(all);        // 图片自动预览（仅访客端生效，其余模式直接返回）
   chatScroll.scrollTop = chatScroll.scrollHeight;
 }
 
@@ -1982,7 +1968,7 @@ const MIME_MAP = {
   pdf:'application/pdf', txt:'text/plain'
 };
 function mimeOf(name) { return MIME_MAP[extOf(name)] || 'application/octet-stream'; }
-// 文件下载地址：房主/局域网走本机接口，访客没有后端（本体要点 ⬇ 按需拉取）
+// 文件下载地址：房主/局域网走本机接口，访客没有后端（本体点卡片按需拉取）
 function fileUrl(msg) {
   if (msg.url) return msg.url;
   if (MODE === 'guest') return '';
@@ -2047,7 +2033,9 @@ function renderMsg(msg) {
       '</div>';
     }
   } else {
-    // 文件消息：图片直接渲染成预览图（点开大图），其它文件仍是一张卡片
+    // 文件消息：图片直接渲染成预览图（点开大图），其它文件仍是一张卡片。
+    // 11-11 定稿：所有卡片都不再放下载图标（⬇ 在手机/电脑/iOS 上渲染不一致），
+    // 点卡片本身完成对应动作——图片看大图、文件直接下载。
     const nm = esc(msg.name), sz = esc(msg.size || '');
     const ext=String(msg.name||'').split('.').pop().toUpperCase().slice(0,4);
     const inner = '<div class="file-icon">'+esc(ext)+'</div>'+
@@ -2062,25 +2050,22 @@ function renderMsg(msg) {
           '<div class="img-fb"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="#888780" stroke-width="1.6" stroke-linecap="round">'+
           '<rect x="3" y="4.5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M4.5 17l4.6-4.4 3.2 3 3-2.6 4.2 4"/></svg>'+
           '<b>'+nm+'</b><span>'+sz+' · 图片加载失败</span></div>'+
-          '<button class="img-dl" title="下载到本机" onclick="event.stopPropagation();dlImg(this)">⬇</button>'+
         '</div>';
       } else {
-        // 访客还没拉取本体：文件卡占位，点卡片或 ⬇ 走 FILE_PULL，到手自动变成预览图
+        // 访客还没拿到本体：占位卡，图片会自动预览（autoPullImages），这里只是
+        // 自动拉取失败 / 大图超限时的兜底，点卡片手动走 FILE_PULL
         bubble = '<div class="file-card img-pending" title="点击加载预览" onclick="pullFile(\'' + esc(msg.id) + '\')">'+
           '<div class="file-icon">'+esc(ext)+'</div>'+
           '<div class="file-info"><div class="file-name">'+nm+'</div>'+
-          '<div class="file-size">'+sz+'</div><div class="img-hint">点击加载预览</div></div>'+
-          '<button class="file-dl" title="下载到本机" onclick="event.stopPropagation();pullFile(\'' + esc(msg.id) + '\')">⬇</button></div>';
+          '<div class="file-size">'+sz+'</div><div class="img-hint">点击加载预览</div></div></div>';
       }
     } else if (MODE === 'guest' && msg.id) {
-      // 访客：文件在房主磁盘上，点 ⬇ 走 FILE_PULL 按需拉取
-      bubble = '<div class="file-card" title="点右侧 ⬇ 下载">'+ inner +
-        '<button class="file-dl" title="下载到本机" onclick="pullFile(\'' + esc(msg.id) + '\')">⬇</button></div>';
+      // 访客：文件在房主磁盘上，点卡片走 FILE_PULL 按需拉取
+      bubble = '<div class="file-card" title="点击下载" onclick="pullFile(\'' + esc(msg.id) + '\')">'+ inner + '</div>';
     } else {
-      // 房主 / 局域网：文件就在本机后端，点 ⬇ 直接下载
-      bubble = '<div class="file-card" title="点右侧 ⬇ 下载">'+ inner +
-        '<button class="file-dl" title="下载到本机" data-name="'+esc(msg.name)+'" ' +
-        'onclick="downloadLocal(this)">⬇</button></div>';
+      // 房主 / 局域网：文件就在本机后端，点卡片直接下载
+      bubble = '<div class="file-card" title="点击下载" data-name="'+esc(msg.name)+'" ' +
+        'onclick="downloadLocal(this)">'+ inner + '</div>';
     }
   }
   // 访客文件卡片正下方的下载进度条（平时隐藏，下载中由 txRender 填充）
@@ -2100,7 +2085,7 @@ function renderMsg(msg) {
   return '<div class="msg-row'+(self?' self':'')+'">'+ avatar + side +'</div>';
 }
 
-// 房主 / 局域网端：文件在本机后端，点 ⬇ 触发浏览器下载
+// 房主 / 局域网端：文件在本机后端，点卡片触发浏览器下载
 function downloadLocal(btn) {
   const name = btn.getAttribute('data-name') || '';
   if (!name) return;
@@ -2121,16 +2106,31 @@ function imgCardFail(img) {
   const c = img.closest('.img-card');
   if (c) c.classList.add('img-fail');
 }
-// 缩略图上的 ⬇：直接存 data-src（blob 或本机接口地址都能下载）
-function dlImg(btn) {
-  const c = btn.closest('.img-card');
-  if (!c) return;
-  const a = document.createElement('a');
-  a.href = c.getAttribute('data-src') || '';
-  a.download = c.getAttribute('data-name') || 'image';
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => a.remove(), 1000);
+// ===== 图片自动预览（访客端）：图片消息到手就自动拉本体做预览 =====
+// 只为预览、不触发「保存到下载目录」；超限的图留给占位卡手动点。
+const IMG_AUTO_MAX = 10 * 1024 * 1024;   // 超过 10MB 的图片不自动拉（省流量省通道）
+const imgAutoTried = new Set();          // 已尝试自动拉的 mid，失败不无限重试
+const previewOnlyMids = new Set();       // 本次拉取只做预览，onFileReceived 里不落盘
+// "12.3 KB" / "4.5 MB" / "800 B" -> 字节数；解析不了返回 -1
+function sizeBytes(s) {
+  const m = String(s || '').trim().match(/^([\d.]+)\s*(B|KB|MB|GB)$/i);
+  if (!m) return -1;
+  const u = { B:1, KB:1024, MB:1048576, GB:1073741824 }[m[2].toUpperCase()];
+  return Math.round(parseFloat(m[1]) * u);
+}
+// renderAll 里调用：把能自动预览的图片排进下载队列（串行，一次一个，不抢占通道）
+function autoPullImages(list) {
+  if (MODE !== 'guest' || !guestConn || !guestConn.open) return;
+  for (const m of list) {
+    if (!m || m.type !== 'file' || !isImgName(m.name) || m.url || !m.id) continue;
+    if (imgAutoTried.has(m.id)) continue;
+    if (pullInFlight.has(m.id) || pullQueue.some(x => x.mid === m.id)) continue;
+    const b = sizeBytes(m.size);
+    if (b < 0 || b > IMG_AUTO_MAX) continue;   // 大小未知/超限：留给手动点占位卡
+    imgAutoTried.add(m.id);
+    pullQueue.push({ mid: m.id, name: m.name, preview: true });
+  }
+  pumpPullQueue();
 }
 // 大图查看器：页面内全屏黑底层，✕ / Esc / 点背景关闭（点图片本身不关，方便长按保存）
 function openImgViewer(el) {
@@ -2414,7 +2414,7 @@ function handleData(data, ctx) {
       try { e0 = JSON.parse(data.slice(16)); } catch (e) {}
       const mid = e0 && e0.mid;
       if (mid) {
-        pullInFlight.delete(mid); pumpPullQueue();
+        pullInFlight.delete(mid); previewOnlyMids.delete(mid); pumpPullQueue();
         const w = document.getElementById('pullwrap-' + mid);
         if (w) { w.style.display = 'none'; w.querySelector('.pull-bar i').style.width = '0%'; }
       }
@@ -2926,11 +2926,11 @@ function acceptScreenCall(call) {
   });
 }
 
-// ===== 按需下载（访客端）：⬇ 按钮 → 向房主要文件本体 → 存到下载目录 =====
+// ===== 按需下载（访客端）：点文件卡片 → 向房主要文件本体 → 存到下载目录 =====
 // 同一时间只拉一个文件：访客只有一条数据通道，混着收会串包
 const pullInFlight = new Set();  // 正在拉取的 mid
 const pullQueue = [];            // 排队中的 {mid, name}
-// ⬇ 按钮：把文件从房主拉过来并存到下载目录
+// 拉取入口：把文件从房主拉过来并存到下载目录（图片自动预览也走这条队列）
 function pullFile(mid) {
   const m = localMsgs.find(x => x.id === mid);
   if (!m || m.type !== 'file') return;
@@ -2956,6 +2956,7 @@ function pumpPullQueue() {
     return;
   }
   pullInFlight.add(job.mid);
+  if (job.preview) previewOnlyMids.add(job.mid);   // 只做预览：到手不落盘不提示
   try {
     guestConn.send('FILE_PULL:' + JSON.stringify({ mid: job.mid, name: job.name }));
     setStatus('正在请求下载: ' + job.name);
@@ -2982,8 +2983,13 @@ async function onFileReceived(blob, name, mid, from) {
     else pushMsg({ type: 'file', name: name, size: fmtSize(blob.size), url: url,
                    ip: from || '外网设备', id: mid || uid() });
     txEnd();
-    setStatus('✅ ' + name + ' 已下载', true);
-    saveBlob(url, name);
+    // 自动预览的图片：只把预览图摆进聊天流，不往下载目录落盘、不弹「已下载」
+    if (mid && previewOnlyMids.has(mid)) {
+      previewOnlyMids.delete(mid);
+    } else {
+      setStatus('✅ ' + name + ' 已下载', true);
+      saveBlob(url, name);
+    }
     if (mid) pullInFlight.delete(mid);
     pumpPullQueue();
     return;
@@ -4017,6 +4023,7 @@ function resetToGate() {
   guestAutoTry = 0;
   guestGoneHits = 0;
   pullInFlight.clear(); pullQueue.length = 0;   // 清掉没完成的下载任务
+  imgAutoTried.clear(); previewOnlyMids.clear();
   serverMsgs = []; localMsgs = [];
   seenIds = new Set();
   guestNames = [];
