@@ -759,6 +759,8 @@ body.fs-locked { overflow:hidden; }
 /* 访客未拉取本体的图片占位卡：点卡片就走 FILE_PULL */
 .file-card.img-pending { cursor:pointer; }
 .img-hint { font-size:11px; color:#07C160; margin-top:2px; }
+/* 自动预览试满次数仍失败：文案改成「点此重试」，颜色压灰一点 */
+.file-card.img-stuck .img-hint { color:#b26a00; }
 /* ===== 图片大图查看器 ===== */
 .iv {
   display:none; position:fixed; left:0; top:0; right:0; bottom:0; z-index:410;
@@ -771,6 +773,13 @@ body.fs-locked { overflow:hidden; }
   border:none; border-radius:50%; background:rgba(255,255,255,.18); padding:0;
   display:flex; align-items:center; justify-content:center; cursor:pointer;
 }
+/* 大图查看器里的「保存原图」：卡片上不再放下载图标，存图走这里 */
+.iv-save {
+  position:absolute; left:50%; bottom:22px; transform:translateX(-50%);
+  border:none; border-radius:16px; padding:8px 18px; cursor:pointer;
+  background:rgba(255,255,255,.2); color:#fff; font-size:13px;
+}
+.iv-save:active { background:rgba(255,255,255,.32); }
 
 /* ===== 窄屏适配 ===== */
 @media (max-width:640px) {
@@ -1187,7 +1196,8 @@ body.fs-locked { overflow:hidden; }
       · 房主点「销毁房间」<br>
       销毁时房间码作废，本机的聊天记录与接收文件也一并删除，不做保留。</p>
     <div class="modal-btns"><button class="btn-plain" onclick="hideTtl()">知道了</button></div>
-    <p style="text-align:center;font-size:11px;color:#b0b3b8;margin:10px 0 0;">页面版本 a0d01d26c8（反馈问题时请带上这一行）</p>
+    <p style="text-align:center;font-size:11px;color:#b0b3b8;margin:10px 0 0;">页面版本 7b47811036（反馈问题时请带上这一行）</p>
+    <p id="imgStat" style="text-align:center;font-size:11px;color:#b0b3b8;margin:4px 0 0;"></p>
   </div>
 </div>
 
@@ -1267,6 +1277,7 @@ body.fs-locked { overflow:hidden; }
     <svg viewBox="0 0 12 12" width="12" height="12"><path d="M2 2l8 8M10 2l-8 8" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/></svg>
   </button>
   <img id="ivImg" alt="图片预览" onclick="event.stopPropagation()">
+  <button class="iv-save" onclick="event.stopPropagation();saveImgViewer()">保存原图</button>
 </div>
 
 <script>
@@ -1306,7 +1317,7 @@ let CLIENT_URL = 'https://zvzqvqdvd.github.io/data-transmission/';
 // 页面源文件指纹（由程序按 web/ 源文件现算，在线页 = 导出那一刻的值）。
 // 邀请链接 / 二维码 / 复制的访问地址都带 ?v=<指纹>：手机浏览器对页面缓存
 // 非常顽固，URL 不变就拿旧缓存页连新程序，轻则变慢、重则连不上。
-const PAGE_BUILD = 'a0d01d26c8';
+const PAGE_BUILD = '7b47811036';
 let lastRev = null;
 let pollTimer = null;        // 房主端的 /messages 轮询
 let roomClosed = false;      // 房主已解散房间，页面停在入口页
@@ -1324,12 +1335,18 @@ let hostConns = new Map();
 let hostSeq = 0;
 // 文件接收缓冲按连接隔离，否则两台设备同时发文件会串包
 let recvBuf = new Map();
+// 二进制分片若是 Blob 形式到达（部分手机浏览器），要异步读成 ArrayBuffer；
+// 这条链保证异步读取也严格按到达顺序拼进 recvBuf
+let chunkChain = Promise.resolve();
 let guestPeer = null, guestConn = null;
 let myName = '';             // 本机在房间里的名字（房主为「房主」，访客由房主分配）
 let guestNames = [];         // 房间成员名单（房主广播过来的）
 let pushedIds = new Set();   // 房主端：已经转发给外网设备的消息 id
 let relaySeeded = false;     // 首次拉 /messages 只记 id 不转发（历史由 HISTORY 单独推）
-const CHUNK_SIZE = 16 * 1024;
+// 分片大小必须小于 PeerJS 内部的 chunkedMTU(16300)：一旦超过，PeerJS 会把每片
+// 再拆成两条消息、并在接收端用 Blob 异步重组——最后一片可能晚一步才交上来，
+// 紧随其后的 FILE_END 就会判「不完整」把整张图丢掉（手机端几乎必踩，电脑端偶尔侥幸）。
+const CHUNK_SIZE = 15000;
 const MAX_BUFFERED = 512 * 1024;
 const ICE_SERVERS = [
   { urls: 'stun:stun.miwifi.com:3478' },
@@ -1950,6 +1967,7 @@ function renderAll() {
   autoWatchLiveCards(all);    // 共享进行中：没流的一端自动请求补推
   ensureScDurTimer(all);      // 直播时长走秒（没有直播卡时会顺带收掉全屏层）
   autoPullImages(all);        // 图片自动预览（仅访客端生效，其余模式直接返回）
+  updateImgStat();            // 房间说明里的预览状态行（排查用）
   chatScroll.scrollTop = chatScroll.scrollHeight;
 }
 
@@ -2047,7 +2065,7 @@ function renderMsg(msg) {
       const src = msg.url || (MODE !== 'guest' ? fileUrl(msg) : '');
       if (src) {
         bubble = '<div class="img-card" data-src="'+esc(src)+'" data-name="'+esc(msg.name)+'" onclick="openImgViewer(this)" title="点击查看大图">'+
-          '<img src="'+esc(src)+'" loading="lazy" alt="'+esc(msg.name)+'" onerror="imgCardFail(this)">'+
+          '<img src="'+esc(src)+'" alt="'+esc(msg.name)+'" onerror="imgCardFail(this)">'+
           '<div class="img-fb"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="#888780" stroke-width="1.6" stroke-linecap="round">'+
           '<rect x="3" y="4.5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M4.5 17l4.6-4.4 3.2 3 3-2.6 4.2 4"/></svg>'+
           '<b>'+nm+'</b><span>'+sz+' · 图片加载失败</span></div>'+
@@ -2055,11 +2073,14 @@ function renderMsg(msg) {
       } else {
         // 访客还没拿到本体：占位卡，图片会自动预览（autoPullImages），这里只是
         // 自动拉取失败 / 大图超限时的兜底，点卡片手动走 FILE_PULL
-        bubble = '<div class="file-card img-pending" data-mid="'+esc(msg.id)+'" title="点击加载预览" onclick="pullFile(\'' + esc(msg.id) + '\')">'+
+        const tries = imgAutoTries.get(msg.id) || 0;
+        const hint = (tries >= IMG_AUTO_MAX_TRIES)
+          ? '预览失败，点此重试'
+          : (imgAutoTried.has(msg.id) ? '正在加载预览…' : '点击加载预览');
+        bubble = '<div class="file-card img-pending'+(tries >= IMG_AUTO_MAX_TRIES ? ' img-stuck' : '')+'" data-mid="'+esc(msg.id)+'" title="'+(tries >= IMG_AUTO_MAX_TRIES ? '点击重新加载预览' : '点击加载预览')+'" onclick="pullFile(\'' + esc(msg.id) + '\')">'+
           '<div class="file-icon">'+esc(ext)+'</div>'+
           '<div class="file-info"><div class="file-name">'+nm+'</div>'+
-          '<div class="file-size">'+sz+'</div><div class="img-hint">'+
-          (imgAutoTried.has(msg.id) ? '正在加载预览…' : '点击加载预览')+'</div></div></div>';
+          '<div class="file-size">'+sz+'</div><div class="img-hint">'+hint+'</div></div></div>';
       }
     } else if (MODE === 'guest' && msg.id) {
       // 访客：文件在房主磁盘上，点卡片走 FILE_PULL 按需拉取
@@ -2115,8 +2136,11 @@ const IMG_AUTO_MAX = 10 * 1024 * 1024;   // 超过 10MB 的图片不自动拉（
 // 但重试次数有上限（imgAutoTries），不会对着一张坏图无限重连。
 const imgAutoTried = new Set();
 const imgAutoTries = new Map();          // mid -> 已经自动试过几次
-const IMG_AUTO_MAX_TRIES = 3;
+const IMG_AUTO_MAX_TRIES = 4;
 const previewOnlyMids = new Set();       // 本次拉取只做预览，onFileReceived 里不落盘
+// 访客正在往外发文件时先不抢通道：一条数据通道只有那么点带宽，
+// 上传和预览下载挤在一起，图片会在半路被看门狗判死（手机发多张图时最明显）
+let guestBusySending = 0;
 // "12.3 KB" / "4.5 MB" / "800 B" -> 字节数；解析不了返回 -1
 function sizeBytes(s) {
   const m = String(s || '').trim().match(/^([\d.]+)\s*(B|KB|MB|GB)$/i);
@@ -2128,8 +2152,14 @@ function sizeBytes(s) {
 // 历史图片和实时图片走的是同一条路——只要手上没有本体、也没超过大小上限就排进去。
 function autoPullImages(list) {
   if (MODE !== 'guest' || !guestConn || !guestConn.open) return;
+  if (guestBusySending > 0) return;        // 自己正在发：等发完再说（sendAll 结束后会补一次）
   let added = false;
+  // 一次最多排 5 张：剩下的等队列消化完由看门狗补排，
+  // 免得一进房把几十张历史图全塞进同一条通道（手机端会直接卡死）
+  const BATCH = 5;
+  let queued = 0;
   for (const m of list) {
+    if (queued >= BATCH) break;
     if (!m || m.type !== 'file' || !isImgName(m.name) || m.url || !m.id) continue;
     if (imgAutoTried.has(m.id)) continue;
     if (pullInFlight.has(m.id) || pullQueue.some(x => x.mid === m.id)) continue;
@@ -2142,6 +2172,7 @@ function autoPullImages(list) {
     pullQueue.push({ mid: m.id, name: m.name, preview: true });
     markPendingBusy(m.id);          // 占位卡立刻显示「正在加载预览…」，让用户知道在动
     added = true;
+    queued++;
   }
   if (added || pullQueue.length) pumpPullQueue();
 }
@@ -2153,31 +2184,62 @@ function retryImgAuto(mid) {
   if ((imgAutoTries.get(mid) || 0) >= IMG_AUTO_MAX_TRIES) return;
   imgAutoTried.delete(mid);
 }
-// 换房间/退出时清干净（图片占位卡的文案靠 imgAutoTried 判断，这里只做即时提示）
+// 占位卡先亮「正在加载预览…」，让用户知道在动
 function markPendingBusy(mid) {
   const c = document.querySelector('.img-pending[data-mid="' + mid + '"]');
   const h = c && c.querySelector('.img-hint');
   if (h) h.textContent = '正在加载预览…';
 }
+// 房间说明里的预览状态行：远程排查用——用户截个图就知道卡在哪一步
+function updateImgStat() {
+  const el = document.getElementById('imgStat');
+  if (!el) return;
+  if (MODE !== 'guest') { el.textContent = ''; return; }
+  const imgs = localMsgs.filter(m => m && m.type === 'file' && isImgName(m.name) && m.id);
+  if (!imgs.length) { el.textContent = ''; return; }
+  const loaded = imgs.filter(m => m.url).length;
+  const failed = imgs.filter(m => !m.url && (imgAutoTries.get(m.id) || 0) >= IMG_AUTO_MAX_TRIES).length;
+  el.textContent = '图片预览：已加载 ' + loaded + ' / 共 ' + imgs.length +
+    ' · 传输中 ' + pullInFlight.size + ' · 排队 ' + pullQueue.length +
+    (failed ? ' · 失败 ' + failed : '');
+}
 // 换了（重）连接：上一条通道上的拉取全都作废，队列跟着清空，
-// 让历史图片在新通道上重新排一次（次数仍受 IMG_AUTO_MAX_TRIES 限制）
+// 让历史图片在新通道上从头再排一次——链路已经换了，旧通道上的失败不该算数
 function resetPullsForReconnect() {
   pullInFlight.clear();
   pullQueue.length = 0;
   pullStartAt.clear();
   previewOnlyMids.clear();
   imgAutoTried.clear();
+  imgAutoTries.clear();
+  recvBuf.clear();          // 旧通道上的半截分片一律丢掉，别污染新的传输
+  chunkChain = Promise.resolve();
 }
 // 大图查看器：页面内全屏黑底层，✕ / Esc / 点背景关闭（点图片本身不关，方便长按保存）
+let ivName = '';
 function openImgViewer(el) {
   const src = el.getAttribute('data-src');
   if (!src) return;
   const box = document.getElementById('imgViewer');
   const img = document.getElementById('ivImg');
   if (!box || !img) return;
+  ivName = el.getAttribute('data-name') || '';
   img.src = src;
   box.classList.add('show');
   document.body.classList.add('fs-locked');
+}
+// 存图入口：卡片上不放下载图标（各端渲染不一致），要存原图在这里存
+function saveImgViewer() {
+  const img = document.getElementById('ivImg');
+  const src = img && img.getAttribute('src');
+  if (!src) return;
+  const a = document.createElement('a');
+  a.href = src;
+  a.download = ivName || ('图片_' + Date.now() + '.png');
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => a.remove(), 800);
+  toast('已保存：' + a.download);
 }
 function closeImgViewer() {
   const box = document.getElementById('imgViewer');
@@ -2350,6 +2412,18 @@ async function sendFileTo(c, file, name, onProgress, mid, from) {
   }
   c.send('FILE_END:' + id);
 }
+// 同一条连接上，文件必须一个一个发：对端一个连接只有一个接收缓冲（分片不带文件 id），
+// 两次 sendFileTo 并行会让分片互相穿插，对端拼出来两边都不完整——
+// 手机弱网下一连请求好几张图片时必踩，表现就是「一张能看，多张全废」。
+const sendChains = new Map();   // 连接 -> 该连接上最后一条发送 Promise
+function queueConnSend(c, task) {
+  const k = (c && (c.peer || c.id)) || 'conn';
+  const prev = sendChains.get(k) || Promise.resolve();
+  const next = prev.then(() => task()).catch(() => {});
+  sendChains.set(k, next);
+  next.then(() => { if (sendChains.get(k) === next) sendChains.delete(k); });
+  return next;
+}
 
 // ctx：房主端传 { id, conn, name }，访客端为 null
 function handleData(data, ctx) {
@@ -2443,12 +2517,16 @@ function handleData(data, ctx) {
       const safe = want.split('/').pop().slice(0, 200);   // 只取文件名，防路径穿越
       const mid = String((req && req.mid) || '').slice(0, 32);
       if (!safe || !ctx.conn || !ctx.conn.open) return;
-      fetch(API + '/download?name=' + encodeURIComponent(safe))
-        .then(r => { if (!r.ok) throw new Error('gone'); return r.blob(); })
-        .then(blob => sendFileTo(ctx.conn, blob, safe, null, mid || undefined, '历史文件'))
-        .catch(() => {
-          try { ctx.conn.send('FILE_PULL_ERR:' + JSON.stringify({ mid: mid, name: safe })); } catch (e) {}
-        });
+      // 串行：这台设备上的每次请求按到达顺序排队发送，绝不会和另一路分片交织
+      queueConnSend(ctx.conn, () => {
+        if (!ctx.conn || !ctx.conn.open) return Promise.resolve();
+        return fetch(API + '/download?name=' + encodeURIComponent(safe))
+          .then(r => { if (!r.ok) throw new Error('gone'); return r.blob(); })
+          .then(blob => sendFileTo(ctx.conn, blob, safe, null, mid || undefined, '历史文件'))
+          .catch(() => {
+            try { ctx.conn.send('FILE_PULL_ERR:' + JSON.stringify({ mid: mid, name: safe })); } catch (e) {}
+          });
+      });
       return;
     }
     // 房主说文件没了：把这条下载从队列里清掉
@@ -2616,44 +2694,77 @@ function handleData(data, ctx) {
     } else if (data.startsWith('FILE_END:')) {
       const buf = recvBuf.get(key);
       if (!buf || data.slice(9) !== buf.id) return;
-      recvBuf.delete(key);
-      if (buf.received !== buf.size) {
-        // 分片丢了半路：除了丢弃，还要把这条下载的状态清干净，
-        // 否则 pullInFlight 占着位，后面的下载（含图片自动预览）全被堵死
-        if (MODE === 'guest' && buf.mid) {
-          const wasPreview = previewOnlyMids.has(buf.mid);
-          pullInFlight.delete(buf.mid);
-          previewOnlyMids.delete(buf.mid);
-          pullStartAt.delete(buf.mid);
-          if (wasPreview) retryImgAuto(buf.mid);   // 预览图没传全：允许重排一次
-          const w = document.getElementById('pullwrap-' + buf.mid);
-          if (w) w.style.display = 'none';
-          pumpPullQueue();
-        }
-        notify('文件不完整，已丢弃'); return;
-      }
-      const blob = new Blob(buf.chunks, { type: mimeOf(buf.name) });
-      onFileReceived(blob, buf.name, buf.mid, buf.from);
+      if (buf.received >= buf.size) { finishRecv(key, buf); return; }
+      // 还没收全：PeerJS 对大一点的消息是「异步重组」的，最后一片有可能比
+      // FILE_END 晚一步才交上来。这里给它 2.5 秒的宽限，别一看到不齐就整包丢掉
+      // （以前这里是立刻丢弃，手机端图片全废、电脑端时好时坏就是这个原因）
+      waitRecvComplete(key, buf, Date.now());
     }
     return;
   }
+  // 分片：绝大多数浏览器按 binaryType='arraybuffer' 给 ArrayBuffer，
+  // 但个别手机浏览器（微信 X5 / 部分安卓 WebView）会把二进制当 Blob 递过来。
+  // 以前 toArrayBuffer 对 Blob 返回 null 就直接丢包，对端永远是「文件不完整」——
+  // 手机端所有图片（实时和历史）一张都出不来，正是这个原因。
+  // Blob 只能异步读，统一排进一条 promise 链，保证分片顺序不乱。
+  if (typeof Blob !== 'undefined' && data instanceof Blob) {
+    chunkChain = chunkChain
+      .then(() => (data.arrayBuffer ? data.arrayBuffer() : null))
+      .then(ab => { if (ab) appendChunk(key, ab); })
+      .catch(() => {});
+    return;
+  }
   const ab = toArrayBuffer(data);
+  if (ab) appendChunk(key, ab);
+}
+// 把一片数据放进这条连接当前的接收缓冲
+function appendChunk(key, ab) {
   const buf = recvBuf.get(key);
-  if (ab && buf) {
-    buf.chunks.push(ab);
-    buf.received += ab.byteLength;
-    if (MODE === 'guest') {
-      txTick(buf.received, buf.size);
-    } else if (!isLanClient) {
-      // 房主页面没有进度条，就在提示行里报一下；400ms 一次，别把界面刷爆
-      const now = Date.now();
-      if (!buf._t || now - buf._t > 400) {
-        buf._t = now;
-        showHostHint('正在接收：' + buf.name + ' · ' +
-          (buf.size ? (buf.received / buf.size * 100).toFixed(0) + '%' : fmtSize(buf.received)));
-      }
+  if (!buf) return;                  // 没有对应的 FILE_META：过期的残片，直接丢
+  buf.chunks.push(ab);
+  buf.received += ab.byteLength;
+  // 有数据在动就说明链路还活着：看门狗据此判断「卡住」而不是「慢」
+  if (buf.mid && pullInFlight.has(buf.mid)) pullStartAt.set(buf.mid, Date.now());
+  if (MODE === 'guest') {
+    txTick(buf.received, buf.size);
+  } else if (!isLanClient) {
+    // 房主页面没有进度条，就在提示行里报一下；400ms 一次，别把界面刷爆
+    const now = Date.now();
+    if (!buf._t || now - buf._t > 400) {
+      buf._t = now;
+      showHostHint('正在接收：' + buf.name + ' · ' +
+        (buf.size ? (buf.received / buf.size * 100).toFixed(0) + '%' : fmtSize(buf.received)));
     }
   }
+}
+// 收全了：拼成 Blob 交给上层（房主落盘 / 访客做预览）
+function finishRecv(key, buf) {
+  recvBuf.delete(key);
+  const blob = new Blob(buf.chunks, { type: mimeOf(buf.name) });
+  onFileReceived(blob, buf.name, buf.mid, buf.from);
+}
+// 收到 FILE_END 但字节数还差一点：再等 2.5 秒（PeerJS 的异步重组可能慢半拍）
+function waitRecvComplete(key, buf, t0) {
+  if (recvBuf.get(key) !== buf) return;          // 已经收完 / 已被新传输顶掉
+  if (buf.received >= buf.size) { finishRecv(key, buf); return; }
+  if (Date.now() - t0 > 2500) { dropRecv(key, buf); return; }
+  setTimeout(() => waitRecvComplete(key, buf, t0), 150);
+}
+// 真的缺片了：丢弃这条传输，并且把下载队列的状态清干净，
+// 否则 pullInFlight 占着位，后面的下载（含图片自动预览）全被堵死
+function dropRecv(key, buf) {
+  if (recvBuf.get(key) === buf) recvBuf.delete(key);
+  if (MODE === 'guest' && buf.mid) {
+    const wasPreview = previewOnlyMids.has(buf.mid);
+    pullInFlight.delete(buf.mid);
+    previewOnlyMids.delete(buf.mid);
+    pullStartAt.delete(buf.mid);
+    if (wasPreview) retryImgAuto(buf.mid);   // 预览图没传全：允许重排一次
+    const w = document.getElementById('pullwrap-' + buf.mid);
+    if (w) { w.style.display = 'none'; const bar = w.querySelector('.pull-bar i'); if (bar) bar.style.width = '0%'; }
+    pumpPullQueue();
+  }
+  notify('文件不完整，已丢弃');
 }
 // ===== 桌面共享：走 WebRTC 媒体流，与传文件的数据通道互不干扰 =====
 let screenStream = null, screenCalls = [], recvCall = null;
@@ -2991,39 +3102,47 @@ function acceptScreenCall(call) {
 const pullInFlight = new Set();  // 正在拉取的 mid
 const pullQueue = [];            // 排队中的 {mid, name}
 const pullStartAt = new Map();   // mid -> 发起时间（看门狗用）
-// 拉取看门狗：一条请求 45 秒还没结果（连接半死、房主没回话）就放行队列，
-// 否则一个卡死的拉取会把后面所有下载——包括图片自动预览——全部堵住
+// 拉取看门狗：判断「卡死」只看**有没有数据在动**，不看发了多久。
+// 以前按「发起时间」算 20 秒，手机弱网下一张稍大的图还没传完就被判超时，
+// 判超时后又立刻发下一个请求——两路分片挤进同一个接收缓冲，结果两边全废，
+// 表现就是「一张能看，多张全不显示」。
 let pullWatchdogOn = false;
 function ensurePullWatchdog() {
   if (pullWatchdogOn) return;
   pullWatchdogOn = true;
-  setInterval(() => {
-    if (!pullInFlight.size) return;
-    const now = Date.now();
-    let freed = false;
-    for (const [mid, t0] of Array.from(pullStartAt)) {
-      // 自动预览等不了 45 秒：图小、一次就成，20 秒没动静就该换一次
-      const wasPreview = previewOnlyMids.has(mid);
-      if (now - t0 < (wasPreview ? 20000 : 45000)) continue;
-      pullStartAt.delete(mid);
-      pullInFlight.delete(mid);
-      previewOnlyMids.delete(mid);
-      const w = document.getElementById('pullwrap-' + mid);
-      if (w) w.style.display = 'none';
-      if (wasPreview) {
-        retryImgAuto(mid);            // 预览失败：允许重新排队（有次数上限）
-      } else {
-        notify('「' + mid + '」下载超时，点卡片可重试');
-      }
-      freed = true;
+  setInterval(pullWatchdogTick, 4000);
+}
+function pullWatchdogTick() {
+  const now = Date.now();
+  let freed = false;
+  // ① 发送后多久没收到任何一个字节，才算真的卡住
+  for (const [mid, t0] of Array.from(pullStartAt)) {
+    const wasPreview = previewOnlyMids.has(mid);
+    const idle = now - t0;
+    if (idle < (wasPreview ? 25000 : 60000)) continue;   // 有字节进来会不断刷新 t0
+    pullStartAt.delete(mid);
+    pullInFlight.delete(mid);
+    previewOnlyMids.delete(mid);
+    // 这条请求的残片还留在接收缓冲里：不丢掉的话，后面那一路会被它污染
+    for (const [k, buf] of Array.from(recvBuf)) {
+      if (buf && buf.mid === mid) recvBuf.delete(k);
     }
-    if (freed) {
-      if (localMsgs.some(m => m.type === 'file' && isImgName(m.name) && !m.url)) {
-        autoPullImages(localMsgs);    // 把没预览出来的历史图片重新排上
-      }
-      pumpPullQueue();
+    const w = document.getElementById('pullwrap-' + mid);
+    if (w) { w.style.display = 'none'; const bar = w.querySelector('.pull-bar i'); if (bar) bar.style.width = '0%'; }
+    if (wasPreview) {
+      retryImgAuto(mid);            // 预览失败：允许重新排队（有次数上限）
+    } else {
+      notify('「' + mid + '」下载超时，点卡片可重试');
     }
-  }, 5000);
+    freed = true;
+  }
+  // ② 队列快空了还有没预览出来的图：自动补排一次（自愈，不用等下一次 renderAll）
+  if (pullQueue.length < 3 && MODE === 'guest' && guestConn && guestConn.open) {
+    const pending = localMsgs.some(m => m && m.type === 'file' && isImgName(m.name) && !m.url && m.id);
+    if (pending) autoPullImages(localMsgs);
+  }
+  if (freed) pumpPullQueue();
+  updateImgStat();
 }
 // 拉取入口：把文件从房主拉过来并存到下载目录（图片自动预览也走这条队列）
 function pullFile(mid) {
@@ -3032,7 +3151,10 @@ function pullFile(mid) {
   if (m.url) { saveBlob(m.url, m.name); return; }   // 本体已在手上：直接再存一份
   if (!canP2P() || !guestConn || !guestConn.open) { notify('未连接房间，无法下载'); return; }
   if (pullInFlight.has(mid) || pullQueue.some(x => x.mid === mid)) { notify('这个文件已在下载队列里'); return; }
-  pullQueue.push({ mid: mid, name: m.name });
+  // 手动点了就当用户要重试：把自动预览的次数与标记清零，否则「试满 4 次」的图点不动
+  imgAutoTries.delete(mid);
+  imgAutoTried.delete(mid);
+  pullQueue.push({ mid: mid, name: m.name, preview: isImgName(m.name) });
   pumpPullQueue();
 }
 function saveBlob(url, name) {
@@ -3590,6 +3712,7 @@ function startHostPeer(roomCode) {
     hostConns.set(id, entry);
     showHostHint(HOST_CONNECT_HINT);
     c.on('open', () => {
+      try { if (c.dataChannel) c.dataChannel.binaryType = 'arraybuffer'; } catch (e) {}
       try { c.send('HELLO:' + PROTOCOL); } catch (e) {}
       if (!entry.name) entry.name = '访客' + entry.seq;
       refreshReady();
@@ -4347,6 +4470,8 @@ function identityMeta() {
 // 数据通道上的事件
 function wireGuestConn(conn, onFail, onOpen) {
   conn.on('open', () => {
+    // 显式声明二进制类型：个别手机浏览器默认按 Blob 给，拼分片就会全部失败
+    try { if (conn.dataChannel) conn.dataChannel.binaryType = 'arraybuffer'; } catch (e) {}
     conn.send('HELLO:' + PROTOCOL + ':' + myNick() + ':' + devId());
     if (onOpen) onOpen();
   });
@@ -4415,6 +4540,7 @@ function markGuestConnected() {
   // 上一条通道上的下载/预览请求一律作废：历史图片在新通道上重新排一次，
   // 否则第一轮没拉到的图会被「已尝试」标记永久跳过（历史图片不预览的主因）
   resetPullsForReconnect();
+  ensurePullWatchdog();      // 连着的时候看门狗常开着：卡住的预览会被自动补排
   refreshReady();
   renderAll();
   setTimeout(() => { refreshSelfIp(); }, 1200);   // ICE 收敛后再读本机地址
@@ -4473,6 +4599,8 @@ async function sendAll() {
 
   // 文件：房主先落盘再逐台直传；访客传给房主，由房主转给其他人
   if (items.length) {
+    // 访客往外发的时候先别抢通道：上传和预览下载挤在一条通道上会把图片拖死
+    if (MODE === 'guest') guestBusySending++;
     let failed = 0, done = 0;
     for (const it of items) {
       it.status = 'sending'; it.pct = 0; it.speed = 0; it.err = ''; it._t = 0;
@@ -4511,6 +4639,11 @@ async function sendAll() {
       }
     }
     txEnd();
+    if (MODE === 'guest') {
+      guestBusySending = Math.max(0, guestBusySending - 1);
+      // 发完了：把刚才压住的图片预览重新排上（历史 + 实时都走这条路径）
+      if (!guestBusySending) setTimeout(() => { autoPullImages(localMsgs); pumpPullQueue(); }, 300);
+    }
     // 发送完成的项立刻从列表清掉，不再留一栏「已完成」等手动清空；
     // 失败的项保留，方便点右侧 ↻ 重试
     pendingFiles = pendingFiles.filter(x => x.status !== 'done');
