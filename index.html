@@ -1187,7 +1187,7 @@ body.fs-locked { overflow:hidden; }
       · 房主点「销毁房间」<br>
       销毁时房间码作废，本机的聊天记录与接收文件也一并删除，不做保留。</p>
     <div class="modal-btns"><button class="btn-plain" onclick="hideTtl()">知道了</button></div>
-    <p style="text-align:center;font-size:11px;color:#b0b3b8;margin:10px 0 0;">页面版本 cba1ab8db3（反馈问题时请带上这一行）</p>
+    <p style="text-align:center;font-size:11px;color:#b0b3b8;margin:10px 0 0;">页面版本 a0d01d26c8（反馈问题时请带上这一行）</p>
   </div>
 </div>
 
@@ -1306,7 +1306,7 @@ let CLIENT_URL = 'https://zvzqvqdvd.github.io/data-transmission/';
 // 页面源文件指纹（由程序按 web/ 源文件现算，在线页 = 导出那一刻的值）。
 // 邀请链接 / 二维码 / 复制的访问地址都带 ?v=<指纹>：手机浏览器对页面缓存
 // 非常顽固，URL 不变就拿旧缓存页连新程序，轻则变慢、重则连不上。
-const PAGE_BUILD = 'cba1ab8db3';
+const PAGE_BUILD = 'a0d01d26c8';
 let lastRev = null;
 let pollTimer = null;        // 房主端的 /messages 轮询
 let roomClosed = false;      // 房主已解散房间，页面停在入口页
@@ -2055,10 +2055,11 @@ function renderMsg(msg) {
       } else {
         // 访客还没拿到本体：占位卡，图片会自动预览（autoPullImages），这里只是
         // 自动拉取失败 / 大图超限时的兜底，点卡片手动走 FILE_PULL
-        bubble = '<div class="file-card img-pending" title="点击加载预览" onclick="pullFile(\'' + esc(msg.id) + '\')">'+
+        bubble = '<div class="file-card img-pending" data-mid="'+esc(msg.id)+'" title="点击加载预览" onclick="pullFile(\'' + esc(msg.id) + '\')">'+
           '<div class="file-icon">'+esc(ext)+'</div>'+
           '<div class="file-info"><div class="file-name">'+nm+'</div>'+
-          '<div class="file-size">'+sz+'</div><div class="img-hint">点击加载预览</div></div></div>';
+          '<div class="file-size">'+sz+'</div><div class="img-hint">'+
+          (imgAutoTried.has(msg.id) ? '正在加载预览…' : '点击加载预览')+'</div></div></div>';
       }
     } else if (MODE === 'guest' && msg.id) {
       // 访客：文件在房主磁盘上，点卡片走 FILE_PULL 按需拉取
@@ -2110,7 +2111,11 @@ function imgCardFail(img) {
 // ===== 图片自动预览（访客端）：图片消息到手就自动拉本体做预览 =====
 // 只为预览、不触发「保存到下载目录」；超限的图留给占位卡手动点。
 const IMG_AUTO_MAX = 10 * 1024 * 1024;   // 超过 10MB 的图片不自动拉（省流量省通道）
-const imgAutoTried = new Set();          // 已尝试自动拉的 mid，失败不无限重试
+// 已排进自动拉取的 mid。拉取超时 / 传输不完整 / 换了连接时会把它删掉重排，
+// 但重试次数有上限（imgAutoTries），不会对着一张坏图无限重连。
+const imgAutoTried = new Set();
+const imgAutoTries = new Map();          // mid -> 已经自动试过几次
+const IMG_AUTO_MAX_TRIES = 3;
 const previewOnlyMids = new Set();       // 本次拉取只做预览，onFileReceived 里不落盘
 // "12.3 KB" / "4.5 MB" / "800 B" -> 字节数；解析不了返回 -1
 function sizeBytes(s) {
@@ -2120,18 +2125,48 @@ function sizeBytes(s) {
   return Math.round(parseFloat(m[1]) * u);
 }
 // renderAll 里调用：把能自动预览的图片排进下载队列（串行，一次一个，不抢占通道）
+// 历史图片和实时图片走的是同一条路——只要手上没有本体、也没超过大小上限就排进去。
 function autoPullImages(list) {
   if (MODE !== 'guest' || !guestConn || !guestConn.open) return;
+  let added = false;
   for (const m of list) {
     if (!m || m.type !== 'file' || !isImgName(m.name) || m.url || !m.id) continue;
     if (imgAutoTried.has(m.id)) continue;
     if (pullInFlight.has(m.id) || pullQueue.some(x => x.mid === m.id)) continue;
+    if ((imgAutoTries.get(m.id) || 0) >= IMG_AUTO_MAX_TRIES) continue;
     const b = sizeBytes(m.size);
-    if (b < 0 || b > IMG_AUTO_MAX) continue;   // 大小未知/超限：留给手动点占位卡
+    // 大小未知（老记录 / 字段为空）也照拉：宁可多拉一张，也别让历史图片永远空白
+    if (b > IMG_AUTO_MAX) continue;
     imgAutoTried.add(m.id);
+    imgAutoTries.set(m.id, (imgAutoTries.get(m.id) || 0) + 1);
     pullQueue.push({ mid: m.id, name: m.name, preview: true });
+    markPendingBusy(m.id);          // 占位卡立刻显示「正在加载预览…」，让用户知道在动
+    added = true;
   }
-  pumpPullQueue();
+  if (added || pullQueue.length) pumpPullQueue();
+}
+// 自动预览失败（超时/传输不完整/换了连接）：把 mid 放回可重试状态，
+// 下一次 renderAll 会自动重排。以前这里只记不删，一张图失败一次就永远不再试——
+// 历史图片因此长期停在占位卡上（实时图片是新 id，所以看起来「实时能预览、历史不能」）。
+function retryImgAuto(mid) {
+  if (!mid) return;
+  if ((imgAutoTries.get(mid) || 0) >= IMG_AUTO_MAX_TRIES) return;
+  imgAutoTried.delete(mid);
+}
+// 换房间/退出时清干净（图片占位卡的文案靠 imgAutoTried 判断，这里只做即时提示）
+function markPendingBusy(mid) {
+  const c = document.querySelector('.img-pending[data-mid="' + mid + '"]');
+  const h = c && c.querySelector('.img-hint');
+  if (h) h.textContent = '正在加载预览…';
+}
+// 换了（重）连接：上一条通道上的拉取全都作废，队列跟着清空，
+// 让历史图片在新通道上重新排一次（次数仍受 IMG_AUTO_MAX_TRIES 限制）
+function resetPullsForReconnect() {
+  pullInFlight.clear();
+  pullQueue.length = 0;
+  pullStartAt.clear();
+  previewOnlyMids.clear();
+  imgAutoTried.clear();
 }
 // 大图查看器：页面内全屏黑底层，✕ / Esc / 点背景关闭（点图片本身不关，方便长按保存）
 function openImgViewer(el) {
@@ -2353,7 +2388,15 @@ function handleData(data, ctx) {
     if (data.startsWith('HISTORY:')) {
       try {
         const h = JSON.parse(data.slice(8));
-        const hist = (h.messages || []).map(m => Object.assign({}, m, { remote: true }));
+        // 历史里没有本体地址：已经拉到手的预览图（m.url）必须原样继承下来，
+        // 否则重连/断线后房主重推一次 HISTORY，刚预览出来的图片会被打回占位卡
+        const haveUrl = new Map();
+        for (const m of localMsgs) { if (m && m.id && m.url) haveUrl.set(m.id, m.url); }
+        const hist = (h.messages || []).map(m => {
+          const o = Object.assign({}, m, { remote: true });
+          if (o.id && haveUrl.has(o.id)) o.url = haveUrl.get(o.id);
+          return o;
+        });
         const ids = new Set(hist.filter(m => m.id).map(m => m.id));
         // 历史可能比实时消息晚到一步：先到的几条留在后面，按时间重新归位，
         // 免得「刚进来看到的第一条」跑到最上面去
@@ -2578,9 +2621,11 @@ function handleData(data, ctx) {
         // 分片丢了半路：除了丢弃，还要把这条下载的状态清干净，
         // 否则 pullInFlight 占着位，后面的下载（含图片自动预览）全被堵死
         if (MODE === 'guest' && buf.mid) {
+          const wasPreview = previewOnlyMids.has(buf.mid);
           pullInFlight.delete(buf.mid);
           previewOnlyMids.delete(buf.mid);
           pullStartAt.delete(buf.mid);
+          if (wasPreview) retryImgAuto(buf.mid);   // 预览图没传全：允许重排一次
           const w = document.getElementById('pullwrap-' + buf.mid);
           if (w) w.style.display = 'none';
           pumpPullQueue();
@@ -2957,16 +3002,27 @@ function ensurePullWatchdog() {
     const now = Date.now();
     let freed = false;
     for (const [mid, t0] of Array.from(pullStartAt)) {
-      if (now - t0 < 45000) continue;
+      // 自动预览等不了 45 秒：图小、一次就成，20 秒没动静就该换一次
+      const wasPreview = previewOnlyMids.has(mid);
+      if (now - t0 < (wasPreview ? 20000 : 45000)) continue;
       pullStartAt.delete(mid);
       pullInFlight.delete(mid);
       previewOnlyMids.delete(mid);
       const w = document.getElementById('pullwrap-' + mid);
       if (w) w.style.display = 'none';
-      notify('「' + mid + '」下载超时，点卡片可重试');
+      if (wasPreview) {
+        retryImgAuto(mid);            // 预览失败：允许重新排队（有次数上限）
+      } else {
+        notify('「' + mid + '」下载超时，点卡片可重试');
+      }
       freed = true;
     }
-    if (freed) pumpPullQueue();
+    if (freed) {
+      if (localMsgs.some(m => m.type === 'file' && isImgName(m.name) && !m.url)) {
+        autoPullImages(localMsgs);    // 把没预览出来的历史图片重新排上
+      }
+      pumpPullQueue();
+    }
   }, 5000);
 }
 // 拉取入口：把文件从房主拉过来并存到下载目录（图片自动预览也走这条队列）
@@ -4066,6 +4122,7 @@ function resetToGate() {
   guestGoneHits = 0;
   pullInFlight.clear(); pullQueue.length = 0;   // 清掉没完成的下载任务
   imgAutoTried.clear(); previewOnlyMids.clear(); pullStartAt.clear();
+  imgAutoTries.clear();        // 换房间后重试次数重新计（同一张图在同一房间里最多试 3 次）
   serverMsgs = []; localMsgs = [];
   seenIds = new Set();
   guestNames = [];
@@ -4355,6 +4412,9 @@ function markGuestConnected() {
   setStatus('');                   // 顺手清掉连接阶段文字，掉线重连时不会翻旧账
   showGuestTip('');
   document.getElementById('wxTip').style.display = 'none';
+  // 上一条通道上的下载/预览请求一律作废：历史图片在新通道上重新排一次，
+  // 否则第一轮没拉到的图会被「已尝试」标记永久跳过（历史图片不预览的主因）
+  resetPullsForReconnect();
   refreshReady();
   renderAll();
   setTimeout(() => { refreshSelfIp(); }, 1200);   // ICE 收敛后再读本机地址
