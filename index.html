@@ -233,6 +233,14 @@ body.no-peer #textInput { cursor:not-allowed; }
   font-family:Menlo,Consolas,monospace; font-size:14px; font-weight:700;
   color:#0a8f4a; letter-spacing:1.5px;
 }
+/* 本机 IP：拿到地址才显示，方便加入方和房主端设备清单对号定位 */
+.self-ip {
+  margin-top:5px; font-size:11.5px; color:#3c7a57; line-height:1.6;
+}
+.self-ip b {
+  font-family:Menlo,Consolas,monospace; font-weight:700; color:#0a8f4a;
+  overflow-wrap:anywhere;
+}
 /* 连接中两个按钮都不显示；连上只留「断开连接」，失败停下了才给「重连」 */
 .guest-actions {
   display:flex; justify-content:center; align-items:center;
@@ -292,6 +300,11 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 /* 匿名头像：所有设备同一个中性剪影，不显示昵称、不带姓名首字 */
 .msg-avatar.anon { background:#cdd8e0; color:#5f7486; }
 .msg-avatar.anon svg { display:block; }
+/* 数字头像：按加入顺序编号（房主=1），字号与剪影协调 */
+.msg-avatar.anon.av-num {
+  background:#07C160; color:#fff;
+  font-size:15px; font-weight:600; letter-spacing:.5px;
+}
 .msg-row.self .msg-avatar { margin-right:0; margin-left:10px; }
 .msg-side { flex:1; min-width:0; }
 .bubble {
@@ -347,6 +360,36 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   left:auto; right:-5px;
   border:5px solid transparent; border-left-color:#fff; border-right:0;
 }
+/* ===== 屏幕共享历史卡：一条卡片两种状态（共享中 / 已停止） ===== */
+.screen-card {
+  background:#fff; border-radius:8px; padding:11px 13px;
+  width:min(280px,100%); box-shadow:0 1px 3px rgba(0,0,0,.06);
+  position:relative;
+}
+.screen-card::before {
+  content:''; position:absolute; left:-5px; top:16px;
+  border:5px solid transparent; border-right-color:#fff; border-left:0;
+}
+.msg-row.self .screen-card::before {
+  left:auto; right:-5px;
+  border:5px solid transparent; border-left-color:#fff; border-right:0;
+}
+.sc-head { display:flex; align-items:center; gap:8px; }
+.sc-head svg { width:18px; height:18px; flex:none; }
+.sc-title { font-size:13.5px; font-weight:600; color:#1f2933; }
+.screen-card.ended .sc-head svg { stroke:#888780; }
+.screen-card.ended .sc-title { color:#888780; }
+.sc-dot {
+  width:8px; height:8px; border-radius:50%; background:#ff4d4f;
+  animation:blink 1.4s infinite; flex:none;
+}
+.sc-sub { font-size:11.5px; color:#9aa7b0; margin-top:5px; line-height:1.5; }
+.sc-watch {
+  display:block; width:100%; margin-top:9px; padding:7px 0;
+  background:#07C160; color:#fff; border:none; border-radius:8px;
+  font-size:13px; cursor:pointer; transition:background .15s;
+}
+.sc-watch:hover { background:#06ad56; }
 .file-icon {
   width:36px; height:36px; border-radius:8px;
   background:linear-gradient(135deg,#07C160,#04a94f); color:#fff;
@@ -441,7 +484,7 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   transition:background .18s ease, border-color .18s ease; }
 .gd-box::after { content:''; width:9px; height:5px;
   border-left:2px solid #fff; border-bottom:2px solid #fff;
-  transform:rotate(-45deg) translate(0, -1px); opacity:0; transition:opacity .15s ease; }
+  transform:rotate(-45deg); opacity:0; transition:opacity .15s ease; }
 .agree-check input:checked + .gd-box { background:#07C160; border-color:#07C160; }
 .agree-check input:checked + .gd-box::after { opacity:1; }
 .agree-check input:focus-visible + .gd-box { box-shadow:0 0 0 3px rgba(7,193,96,.18); }
@@ -938,6 +981,7 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
     <span class="p2p-label" id="connChannel">🌍 外网直连</span>
   </div>
   <div class="guest-room">房间号：<b id="linkRoom"></b></div>
+  <div class="self-ip" id="selfIpRow" style="display:none;">本机 IP：<b id="selfIpVal"></b></div>
   <div class="guest-actions" id="guestActions" style="display:none;">
     <button class="pill ghost" id="guestConnBtn" onclick="guestConnect()" style="display:none;">重连</button>
     <button class="pill danger" id="guestDropBtn" onclick="dropGuestConn()">断开连接</button>
@@ -1160,7 +1204,7 @@ let CLIENT_URL = 'https://zvzqvqdvd.github.io/data-transmission/';
 // 页面源文件指纹（由程序按 web/ 源文件现算，在线页 = 导出那一刻的值）。
 // 邀请链接 / 二维码 / 复制的访问地址都带 ?v=<指纹>：手机浏览器对页面缓存
 // 非常顽固，URL 不变就拿旧缓存页连新程序，轻则变慢、重则连不上。
-const PAGE_BUILD = '2d34252614';
+const PAGE_BUILD = '3b0e139312';
 let lastRev = null;
 let pollTimer = null;        // 房主端的 /messages 轮询
 let roomClosed = false;      // 房主已解散房间，页面停在入口页
@@ -1343,6 +1387,15 @@ function showOtherDeviceCard(label, room) {
   document.getElementById('connChannel').textContent = label;
   document.getElementById('linkRoom').textContent = room || '';
 }
+// 连接卡里的「本机 IP」：加入方能看到自己在房间里的地址，方便和房主端
+// 设备清单对号定位。拿到之前整行隐藏，不占地方。
+function setSelfIp(ip) {
+  const row = document.getElementById('selfIpRow');
+  if (!row || !ip) return;
+  row.style.display = '';
+  const v = document.getElementById('selfIpVal');
+  if (v) v.textContent = ip;
+}
 // 局域网设备没有 P2P 连接可断：点「断开连接」就是退出房间、回输码页
 function leaveLanRoom() {
   dropBusy = false;
@@ -1362,7 +1415,7 @@ function hostList() {
   const out = [];
   for (const [id, x] of hostConns) {
     if (x && x.conn && x.conn.open && x.registered) {
-      out.push({ id: id, conn: x.conn, name: x.name, ip: x.ip || '', dev: x.dev || '' });
+      out.push({ id: id, conn: x.conn, name: x.name, ip: x.ip || '', dev: x.dev || '', num: x.num || 0 });
     }
   }
   return out;
@@ -1757,6 +1810,14 @@ function updateHostRoomHint() {
 const EMPTY_HTML = '<div class="empty"><span class="e-icon">💬</span>暂无消息<span class="e-sub">发的文字与文件会显示在这里，后加入的设备也能看到</span></div>';
 let serverMsgs = [], localMsgs = [];
 let seenIds = new Set();     // 同一条消息可能既走本机也走广播，按 id 去重
+// 头像编号：设备名 -> 房间内编号。房主按加入顺序分配（房主=1，同一台设备
+// 断开后重连沿用原号，计数器只增不减），P2P 访客走 NUMS 广播同步，
+// 局域网设备从 /messages 的 nums 字段拿。
+let nameNums = {};
+let _numsSig = '';
+let _numByDev = new Map();   // dev/局域网cid -> 编号，房间换码时清空重来
+let _numCounter = 1;
+let _numRoom = '';
 function nowHMS() { return new Date().toTimeString().slice(0, 8); }
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 function pushMsg(m) {
@@ -1815,6 +1876,28 @@ function renderMsg(msg) {
   let bubble='';
   if (msg.type==='text') {
     bubble = '<div class="bubble'+(self?' me':'')+'">'+esc(msg.content)+'</div>';
+  } else if (msg.type==='screen') {
+    // 屏幕共享历史卡：一条卡片两种状态。共享中且自己不是发起人时给「观看共享」，
+    // 已停止只显示时间段——共享是实时流没有录像，技术上也放不出画面。
+    const live = msg.status !== 'ended';
+    const num = nameNums[msg.ip];
+    const who = self ? '你' : (num ? '设备 ' + num : '对方设备');
+    const st = String(msg.time || '');
+    const sub = live
+      ? who + ' · 从 ' + esc(st.slice(0,5)) + ' 开始'
+      : (st ? esc(st.slice(0,5)) + (msg.end ? ' – ' + esc(String(msg.end).slice(0,5)) : '')
+            + (msg.dur ? ' · 共 ' + esc(msg.dur) : '') : '已停止');
+    const canWatch = live && !self && !isLanClient && canP2P();
+    bubble = '<div class="screen-card'+(live?' live':' ended')+'">'+
+      '<div class="sc-head">'+
+        '<svg viewBox="0 0 24 24" fill="none" stroke="#07C160" stroke-width="1.9" stroke-linecap="round">'+
+        '<rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>'+
+        '<span class="sc-title">'+(live?'屏幕共享中':'屏幕共享已停止')+'</span>'+
+        (live?'<span class="sc-dot"></span>':'')+
+      '</div>'+
+      '<div class="sc-sub">'+sub+'</div>'+
+      (canWatch?'<button class="sc-watch" onclick="watchScreen(\''+esc(msg.id)+'\')">观看共享</button>':'')+
+    '</div>';
   } else {
     // 文件消息：统一一张文件卡片，不做在线预览；点右侧 ⬇ 才下载
     const nm = esc(msg.name), sz = esc(msg.size || '');
@@ -1838,12 +1921,16 @@ function renderMsg(msg) {
     ? '<div class="pull-wrap" id="pullwrap-' + esc(msg.id) + '">'+
       '<div class="pull-bar"><i></i></div><div class="pull-text"></div></div>'
     : '';
-  // 不显示昵称，只保留发送时间
+  // 不显示昵称，只保留发送时间；头像按加入顺序显示编号（拿不到编号先给剪影）
+  const num = nameNums[msg.ip];
+  const avatar = num
+    ? '<div class="msg-avatar anon av-num" title="设备 '+num+'">'+num+'</div>'
+    : ANON_AVATAR;
   const side = '<div class="msg-side">'+bubble+bar+
     '<div class="msg-time">'+esc(msg.time)+'</div></div>';
   // 统一 DOM 顺序「头像 + 内容」：自己的行由 CSS row-reverse 镜像，
   // 头像自然贴在气泡右侧，不会再跑到屏幕另一头
-  return '<div class="msg-row'+(self?' self':'')+'">'+ ANON_AVATAR + side +'</div>';
+  return '<div class="msg-row'+(self?' self':'')+'">'+ avatar + side +'</div>';
 }
 
 // 房主 / 局域网端：文件在本机后端，点 ⬇ 触发浏览器下载
@@ -1924,6 +2011,19 @@ async function loadMessages() {
       refreshReady();
       renderAll();
     }
+    // 本机 IP：后端对每个请求者回它自己的来源地址，连接卡里显示出来方便定位
+    if (d.self_ip) setSelfIp(d.self_ip);
+    // 头像编号表：房主自己算（updateNums），局域网设备用后端下发的这份
+    if (d.nums && typeof d.nums === 'object') {
+      const sig = JSON.stringify(d.nums);
+      if (sig !== _numsSig) {
+        _numsSig = sig;
+        const changed = JSON.stringify(nameNums) !== sig;
+        nameNums = d.nums;
+        if (changed) renderAll();
+      }
+    }
+    updateNums();
     if (d.rev === lastRev) return;
     lastRev = d.rev;
     serverMsgs = d.messages || [];
@@ -1962,6 +2062,11 @@ function relayNew(msgs) {
       // 只广播一张「文件卡片」：设备看到卡片后谁需要谁点下载，不再自动推文件本体
       broadcast('FILE_CARD:' + JSON.stringify({
         id: m.id, name: m.name, size: m.size || '', f: m.ip || ''
+      }), m.ip);                        // 不回给发送者本人
+    } else if (m.type === 'screen') {
+      // 屏幕共享卡实时同步给外网设备（停止走 SCREEN_STOP 单独改灰）
+      broadcast('SCREEN_CARD:' + JSON.stringify({
+        id: m.id, f: m.ip || '', time: m.time || '', status: m.status || 'live'
       }), m.ip);                        // 不回给发送者本人
     }
   }
@@ -2119,6 +2224,84 @@ function handleData(data, ctx) {
       if (screenRole === 'recv') { screenRole = ''; hideScreenPanel(); }
       return;
     }
+    // 头像编号表：房主按加入顺序分配，随广播同步给每台外网设备
+    if (data.startsWith('NUMS:')) {
+      try {
+        const n = JSON.parse(data.slice(5));
+        const sig = JSON.stringify(n);
+        if (sig !== _numsSig) {
+          _numsSig = sig;
+          nameNums = n || {};
+          renderAll();
+        }
+      } catch (e) {}
+      return;
+    }
+    // 房主转发的「屏幕共享中」卡片：共享方的历史卡实时同步给其他外网设备
+    if (data.startsWith('SCREEN_CARD:')) {
+      if (MODE !== 'guest') return;
+      try {
+        const c = JSON.parse(data.slice(12));
+        if (c && c.id) {
+          pushMsg({ type: 'screen', status: 'live', ip: c.f || '外网设备',
+                    id: c.id, time: c.time || '' });
+        }
+      } catch (e) {}
+      return;
+    }
+    // 访客发起共享：房主落盘一条共享卡，再转给其余外网设备
+    if (data.startsWith('SCREEN_START:')) {
+      if (MODE !== 'host' || !ctx) return;
+      let o = null;
+      try { o = JSON.parse(data.slice(13)); } catch (e) {}
+      const sid = o && o.id;
+      if (!sid) return;
+      fetch(API + '/screen', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'status=start&from=' + encodeURIComponent(ctx.name)
+            + '&id=' + encodeURIComponent(String(sid).slice(0, 32))
+      }).then(() => loadMessages()).catch(() => {});
+      broadcast('SCREEN_CARD:' + JSON.stringify({ id: sid, f: ctx.name, time: (o && o.time) || '' }), ctx.name);
+      return;
+    }
+    // 共享停止：房主把历史卡改成「已停止」，再转给其余外网设备各自改灰
+    if (data.startsWith('SCREEN_STOP:')) {
+      let o = null;
+      try { o = JSON.parse(data.slice(12)); } catch (e) {}
+      const sid = o && o.id;
+      if (!sid) return;
+      if (MODE === 'host') {
+        fetch(API + '/screen', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'status=stop&id=' + encodeURIComponent(String(sid).slice(0, 32))
+        }).then(() => loadMessages()).catch(() => {});
+        broadcast('SCREEN_STOP:' + JSON.stringify({ id: sid, end: o.end || '', dur: o.dur || '' }),
+                  ctx && ctx.name);   // 发起方自己已经改过，不用回给它
+      }
+      updateScreenMsg(sid, { status: 'ended', end: o.end || '', dur: o.dur || '' });
+      return;
+    }
+    // 访客点「观看共享」：房主把手上的流（自己的共享，或替访客转发的那路）补推过去
+    if (data.startsWith('SCREEN_WATCH')) {
+      if (MODE !== 'host' || !ctx || !ctx.conn || !ctx.conn.open) return;
+      const watcher = ctx.conn.peer;
+      const stream = screenStream || screenRecvStream;
+      if (!stream || !watcher) {
+        try { ctx.conn.send('NOTE:' + JSON.stringify({ t: '当前没有进行中的屏幕共享' })); } catch (e) {}
+        return;
+      }
+      try { const c = pcPeer.call(watcher, stream); if (c) tuneScreenSender(c); } catch (e) {}
+      return;
+    }
+    // 房主想回看某台访客的共享（自己面板已关）：请共享方重新呼叫一次
+    if (data === 'SCREEN_RECALL') {
+      if (MODE !== 'guest' || !screenStream || !guestPeer) return;
+      try { const c = guestPeer.call('pc-' + currentRoom, screenStream);
+            if (c) tuneScreenSender(c); } catch (e) {}
+      return;
+    }
     // 房主解散了房间：房间码已作废，访客直接回入口页，不要自动重连
     if (data === 'ROOM_CLOSED') {
       guestRoomGone('房主已销毁房间，房间码已作废。请联系房主获取新的房间码或邀请链接。');
@@ -2207,6 +2390,33 @@ function handleData(data, ctx) {
 let screenStream = null, screenCalls = [], recvCall = null, screenRole = '';
 let screenRelayCalls = [];   // 房主把收到的一路共享转给其他外网设备的那些 call
 let screenHasAudio = false;
+let screenMsgId = '';        // 这次共享在聊天历史里的卡片 id（停止时把卡片改成「已停止」）
+let screenRecvStream = null; // 房主收到的一路共享流：转给后来点「观看」的设备用
+// 在本地消息里找屏幕共享卡并原地更新状态（发起方停止时自己先把卡片改灰）
+function findScreenMsg(id) {
+  return localMsgs.find(x => x.id === id && x.type === 'screen') ||
+         serverMsgs.find(x => x.id === id && x.type === 'screen') || null;
+}
+function updateScreenMsg(id, patch) {
+  const m = findScreenMsg(id);
+  if (!m) return false;
+  Object.assign(m, patch);
+  renderAll();
+  return true;
+}
+// 两次 HH:MM:SS 的间隔文案，和后端 screen_duration 保持一致
+function fmtScreenDur(t1, t2) {
+  const sec = t => {
+    const p = String(t || '').split(':').map(x => parseInt(x, 10) || 0);
+    while (p.length < 3) p.unshift(0);
+    return p[0] * 3600 + p[1] * 60 + p[2];
+  };
+  let d = sec(t2) - sec(t1);
+  if (d < 0) d += 86400;
+  if (d >= 3600) return Math.floor(d / 3600) + ' 小时 ' + Math.floor(d % 3600 / 60) + ' 分';
+  if (d >= 60) return Math.floor(d / 60) + ' 分钟';
+  return d + ' 秒';
+}
 function refreshScreenAudioBtn() {
   const v = document.getElementById('screenVideo');
   const ab = document.getElementById('screenAudio');
@@ -2375,6 +2585,24 @@ async function toggleScreenShare() {
   if (!screenCalls.length) {
     notify('发起共享失败');
     stopScreenShare();
+    return;
+  }
+  // 共享真正送出去了：往聊天历史里写一条「屏幕共享中」的卡片，
+  // 后加入的设备从历史里就能看到，共享没停还能点按钮补看实时画面
+  const sid = uid();
+  screenMsgId = sid;
+  const tstr = nowHMS();
+  if (MODE === 'host') {
+    fetch(API + '/screen', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'status=start&from=' + encodeURIComponent(myName || '房主')
+          + '&id=' + encodeURIComponent(sid)
+    }).then(() => loadMessages()).catch(() => {});
+    broadcast('SCREEN_CARD:' + JSON.stringify({ id: sid, f: myName || '房主', time: tstr }));
+  } else {
+    try { guestConn.send('SCREEN_START:' + JSON.stringify({ id: sid, f: myName, time: tstr })); } catch (e) {}
+    pushMsg({ type: 'screen', status: 'live', ip: myName, id: sid, time: tstr });
   }
 }
 function stopScreenShare() {
@@ -2391,7 +2619,27 @@ function stopScreenShare() {
   if (wasSending) {
     try { broadcast('SCREEN_END'); } catch (e) {}
     try { if (guestConn && guestConn.open) guestConn.send('SCREEN_END'); } catch (e) {}
+    // 历史里的共享卡同步改成「已停止」：一条卡片状态切换，不追加第二条
+    const sid = screenMsgId;
+    if (sid) {
+      const start = (findScreenMsg(sid) || {}).time || '';
+      const endT = nowHMS();
+      const dur = fmtScreenDur(start, endT);
+      updateScreenMsg(sid, { status: 'ended', end: endT, dur: dur });
+      if (MODE === 'host') {
+        fetch(API + '/screen', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'status=stop&id=' + encodeURIComponent(sid)
+        }).then(() => loadMessages()).catch(() => {});
+        broadcast('SCREEN_STOP:' + JSON.stringify({ id: sid, end: endT, dur: dur }));
+      } else {
+        try { if (guestConn && guestConn.open)
+          guestConn.send('SCREEN_STOP:' + JSON.stringify({ id: sid, end: endT, dur: dur })); } catch (e) {}
+      }
+    }
   }
+  screenMsgId = '';
   screenRole = '';
   hideScreenPanel();
 }
@@ -2417,15 +2665,45 @@ function acceptScreenCall(call) {
   recvCall = call;
   // 接收端（尤其是手机）同理：先让视频可见，再挂流播放
   call.on('stream', stream => {
+    screenRecvStream = stream;   // 房主留一份：后来点「观看共享」的设备从这里补推
     showScreenPanel('recv');
     attachStream(stream, true);
     relayScreenToOthers(stream, call.peer);
   });
   call.on('close', () => {
     if (recvCall === call) recvCall = null;
+    screenRecvStream = null;     // 流跟着这条呼叫走：断了之后观看要走「重新呼叫」
     if (screenRole === 'recv') { screenRole = ''; hideScreenPanel(); }
     stopScreenRelay();
   });
+}
+
+// 点历史卡上的「观看共享」：共享还在进行时，让持有流的一端补推一路过来。
+// 共享发起方是房主 → 房主直接呼叫；发起方是某台访客 → 房主把收到的那路流
+// 再呼叫一次（转发），自己已经关掉画面的房主则请共享方重新呼叫。
+function watchScreen(mid) {
+  const m = findScreenMsg(mid);
+  if (!m || m.status === 'ended') { notify('该次共享已经结束'); return; }
+  if (screenStream) { toast('你正在共享屏幕'); return; }
+  if (screenRole === 'recv' && screenSlot.classList.contains('show')) return;   // 已经在看
+  if (!canP2P()) {
+    notify(isLanClient ? '局域网访问不支持观看共享' : '还没有建立直连，无法观看共享');
+    return;
+  }
+  if (MODE === 'host') {
+    if (screenStream || screenRecvStream) {
+      // 流在自己手上（自己是共享方，或正替访客转发）：直接呼叫自己看
+      // 房主本来就开着面板时不会走到这里（上面已 return）
+      notify('共享画面已在观看');
+      return;
+    }
+    const sharer = hostList().find(x => x.name === m.ip);
+    if (sharer) { try { sharer.conn.send('SCREEN_RECALL'); } catch (e) {} }
+    else notify('共享的设备已不在线');
+    return;
+  }
+  try { guestConn.send('SCREEN_WATCH'); }
+  catch (e) { notify('发送观看请求失败'); }
 }
 
 // ===== 按需下载（访客端）：⬇ 按钮 → 向房主要文件本体 → 存到下载目录 =====
@@ -3013,6 +3291,7 @@ function startHostPeer(roomCode) {
         toast('有设备离开了房间');
       }
       sendPeers();
+      updateNums();   // 编号不回收：人走了号留着，重连回来还是原来的数字
       refreshReady();
       renderAll();
     });
@@ -3074,6 +3353,7 @@ function dropHostConnQuiet(id) {
   recvBuf.delete(id);
   setTimeout(() => { try { c.close(); } catch (err) {} }, 150);
   clearConnectHint();
+  updateNums();   // 编号不回收：人走了号留着，重连回来还是原来的数字
   refreshReady();
   renderAll();
 }
@@ -3094,6 +3374,7 @@ function registerGuest(ctx, nick, dev) {
   ctx.name = name;
   try { e.conn.send('WELCOME:' + JSON.stringify({ name: name, proto: PROTOCOL })); } catch (err) {}
   pushHistoryTo(e.conn);
+  updateNums();   // 新设备入房：编号表跟着变（重连设备沿用原号）
   broadcast('NOTE:' + JSON.stringify({ t: '有设备加入了房间' }), name);
   toast('有设备加入了房间');
   sendPeers();
@@ -3112,7 +3393,8 @@ async function pushHistoryTo(conn) {
   } catch (e) {}
   const payload = (list || []).slice(-200).map(m => ({
     type: m.type, content: m.content || '', name: m.name || '',
-    size: m.size || '', time: m.time || '', ip: m.ip || '', id: m.id || ''
+    size: m.size || '', time: m.time || '', ip: m.ip || '', id: m.id || '',
+    status: m.status || '', end: m.end || '', dur: m.dur || ''
   }));
   try { conn.send('HISTORY:' + JSON.stringify({ messages: payload })); } catch (e) {}
 }
@@ -3196,20 +3478,57 @@ async function detectRelay(entry) {
   } catch (e) { return false; }
 }
 
-// 房主把「外网直连的都有谁」报给后端：名字来自对方自报，IP 来自上面的 WebRTC 读取
+// 房主把「外网直连的都有谁」报给后端：名字来自对方自报，IP 来自上面的 WebRTC 读取。
+// 头像编号表一起报：后端存下来随 /messages 下发，局域网设备（不走 P2P）才能拿到。
 function reportDevices() {
   if (MODE !== 'host' || isLanClient) return;
   const list = hostList().map(x => ({ name: x.name || '', ip: x.ip || '', dev: x.dev || '' }));
-  const sig = JSON.stringify(list);
+  const sig = JSON.stringify(list) + '#' + JSON.stringify(nameNums);
   if (sig === reportedDevices) return;
   reportedDevices = sig;
   try {
     fetch(API + '/api/devices', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ devices: list })
+      body: JSON.stringify({ devices: list, nums: nameNums })
     }).catch(() => {});
   } catch (e) {}
+}
+
+// 房主按加入顺序给每台设备编 stable 号：房主=1，同一台设备（按 dev /
+// 局域网 cid 认人）断开重连沿用原号，新设备从最大号往后排。
+// 算完把「设备名 -> 编号」广播给外网访客（NUMS）并报给后端。
+function updateNums() {
+  if (MODE !== 'host' || isLanClient) return;
+  if (_numRoom !== ROOM) {          // 房间换了：编号从 1 重新开始
+    _numRoom = ROOM;
+    _numByDev.clear();
+    _numCounter = 1;
+  }
+  const map = { '房主': 1 };
+  for (const x of hostConns.values()) {
+    if (!x || !x.registered || !x.conn || !x.conn.open) continue;
+    const key = x.dev || ('id' + x.id);   // 没有 dev 的老客户端按连接认
+    let n = _numByDev.get(key);
+    if (!n) { n = ++_numCounter; _numByDev.set(key, n); }
+    x.num = n;
+    if (x.name) map[x.name] = n;
+  }
+  for (const d of (roomDevices || [])) {
+    if (!d || d.channel === 'p2p') continue;   // 外网设备上面已经编过
+    const key = 'L' + (d.cid || d.ip || d.name);
+    let n = _numByDev.get(key);
+    if (!n) { n = ++_numCounter; _numByDev.set(key, n); }
+    if (d.name) map[d.name] = n;
+  }
+  const sig = JSON.stringify(map);
+  if (sig !== _numsSig) {
+    _numsSig = sig;
+    nameNums = map;
+    broadcast('NUMS:' + sig);
+    reportDevices();
+    renderAll();
+  }
 }
 
 // 设备清单按通道拆两份：外网卡片只列 P2P 设备，局域网卡片只列局域网设备。
@@ -3217,10 +3536,10 @@ function reportDevices() {
 // 这份清单只给房主看，其他设备调用到这里直接清空返回。
 function renderMembers() {
   if (!isRoomOwner()) { clearDeviceLists(); return; }
-  const wan = isLanClient ? [] : hostList().map(x => ({ ip: x.ip || '', relay: !!x.relay }));
+  const wan = isLanClient ? [] : hostList().map(x => ({ ip: x.ip || '', relay: !!x.relay, num: x.num || nameNums[x.name] || '' }));
   const lan = (roomDevices || [])
     .filter(d => d && d.channel !== 'p2p')   // 外网以本地连接为准，后端那份上报会慢一拍
-    .map(d => ({ ip: d.ip || '', relay: false }));
+    .map(d => ({ ip: d.ip || '', relay: false, num: nameNums[d.name] || '' }));
   const fill = (id, rows) => {
     const box = document.getElementById(id);
     if (!box) return;
@@ -3229,7 +3548,7 @@ function renderMembers() {
     box.innerHTML = rows.map((r, i) =>
       '<span class="member-row">' +
         (r.relay ? '<span class="member-tag relay">中继</span>' : '') +
-        '<span class="member-name">设备 ' + (i + 1) + '</span>' +
+        '<span class="member-name">设备 ' + (r.num || (i + 1)) + '</span>' +
         '<span class="member-ip">' + esc(r.ip || 'IP 未知') + '</span>' +
       '</span>').join('');
   };
@@ -3723,6 +4042,33 @@ function wireGuestConn(conn, onFail, onOpen) {
     onFail('数据通道错误', String(e && e.message ? e.message : e));
   });
 }
+// 访客从自己的 P2P 连接里读本机地址：取「选中候选对」的本地候选——
+// 同 WiFi 是 192.168.x.x 内网地址，跨网是 STUN 反射出的公网地址，
+// 和房主端设备清单里看到的是同一个，方便两边对号定位。
+async function refreshSelfIp() {
+  if (MODE !== 'guest') return;
+  let ip = '';
+  try {
+    const pc = guestConn && guestConn.peerConnection;
+    if (pc && pc.getStats) {
+      const stats = await pc.getStats();
+      let localId = '';
+      stats.forEach(s => {
+        if (s.type === 'candidate-pair' && s.localCandidateId &&
+            (s.nominated || s.state === 'succeeded') && !localId) localId = s.localCandidateId;
+      });
+      if (localId) {
+        stats.forEach(s => {
+          if (s.type === 'local-candidate' && s.id === localId) {
+            const a = s.address || s.ip || '';
+            if (a && looksLikeAddr(a)) ip = a;
+          }
+        });
+      }
+    }
+  } catch (e) {}
+  if (ip) setSelfIp(ip);
+}
 function markGuestConnected() {
   if (guestTimer) { clearTimeout(guestTimer); guestTimer = null; }
   if (guestAutoTimer) { clearTimeout(guestAutoTimer); guestAutoTimer = null; }
@@ -3736,6 +4082,7 @@ function markGuestConnected() {
   document.getElementById('wxTip').style.display = 'none';
   refreshReady();
   renderAll();
+  setTimeout(() => { refreshSelfIp(); }, 1200);   // ICE 收敛后再读本机地址
 }
 
 // ===== 发送 =====
