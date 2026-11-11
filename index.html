@@ -1197,7 +1197,7 @@ let CLIENT_URL = 'https://zvzqvqdvd.github.io/data-transmission/';
 // 页面源文件指纹（由程序按 web/ 源文件现算，在线页 = 导出那一刻的值）。
 // 邀请链接 / 二维码 / 复制的访问地址都带 ?v=<指纹>：手机浏览器对页面缓存
 // 非常顽固，URL 不变就拿旧缓存页连新程序，轻则变慢、重则连不上。
-const PAGE_BUILD = 'b2da88bc29';
+const PAGE_BUILD = '007167a7ce';
 let lastRev = null;
 let pollTimer = null;        // 房主端的 /messages 轮询
 let roomClosed = false;      // 房主已解散房间，页面停在入口页
@@ -1392,6 +1392,7 @@ function setSelfIp(ip) {
 // 局域网设备没有 P2P 连接可断：点「断开连接」就是退出房间、回输码页
 function leaveLanRoom() {
   dropBusy = false;
+  forgetJoinRoom();           // 主动断开：清掉回连记录，刷新不会再自动加入旧房间
   setGuestActions('connecting');
   stopPolling();
   document.getElementById('guestGate').style.display = 'none';
@@ -3130,6 +3131,7 @@ function onRoomClosed(tip) {
   refreshReady();
   renderAll();
   ROOM = '';
+  forgetJoinRoom();           // 房间已结束：清掉回连记录，别让刷新又自动连回旧码
   // 回到起始页就把「自动回房」的痕迹清掉：?host=1 / ?room=，
   // 否则刷新又会偷偷开一个新房间或连回已经作废的旧码
   try { history.replaceState(null, '', location.pathname); } catch (e) {}
@@ -3160,6 +3162,7 @@ function onNeedJoin() {
   refreshReady();
   renderAll();
   try { history.replaceState(null, '', location.pathname); } catch (e) {}
+  forgetJoinRoom();           // 凭证已失效：先清回连记录，别让 showLanGate 又自动连回旧码
   showLanGate();
   gateMsg('房间码已经变了（房主新建或销毁了房间），请重新输入。', 'info');
 }
@@ -3623,6 +3626,7 @@ function initHost() {
 // existing: 入口页已经探通连接时传入 {peer, conn}，直接复用，避免重复握手
 function initGuest(room, existing) {
   MODE = 'guest';
+  rememberJoinRoom(room);     // 记住本标签页的房间：刷新后自动回连，不用重输码
   applyDevicePrivacy();       // 访客只看得到自己的连接状态，看不到设备数 / IP
   guestGoneHandled = false;   // 重新进房，允许下一次「房间已不存在」再触发收尾
   document.getElementById('adminBtn').style.display = 'none';
@@ -3762,6 +3766,7 @@ function resetToGate() {
   setGuestActions('connecting');  // 回起始页，按钮整排复位为隐藏
   setStatus('');              // 入口页不残留上一次的连接进度文字
   currentRoom = '';
+  forgetJoinRoom();           // 已退出房间：清掉回连记录，刷新不再自动连回旧房间
   guestAutoTry = 0;
   guestGoneHits = 0;
   pullInFlight.clear(); pullQueue.length = 0;   // 清掉没完成的下载任务
@@ -4352,6 +4357,21 @@ function hideGate() {
   document.getElementById('gateView').classList.remove('show');
   document.getElementById('hostView').style.display = 'flex';
 }
+// ===== 刷新回连：本标签页成功加入过的房间记在 sessionStorage（随标签页，关页即清） =====
+// 只解决「刷新要重输房间码」：关掉页面重开、换浏览器仍然要手动输码；
+// 正常退出房间（断开 / 被请出 / 房间销毁 / 房间码作废）时会清掉，不会偷偷连回旧房间。
+function savedJoinRoom() {
+  try {
+    return String(sessionStorage.getItem('lanshare_session_room') || '')
+      .toUpperCase().replace(/[^A-Z2-9]/g, '');
+  } catch (e) { return ''; }
+}
+function rememberJoinRoom(room) {
+  try { sessionStorage.setItem('lanshare_session_room', room); } catch (e) {}
+}
+function forgetJoinRoom() {
+  try { sessionStorage.removeItem('lanshare_session_room'); } catch (e) {}
+}
 // ===== 免责声明：内嵌在入口页下方，文本展示 + 复选框（默认勾选），不弹窗 =====
 // 复选框勾着 → 点创建/加入直接继续；没勾 → 展开声明区并提示先勾选。
 // 房间内的新建 / 销毁房间不涉及声明。
@@ -4444,7 +4464,16 @@ function showLanGate() {
     // 扫码进入：复选框默认勾选 = 已同意，直接静默连；没勾选会在 gateJoin 里提示
     setTimeout(() => { try { gateJoin(); } catch (e) {} }, 60);
   } else {
-    setTimeout(() => { try { box.focus(); box.select(); } catch (e) {} }, 80);
+    // 刷新回连：这个标签页之前加入过房间（sessionStorage 还记着），自动重连，
+    // 不用重输房间码；连不上会停在输码页且码已填好，按「连接」即可重试
+    const saved = savedJoinRoom();
+    if (saved.length >= 4) {
+      box.value = saved;
+      gateMsg('正在重新加入房间 ' + saved + '…', 'info');
+      setTimeout(() => { try { gateJoin(); } catch (e) {} }, 60);
+    } else {
+      setTimeout(() => { try { box.focus(); box.select(); } catch (e) {} }, 80);
+    }
   }
 }
 // 在线页当房主后刷新：先问本机程序房间还在不在。
@@ -4610,8 +4639,10 @@ async function gateJoin() {
       return;
     }
     gateClearMsg();
+    rememberJoinRoom(room);   // 记住本标签页的房间：刷新后自动回连，不用重输码
     hideGate();
-    // 二维码带的 ?room= 已经用掉了，清掉地址避免刷新又自动提交一次
+    // 二维码带的 ?room= 已经用掉了，清掉地址避免刷新又自动提交一次；
+    // 回连靠 sessionStorage，不再依赖地址栏参数
     try { history.replaceState(null, '', location.pathname); } catch (e) {}
     startHostUI(false, '', true);
     return;
@@ -4679,9 +4710,20 @@ if (MODE === 'host') {
   } else if (q.get('host') === '1') {
     // 在线页房主刷新：先确认房间还在，别一刷新就偷偷开个新房间
     resumeHostFromWeb();
+  } else {
+    // 刷新回连：这个标签页之前加入过房间（sessionStorage 记着），自动重连，
+    // 不用重输房间码——和扫码进来一样无感。房间没了会停在输码页且码已填好。
+    const saved = savedJoinRoom();
+    if (saved.length >= 4) {
+      gateShowJoin();
+      document.getElementById('gateRoom').value = saved;
+      gateMsg('正在重新加入房间 ' + saved + '…', 'info');
+      setTimeout(() => { try { gateJoin(); } catch (e) {} }, 60);
+    }
+    // 没有记录就停在入口页等手动输码（用户 16:43 定稿：不在浏览器里留死数据，
+    // sessionStorage 随标签页关闭自动清空）；预热已经在上面建好了，
+    // 用户输码的这几秒正好用来握手（省 0.3～1.5 秒）。
   }
-  // 其余情况一律停在入口页等手动输码：房间号不再缓存（用户 16:43 定稿），
-  // 预热已经在上面建好了，用户输码的这几秒正好用来握手（省 0.3～1.5 秒）。
 }
 // 网络恢复 / 手机解锁回到前台：退避定时器还没走完也立刻再试一次，
 // 不用干等好几秒才恢复聊天。flushGuestRetry 自带房主/访客与连接状态守卫。
