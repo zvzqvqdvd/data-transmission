@@ -100,8 +100,10 @@
 
 ```bash
 python 数据传输.py                   # 直接跑，改完存盘重开即可看效果
-python 数据传输.py --export-page     # 只重新导出单文件页面
+python 数据传输.py --export-page     # 导出单文件页面到 data-transmission/index.html
 ```
+
+**启动程序不会导出页面**（2026-11-11 起）：跑服务就是跑服务，发布页只由上面那条 `--export-page` 生成。好处是正在跑的旧 exe 重启时，不会把它内嵌的旧页面覆盖回 `data-transmission/index.html`。
 
 `web/` 是**编译期依赖**，必须和 `数据传输.py` 同级。打包 exe：
 
@@ -138,7 +140,7 @@ main 分支根目录既是 GitHub Pages 的站点根目录，也是源码根目�
 - 只重新打包 → 拖 `数据传输.exe`（下载链接是运行时拼的，不用动页面）
 - exe 是**二进制，只能网页拖拽上传**（在线编辑器会损坏文件），9.4 MB 远低于 25 MB 上限
 
-导出机制：读取 `web/` 六个文件，把 CSS、`vendor.js` 和按顺序拼接的三段业务 JS 内联进 `page.html`。`data-transmission/` 被删或程序被挪到干净目录，启动一次就会自动重建。**不要直接编辑 `data-transmission/index.html`**。
+导出机制：读取 `web/` 六个文件，把 CSS、`vendor.js` 和按顺序拼接的三段业务 JS 内联进 `page.html`，写到 `data-transmission/index.html`（目录不在会自动建）。**启动程序不会导出**，要手动跑 `--export-page`。**不要直接编辑这个文件**。
 
 **对版**：进房点「🕒 房间说明」，底部「页面版本」应为 **`5ad34fab18`**（对应 `index.html` 351,067 字节 / md5 `67247a77`）。线上对不上就是没覆盖上传或被缓存了。
 

@@ -884,9 +884,12 @@ def build_static_page():
 
 
 # 静态页文件名与需要同步的位置（相对 BASE_DIR）
-# 只保留发布目录一处，根目录不再生成副本，避免两份文件互相干扰
+# 两处都要写：
+#   data-transmission/  程序自己用的发布目录，GitHub 上传就是这一份
+#   ''（根目录）        仓库根目录同时是 GitHub Pages 站点根，必须有一份 index.html
+# 两处内容完全一致，谁都不会落后——只写一处会让仓库里的两份逐渐对不上。
 STATIC_PAGE_NAME = 'index.html'
-STATIC_PAGE_DIRS = ('data-transmission',)
+STATIC_PAGE_DIRS = ('data-transmission', '')
 
 
 def export_static_page(silent=True):
@@ -2278,10 +2281,9 @@ def main():
             print("  ✅ index.html 已是最新，无需更新")
         return
 
-    # 每次启动都把最新的在线页导出一份（GitHub 上传就是这个文件）
-    # 放在「已有一个实例在跑」判断之前：即使程序已经在后台跑着，双击一次也能把页面补齐；
-    # 发布目录被删掉、或第一次在干净目录里运行，都会在这里重新建回来。
-    export_static_page(silent=True)
+    # 启动时不再自动导出 index.html（2026-11-11 定稿）：
+    # 发布页由 `python 数据传输.py --export-page` 手动导出，启动只负责跑服务。
+    # 这样正在跑的旧 exe 重启时不会把 data-transmission/index.html 覆盖回它内嵌的旧页。
 
     # 已有实例在跑就不再开第二个：既免得两个进程抢 8000，也免得白弹一次 UAC
     if already_running():
