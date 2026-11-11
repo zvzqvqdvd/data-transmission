@@ -749,6 +749,43 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   font-family:inherit; cursor:pointer; border-radius:20px; padding:10px 18px;
 }
 body.fs-locked { overflow:hidden; }
+/* ===== 图片消息：直接出预览图，点开大图 ===== */
+.img-card {
+  position:relative; width:-moz-fit-content; width:fit-content;
+  max-width:min(320px,100%); border-radius:14px; overflow:hidden;
+  background:#eef0f1; box-shadow:0 1px 4px rgba(0,0,0,.08); cursor:zoom-in;
+}
+.img-card img { display:block; max-width:100%; max-height:240px; width:auto; height:auto; }
+.img-dl {
+  position:absolute; right:8px; top:8px; width:26px; height:26px;
+  border:none; border-radius:50%; background:rgba(0,0,0,.55); color:#fff;
+  font-size:13px; cursor:pointer; font-family:inherit; line-height:1;
+  display:flex; align-items:center; justify-content:center;
+}
+.img-dl:hover { background:rgba(0,0,0,.75); }
+.img-fb {
+  display:none; flex-direction:column; align-items:center; justify-content:center;
+  gap:5px; padding:22px 18px; font-size:12px; color:#888780;
+}
+.img-fb b { font-weight:500; color:#5f5e5a; word-break:break-all; }
+.img-card.img-fail { cursor:default; }
+.img-card.img-fail img, .img-card.img-fail .img-dl { display:none; }
+.img-card.img-fail .img-fb { display:flex; }
+/* 访客未拉取本体的图片占位卡：点卡片就走 FILE_PULL */
+.file-card.img-pending { cursor:pointer; }
+.img-hint { font-size:11px; color:#07C160; margin-top:2px; }
+/* ===== 图片大图查看器 ===== */
+.iv {
+  display:none; position:fixed; left:0; top:0; right:0; bottom:0; z-index:410;
+  background:rgba(0,0,0,.92); align-items:center; justify-content:center;
+}
+.iv.show { display:flex; }
+.iv img { max-width:96vw; max-height:94vh; object-fit:contain; }
+.iv-close {
+  position:absolute; right:14px; top:14px; width:30px; height:30px;
+  border:none; border-radius:50%; background:rgba(255,255,255,.18); padding:0;
+  display:flex; align-items:center; justify-content:center; cursor:pointer;
+}
 
 /* ===== 窄屏适配 ===== */
 @media (max-width:640px) {
@@ -1238,6 +1275,14 @@ body.fs-locked { overflow:hidden; }
   <button class="scf-play" id="scfPlay" style="display:none;">▶ 点击播放</button>
 </div>
 
+<!-- 图片大图查看器：body 顶层；点背景 / ✕ / Esc 关闭，点图片不关（方便手机长按保存） -->
+<div class="iv" id="imgViewer" onclick="closeImgViewer()">
+  <button class="iv-close" onclick="closeImgViewer()" aria-label="关闭预览">
+    <svg viewBox="0 0 12 12" width="12" height="12"><path d="M2 2l8 8M10 2l-8 8" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/></svg>
+  </button>
+  <img id="ivImg" alt="图片预览" onclick="event.stopPropagation()">
+</div>
+
 <script>
 const chatInner = document.getElementById('chatInner');
 const chatScroll = document.getElementById('chatScroll');
@@ -1275,7 +1320,7 @@ let CLIENT_URL = 'https://zvzqvqdvd.github.io/data-transmission/';
 // 页面源文件指纹（由程序按 web/ 源文件现算，在线页 = 导出那一刻的值）。
 // 邀请链接 / 二维码 / 复制的访问地址都带 ?v=<指纹>：手机浏览器对页面缓存
 // 非常顽固，URL 不变就拿旧缓存页连新程序，轻则变慢、重则连不上。
-const PAGE_BUILD = '2a61cbe64c';
+const PAGE_BUILD = 'a373a08b35';
 let lastRev = null;
 let pollTimer = null;        // 房主端的 /messages 轮询
 let roomClosed = false;      // 房主已解散房间，页面停在入口页
@@ -2002,13 +2047,32 @@ function renderMsg(msg) {
       '</div>';
     }
   } else {
-    // 文件消息：统一一张文件卡片，不做在线预览；点右侧 ⬇ 才下载
+    // 文件消息：图片直接渲染成预览图（点开大图），其它文件仍是一张卡片
     const nm = esc(msg.name), sz = esc(msg.size || '');
     const ext=String(msg.name||'').split('.').pop().toUpperCase().slice(0,4);
     const inner = '<div class="file-icon">'+esc(ext)+'</div>'+
       '<div class="file-info"><div class="file-name">'+nm+'</div>'+
       '<div class="file-size">'+sz+'</div></div>';
-    if (MODE === 'guest' && msg.id) {
+    if (isImgName(msg.name)) {
+      // 预览地址优先级：手上已有的 blob（发送方 / 访客拉取过）→ 本机接口（房主/局域网）
+      const src = msg.url || (MODE !== 'guest' ? fileUrl(msg) : '');
+      if (src) {
+        bubble = '<div class="img-card" data-src="'+esc(src)+'" data-name="'+esc(msg.name)+'" onclick="openImgViewer(this)" title="点击查看大图">'+
+          '<img src="'+esc(src)+'" loading="lazy" alt="'+esc(msg.name)+'" onerror="imgCardFail(this)">'+
+          '<div class="img-fb"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="#888780" stroke-width="1.6" stroke-linecap="round">'+
+          '<rect x="3" y="4.5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M4.5 17l4.6-4.4 3.2 3 3-2.6 4.2 4"/></svg>'+
+          '<b>'+nm+'</b><span>'+sz+' · 图片加载失败</span></div>'+
+          '<button class="img-dl" title="下载到本机" onclick="event.stopPropagation();dlImg(this)">⬇</button>'+
+        '</div>';
+      } else {
+        // 访客还没拉取本体：文件卡占位，点卡片或 ⬇ 走 FILE_PULL，到手自动变成预览图
+        bubble = '<div class="file-card img-pending" title="点击加载预览" onclick="pullFile(\'' + esc(msg.id) + '\')">'+
+          '<div class="file-icon">'+esc(ext)+'</div>'+
+          '<div class="file-info"><div class="file-name">'+nm+'</div>'+
+          '<div class="file-size">'+sz+'</div><div class="img-hint">点击加载预览</div></div>'+
+          '<button class="file-dl" title="下载到本机" onclick="event.stopPropagation();pullFile(\'' + esc(msg.id) + '\')">⬇</button></div>';
+      }
+    } else if (MODE === 'guest' && msg.id) {
       // 访客：文件在房主磁盘上，点 ⬇ 走 FILE_PULL 按需拉取
       bubble = '<div class="file-card" title="点右侧 ⬇ 下载">'+ inner +
         '<button class="file-dl" title="下载到本机" onclick="pullFile(\'' + esc(msg.id) + '\')">⬇</button></div>';
@@ -2047,6 +2111,45 @@ function downloadLocal(btn) {
   a.click();
   a.remove();
   toast('开始下载：' + name);
+}
+
+// ===== 图片消息预览 =====
+const IMG_EXTS = ['png','jpg','jpeg','gif','webp','bmp','svg','avif','ico'];
+function isImgName(name) { return IMG_EXTS.includes(extOf(name)); }
+// 缩略图加载失败（文件已被清理/房间重建）：卡片原地变成失效占位，不再反复重试
+function imgCardFail(img) {
+  const c = img.closest('.img-card');
+  if (c) c.classList.add('img-fail');
+}
+// 缩略图上的 ⬇：直接存 data-src（blob 或本机接口地址都能下载）
+function dlImg(btn) {
+  const c = btn.closest('.img-card');
+  if (!c) return;
+  const a = document.createElement('a');
+  a.href = c.getAttribute('data-src') || '';
+  a.download = c.getAttribute('data-name') || 'image';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => a.remove(), 1000);
+}
+// 大图查看器：页面内全屏黑底层，✕ / Esc / 点背景关闭（点图片本身不关，方便长按保存）
+function openImgViewer(el) {
+  const src = el.getAttribute('data-src');
+  if (!src) return;
+  const box = document.getElementById('imgViewer');
+  const img = document.getElementById('ivImg');
+  if (!box || !img) return;
+  img.src = src;
+  box.classList.add('show');
+  document.body.classList.add('fs-locked');
+}
+function closeImgViewer() {
+  const box = document.getElementById('imgViewer');
+  if (!box || !box.classList.contains('show')) return;
+  box.classList.remove('show');
+  document.body.classList.remove('fs-locked');
+  const img = document.getElementById('ivImg');
+  if (img) img.src = '';
 }
 
 function stopPolling() {
@@ -2635,7 +2738,7 @@ function closeScreenFs() {
   if (v) { try { v.pause(); } catch (e) {} }
 }
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') closeScreenFs();
+  if (e.key === 'Escape') { closeScreenFs(); closeImgViewer(); }
 });
 // 直播卡在、画面还没到手上：自动请求补推（不用再点「观看共享」按钮）。
 // 每张卡只请求一次，防止反复骚扰；共享方自己 / 局域网端不需要。
