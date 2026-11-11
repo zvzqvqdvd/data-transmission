@@ -1187,7 +1187,7 @@ body.fs-locked { overflow:hidden; }
       · 房主点「销毁房间」<br>
       销毁时房间码作废，本机的聊天记录与接收文件也一并删除，不做保留。</p>
     <div class="modal-btns"><button class="btn-plain" onclick="hideTtl()">知道了</button></div>
-    <p style="text-align:center;font-size:11px;color:#b0b3b8;margin:10px 0 0;">页面版本 fcb2b366e1（反馈问题时请带上这一行）</p>
+    <p style="text-align:center;font-size:11px;color:#b0b3b8;margin:10px 0 0;">页面版本 cba1ab8db3（反馈问题时请带上这一行）</p>
   </div>
 </div>
 
@@ -1306,7 +1306,7 @@ let CLIENT_URL = 'https://zvzqvqdvd.github.io/data-transmission/';
 // 页面源文件指纹（由程序按 web/ 源文件现算，在线页 = 导出那一刻的值）。
 // 邀请链接 / 二维码 / 复制的访问地址都带 ?v=<指纹>：手机浏览器对页面缓存
 // 非常顽固，URL 不变就拿旧缓存页连新程序，轻则变慢、重则连不上。
-const PAGE_BUILD = 'fcb2b366e1';
+const PAGE_BUILD = 'cba1ab8db3';
 let lastRev = null;
 let pollTimer = null;        // 房主端的 /messages 轮询
 let roomClosed = false;      // 房主已解散房间，页面停在入口页
@@ -2411,11 +2411,13 @@ function handleData(data, ctx) {
     // 房主说文件没了：把这条下载从队列里清掉
     if (data.startsWith('FILE_PULL_ERR:')) {
       if (MODE !== 'guest') return;
+      // 前缀 "FILE_PULL_ERR:" 正好 14 个字符——多切会把 JSON 切坏，
+      // 解析失败就清不掉 pullInFlight，下载队列从此永久堵死（历史/实时全堵）
       let e0 = null;
-      try { e0 = JSON.parse(data.slice(16)); } catch (e) {}
+      try { e0 = JSON.parse(data.slice(14)); } catch (e) {}
       const mid = e0 && e0.mid;
       if (mid) {
-        pullInFlight.delete(mid); previewOnlyMids.delete(mid); pumpPullQueue();
+        pullInFlight.delete(mid); previewOnlyMids.delete(mid); pullStartAt.delete(mid); pumpPullQueue();
         const w = document.getElementById('pullwrap-' + mid);
         if (w) { w.style.display = 'none'; w.querySelector('.pull-bar i').style.width = '0%'; }
       }
@@ -2572,7 +2574,19 @@ function handleData(data, ctx) {
       const buf = recvBuf.get(key);
       if (!buf || data.slice(9) !== buf.id) return;
       recvBuf.delete(key);
-      if (buf.received !== buf.size) { notify('文件不完整，已丢弃'); return; }
+      if (buf.received !== buf.size) {
+        // 分片丢了半路：除了丢弃，还要把这条下载的状态清干净，
+        // 否则 pullInFlight 占着位，后面的下载（含图片自动预览）全被堵死
+        if (MODE === 'guest' && buf.mid) {
+          pullInFlight.delete(buf.mid);
+          previewOnlyMids.delete(buf.mid);
+          pullStartAt.delete(buf.mid);
+          const w = document.getElementById('pullwrap-' + buf.mid);
+          if (w) w.style.display = 'none';
+          pumpPullQueue();
+        }
+        notify('文件不完整，已丢弃'); return;
+      }
       const blob = new Blob(buf.chunks, { type: mimeOf(buf.name) });
       onFileReceived(blob, buf.name, buf.mid, buf.from);
     }
@@ -2931,6 +2945,30 @@ function acceptScreenCall(call) {
 // 同一时间只拉一个文件：访客只有一条数据通道，混着收会串包
 const pullInFlight = new Set();  // 正在拉取的 mid
 const pullQueue = [];            // 排队中的 {mid, name}
+const pullStartAt = new Map();   // mid -> 发起时间（看门狗用）
+// 拉取看门狗：一条请求 45 秒还没结果（连接半死、房主没回话）就放行队列，
+// 否则一个卡死的拉取会把后面所有下载——包括图片自动预览——全部堵住
+let pullWatchdogOn = false;
+function ensurePullWatchdog() {
+  if (pullWatchdogOn) return;
+  pullWatchdogOn = true;
+  setInterval(() => {
+    if (!pullInFlight.size) return;
+    const now = Date.now();
+    let freed = false;
+    for (const [mid, t0] of Array.from(pullStartAt)) {
+      if (now - t0 < 45000) continue;
+      pullStartAt.delete(mid);
+      pullInFlight.delete(mid);
+      previewOnlyMids.delete(mid);
+      const w = document.getElementById('pullwrap-' + mid);
+      if (w) w.style.display = 'none';
+      notify('「' + mid + '」下载超时，点卡片可重试');
+      freed = true;
+    }
+    if (freed) pumpPullQueue();
+  }, 5000);
+}
 // 拉取入口：把文件从房主拉过来并存到下载目录（图片自动预览也走这条队列）
 function pullFile(mid) {
   const m = localMsgs.find(x => x.id === mid);
@@ -2957,6 +2995,8 @@ function pumpPullQueue() {
     return;
   }
   pullInFlight.add(job.mid);
+  pullStartAt.set(job.mid, Date.now());
+  ensurePullWatchdog();
   if (job.preview) previewOnlyMids.add(job.mid);   // 只做预览：到手不落盘不提示
   try {
     guestConn.send('FILE_PULL:' + JSON.stringify({ mid: job.mid, name: job.name }));
@@ -2972,6 +3012,7 @@ function pumpPullQueue() {
     }
   } catch (e) {
     pullInFlight.delete(job.mid);
+    pullStartAt.delete(job.mid);
     notify('下载请求发送失败');
   }
 }
@@ -2991,7 +3032,7 @@ async function onFileReceived(blob, name, mid, from) {
       setStatus('✅ ' + name + ' 已下载', true);
       saveBlob(url, name);
     }
-    if (mid) pullInFlight.delete(mid);
+    if (mid) { pullInFlight.delete(mid); pullStartAt.delete(mid); }
     pumpPullQueue();
     return;
   }
@@ -4024,7 +4065,7 @@ function resetToGate() {
   guestAutoTry = 0;
   guestGoneHits = 0;
   pullInFlight.clear(); pullQueue.length = 0;   // 清掉没完成的下载任务
-  imgAutoTried.clear(); previewOnlyMids.clear();
+  imgAutoTried.clear(); previewOnlyMids.clear(); pullStartAt.clear();
   serverMsgs = []; localMsgs = [];
   seenIds = new Set();
   guestNames = [];
