@@ -100,7 +100,10 @@ function updateHostRoomHint() {
 }
 
 // ===== 消息列表：房主端 = 服务端消息 + 本地 P2P 消息；访客端 = 纯本地 =====
-const EMPTY_HTML = '<div class="empty"><span class="e-icon">💬</span>暂无消息<span class="e-sub">发的文字与文件会显示在这里，后加入的设备也能看到</span></div>';
+const EMPTY_HTML = '<div class="empty"><span class="e-icon">'
+  + '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="#98A0AC" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'
+  + '<path d="M20.5 11.6c0 4-3.8 7.2-8.5 7.2-1 0-2-.15-2.9-.42L4 20l1.3-3.6A6.9 6.9 0 0 1 3.5 11.6c0-4 3.8-7.2 8.5-7.2s8.5 3.2 8.5 7.2Z"/></svg>'
+  + '</span>暂无消息<span class="e-sub">发的文字与文件会显示在这里，后加入的设备也能看到</span></div>';
 let serverMsgs = [], localMsgs = [];
 let seenIds = new Set();     // 同一条消息可能既走本机也走广播，按 id 去重
 // 头像编号：设备名 -> 房间内编号。房主按加入顺序分配（房主=1，同一台设备
@@ -1212,7 +1215,7 @@ async function onFileReceived(blob, name, mid, from) {
     else pushMsg({ type: 'file', name: name, size: fmtSize(blob.size), url: url,
                    ip: from || '外网设备', id: mid || uid() });
     txEnd();
-    setStatus('✅ ' + name + ' 已下载', true);
+    setStatus(name + ' 已下载', true);
     saveBlob(url, name);
     if (mid) { pullInFlight.delete(mid); pullStartAt.delete(mid); }
     pumpPullQueue();
@@ -1321,7 +1324,7 @@ function setupLanBanner(url) {
   const short = u => String(u).replace(/^https?:\/\//, '');
   const here = LAN_URL || (location.protocol + '//' + location.host);
   lanShareUrl = url || LAN_URL || here;
-  document.getElementById('lanLabel').textContent = '🏠 局域网';
+  document.getElementById('lanLabel').textContent = '局域网';
   document.getElementById('lanUrl').textContent = short(lanShareUrl);
   document.getElementById('lanActions').style.display = 'flex';
   box.style.display = 'block';
@@ -1780,7 +1783,7 @@ function startHostPeer(roomCode) {
       // 这不是房主这边的错误，提示行保持原样。
       return;
     } else {
-      showHostHint('P2P 错误：' + t + '（点右上角 🌐 可以配一台中继服务器兜底）');
+      showHostHint('P2P 错误：' + t + '（点右上角的网络图标可以配一台中继服务器兜底）');
     }
   });
 }
@@ -2070,7 +2073,7 @@ function startHostUI(fromWeb, lanUrl, lanClient) {
     // 它自己就是房间成员，可以直接发（后端会把它算进 peers）
     lanPeers = Math.max(lanPeers, 1);
     // 与外网访客用同一张连接卡：只有通道名不同，别的文字一概不多写
-    showOtherDeviceCard('🏠 局域网', ROOM);
+    showOtherDeviceCard('局域网', ROOM);
     setGuestActions('connected');   // 走 HTTP，进来就是已连接
   }
 
@@ -2108,7 +2111,7 @@ function initGuest(room, existing) {
   applyDevicePrivacy();       // 访客只看得到自己的连接状态，看不到设备数 / IP
   guestGoneHandled = false;   // 重新进房，允许下一次「房间已不存在」再触发收尾
   document.getElementById('adminBtn').style.display = 'none';
-  showOtherDeviceCard('🌍 外网直连', room || '');
+  showOtherDeviceCard('外网直连', room || '');
   setGuestActions('connecting');   // 连接中先不给按钮
 
   if (/MicroMessenger|QQ\/|Weibo/.test(navigator.userAgent)) {
@@ -2380,7 +2383,7 @@ function connectOnce(room) {
   };
   setStatus(peer.open ? '② 已连到信令，正在呼叫对方设备…' : '① 正在连接信令服务器…');
   // 10 秒还没连上就判超时：以前 16 秒干等太久，早一点换条信令重试更省时间
-  guestTimer = setTimeout(() => fail('连接超时', '未能与对方设备建立直连，多为 NAT 限制或信令不通。建议两台设备连同一 WiFi 用局域网模式，或点右上角 🌐 配一台 TURN 中继服务器。', true), 10000);
+  guestTimer = setTimeout(() => fail('连接超时', '未能与对方设备建立直连，多为 NAT 限制或信令不通。建议两台设备连同一 WiFi 用局域网模式，或点右上角的网络图标配一台 TURN 中继服务器。', true), 10000);
   // 同一条信令连接只挂一次 open 监听，靠可替换钩子调用「最新一次」的 call：
   // 以前每次重试都新挂一个，open 一来会同时呼叫好几次，房主那边多出一堆幽灵连接
   peer.__callHook = call;

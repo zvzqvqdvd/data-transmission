@@ -378,6 +378,17 @@ def purge_stale_rooms():
             n += 1
     return n
 
+
+def _purge_old_rooms_bg():
+    """后台清上一次运行留下的房间残骸（当前房间在用的话一律不动）"""
+    try:
+        if ROOM:
+            return
+        purge_stale_rooms()
+        _drop_room_files()
+    except Exception:
+        pass
+
 # 局域网设备输入过正确房间码后拿到的凭证（存房间码本身，
 # 换码/解散后自动失效，不需要额外的过期机制）
 JOIN_COOKIE = 'lsroom'
@@ -883,13 +894,10 @@ def build_static_page():
     return build_page(mode='guest', client_list='', is_admin=False)
 
 
-# 静态页文件名与需要同步的位置（相对 BASE_DIR）
-# 两处都要写：
-#   data-transmission/  程序自己用的发布目录，GitHub 上传就是这一份
-#   ''（根目录）        仓库根目录同时是 GitHub Pages 站点根，必须有一份 index.html
-# 两处内容完全一致，谁都不会落后——只写一处会让仓库里的两份逐渐对不上。
+# 静态页文件名与落盘位置（相对 BASE_DIR）
+# 只写根目录一处：仓库根目录就是 GitHub Pages 站点根，导出即上传，不再另存副本。
 STATIC_PAGE_NAME = 'index.html'
-STATIC_PAGE_DIRS = ('data-transmission', '')
+STATIC_PAGE_DIRS = ('',)
 
 
 def export_static_page(silent=True):
@@ -2186,17 +2194,68 @@ def _step_end(result):
     print(result, flush=True)
 
 
+# 防火墙状态缓存：查一次 netsh 要 0.8～1 秒，占启动耗时的三分之一。
+# 命中缓存就跳过这次查询，后台再核一次，规则真没了就作废缓存。
+FW_STATE_FILE = os.path.join(BASE_DIR, ".fw_state.json")
+FW_STATE_TTL = 6 * 3600
+
+
+def _fw_state_fresh():
+    try:
+        with open(FW_STATE_FILE, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        return bool(d.get("ok")) and (time.time() - float(d.get("at", 0))) < FW_STATE_TTL
+    except Exception:
+        return False
+
+
+def _fw_state_write(ok):
+    try:
+        with open(FW_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump({"ok": bool(ok), "at": time.time(), "rule": FIREWALL_RULE}, f)
+    except Exception:
+        pass
+
+
+def _fw_verify_async():
+    """缓存命中时后台复核：规则被别的安全软件清掉了就把缓存写成 False"""
+    def run():
+        try:
+            _fw_state_write(firewall_rule_exists())
+        except Exception:
+            pass
+    threading.Thread(target=run, daemon=True).start()
+
+
 def firewall_phase():
     """步骤一：放行端口，返回是否通过
 
     规则只在不存在时创建（存在就复用，避免先删后加导致的那段连不上窗口）；
     删除需要管理员权限，所以回收规则这件事交给提权起来的看门狗，
     本进程只管启动服务。所有提示统一交给 main() 打印，这里不输出任何日志。
+
+    提速：查一次规则要跑 netsh，约 0.8～1 秒，占掉启动耗时的三分之一。
+    查过一次成功就落一个带时间戳的状态文件（`.fw_state.json`），6 小时内
+    直接当「已放行」用，同时在后台再核一次——真被清掉了就作废缓存，
+    下次启动走完整流程，功能不受影响。
     """
+    if _fw_state_fresh():
+        _fw_verify_async()
+        return True
+    ok = _firewall_phase()
+    _fw_state_write(ok)
+    return ok
+
+
+def _firewall_phase():
+    """真正去查/去建规则的那条路（只在缓存失效时走）"""
     if is_admin():
         if not firewall_rule_exists():
             add_firewall_rule()
         return firewall_rule_exists()
+
+    if firewall_rule_exists():
+        return True          # 规则已在，不用再弹一次 UAC
 
     ok = spawn_watchdog(need_elevation=True)
     if not ok:
@@ -2255,6 +2314,23 @@ def _notify_already_running():
         pass
 
 
+class QuietServer(ThreadingHTTPServer):
+    """客户端提前断开是常态（用户刷新、切页、取消下载），不当成服务端错误刷屏
+
+    ThreadingHTTPServer 默认把每个异常栈打印到控制台：一次刷新就能刷出三十行
+    ConnectionAbortedError，把真正的启动日志淹没。这里只吞掉「对端断开」这一类，
+    其它异常照旧交给父类，排查问题不受影响。
+    """
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        import sys as _sys
+        exc = _sys.exc_info()[1]
+        if isinstance(exc, (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)):
+            return
+        super().handle_error(request, client_address)
+
+
 def main():
     _safe_console()
 
@@ -2281,9 +2357,8 @@ def main():
             print("  ✅ index.html 已是最新，无需更新")
         return
 
-    # 启动时不再自动导出 index.html（2026-11-11 定稿）：
+    # 启动时不会自动导出 index.html（2026-11-11 定稿）：
     # 发布页由 `python 数据传输.py --export-page` 手动导出，启动只负责跑服务。
-    # 这样正在跑的旧 exe 重启时不会把 data-transmission/index.html 覆盖回它内嵌的旧页。
 
     # 已有实例在跑就不再开第二个：既免得两个进程抢 8000，也免得白弹一次 UAC
     if already_running():
@@ -2305,12 +2380,11 @@ def main():
 
     # 直接绑定监听，避免「先探测再绑定」之间的竞争窗口
     try:
-        server = ThreadingHTTPServer(('0.0.0.0', PORT), Handler)
+        server = QuietServer(('0.0.0.0', PORT), Handler)
     except OSError:
         print(f"\n  端口 {PORT} 已被占用，请先关闭其他占用该端口的程序后重试。")
         input("  按回车键退出...")
         return
-    server.daemon_threads = True
 
     # 服务先在后台线程开转：UAC 等待期间端口已绑定、局域网设备此刻就能连上
     def _serve():
@@ -2332,14 +2406,19 @@ def main():
     dog_ok = watchdog_phase()
     _step_end('成功' if dog_ok else '失败')
 
-    time.sleep(0.3)
+    time.sleep(0.1)
     print("  服务启动成功", flush=True)
-    time.sleep(0.3)
+    time.sleep(0.1)
     print("")
     print(f"  外网访问链接：{CLIENT_URL or '未配置（在程序目录新建 client_url.txt 写入在线页网址）'}", flush=True)
-    time.sleep(0.3)
+    time.sleep(0.1)
     print("  按 Ctrl+C 或关闭窗口停止服务", flush=True)
     print("", flush=True)
+
+    # 清上一次运行留下的房间文件夹（房间只在内存里活着，磁盘上的都是残骸）。
+    # 放到服务起来之后在后台做：大文件夹删除慢，别拖住启动；
+    # 也不再依赖提权看门狗——规则已存在时看门狗根本不会启动。
+    threading.Thread(target=_purge_old_rooms_bg, daemon=True).start()
     # 服务已在后台线程开转，主线程只负责等退出信号（Ctrl+C / 关窗口）
     try:
         while True:

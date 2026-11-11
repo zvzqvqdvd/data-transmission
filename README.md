@@ -100,18 +100,28 @@
 
 ```bash
 python 数据传输.py                   # 直接跑，改完存盘重开即可看效果
-python 数据传输.py --export-page     # 导出单文件页面到 data-transmission/index.html
+python 数据传输.py --export-page     # 重新生成根目录的单文件页面 index.html
 ```
 
-**启动程序不会导出页面**（2026-11-11 起）：跑服务就是跑服务，发布页只由上面那条 `--export-page` 生成。好处是正在跑的旧 exe 重启时，不会把它内嵌的旧页面覆盖回 `data-transmission/index.html`。
+**启动程序不会导出页面**（2026-11-11 起）：跑服务就是跑服务，页面只由上面那条 `--export-page` 生成，写到根目录 `index.html` 一处。好处是正在跑的旧 exe 重启时，不会把它内嵌的旧页面覆盖回磁盘。
 
 `web/` 是**编译期依赖**，必须和 `数据传输.py` 同级。打包 exe：
 
 ```
-python -m PyInstaller --onefile --clean --noconfirm --add-data "<项目绝对路径>/web;web" --distpath . --workpath "%TEMP%\dt_build" --specpath "%TEMP%\dt_build" --name 数据传输 数据传输.py
+rm -rf build dist
+python -m PyInstaller --onefile --noupx --noconfirm \
+  --version-file "<项目绝对路径>/version_info.txt" \
+  --add-data "<项目绝对路径>/web;web" \
+  --distpath dist --workpath build --specpath build 数据传输.py
 ```
 
-`--add-data` 必须用绝对路径（`--specpath` 会改变相对路径的基准）。漏了它，exe 只有几 MB 且启动就报「缺少页面源文件」。打包前最好关掉正在跑的旧程序，否则 exe 被占用写不进去。
+- `--add-data` **和** `--version-file` 都必须用绝对路径（`--specpath build` 会把相对路径的基准改到 `build/`，相对写的版本文件直接 `FileNotFoundError`）。
+- **改了 `web/` 一定要先 `rm -rf build dist`**。增量构建会复用上次的 `EXE-00.toc` 和 PKG，`--add-data` 目录里的改动**不会**被重新收进去——表现是打包只用 3 秒、导出页面还报「已是最新，无需更新」，exe 里其实是旧界面。
+- `--version-file version_info.txt` 把产品名、版本、用途写进 exe 属性。**别省**：没有版本信息时 Windows 会把它当「来历不明的打包程序」，SmartScreen 和杀软更容易拦。
+- `--noupx` 明确关掉 UPX 压缩。UPX 压过的 exe 是杀软误报的高发区，只省几 MB，不值。
+- 打包前关掉正在跑的旧程序，否则 exe 被占用写不进去。
+
+**打完自检**：把新 exe 拷进一个空目录跑 `数据传输.exe --export-page`，生成的 `index.html` 应与项目根目录那份除 `CLIENT_URL` 外**逐字一致**；不一致就说明 exe 里的界面不是最新的。
 
 ## 仓库结构
 
@@ -119,7 +129,7 @@ main 分支根目录既是 GitHub Pages 的站点根目录，也是源码根目�
 
 | 路径 | 作用 |
 |---|---|
-| `index.html` | Pages 入口（`data-transmission/index.html` 的副本，单文件、零外链） |
+| `index.html` | Pages 入口，也是 `--export-page` 的产物（单文件、零外链） |
 | `数据传输.exe` | 主程序，入口页的下载按钮指向它 |
 | `数据传输.py` | 后端源码（服务端、上传、鉴权、房间码、页面导出） |
 | `web/` | 界面源码六文件：`page.html` / `app.css` / `app.js` / `room.js` / `gate.js` / `vendor.js` |
@@ -128,7 +138,7 @@ main 分支根目录既是 GitHub Pages 的站点根目录，也是源码根目�
 
 **不进仓库**：`build/` `dist/`（PyInstaller 中间产物，一条命令重建）、`数据/`（房间记录与用户文件）。
 
-**页面为什么有两份**：`web/` 是源码，根目录 `index.html` 是 `build_page()` 把六个文件合并出来的产物。Pages 只能发布静态文件，所以产物必须躺在站点根目录；源码留着是为了可改、可复现。
+**源码与产物的关系**：`web/` 是源码，根目录 `index.html` 是 `build_page()` 把六个文件合并出来的产物。Pages 只能发布静态文件，所以产物必须躺在站点根目录；源码留着是为了可改、可复现。所有中间副本目录都已取消，导出只写根目录这一处。
 
 三个业务 JS 是**源码层面的拆分**：`build_page()` 按 `app.js → room.js → gate.js` 拼进同一个 `<script>`、共用一个作用域，导出后仍是单文件，访客端零外部请求。
 
@@ -139,12 +149,38 @@ main 分支根目录既是 GitHub Pages 的站点根目录，也是源码根目�
 - 改了后端 → 拖 `数据传输.py`（顺带重新导出一次，页面版本号会变）
 - 只重新打包 → 拖 `数据传输.exe`（下载链接是运行时拼的，不用动页面）
 - exe 是**二进制，只能网页拖拽上传**（在线编辑器会损坏文件），9.4 MB 远低于 25 MB 上限
+- 每次发版把 `数据传输.exe` 的 SHA256 记在这里供用户校验：当前版本 `ff4ac39b85859f90fcd3e3e2eefc27485f0559d78575e3bfd0b16d2f2d9a1bf8`
+- 嫌每次都要点「仍要运行」麻烦：右键 exe → 属性 → 勾「解除锁定」→ 确定，可去掉下载标记
 
-导出机制：读取 `web/` 六个文件，把 CSS、`vendor.js` 和按顺序拼接的三段业务 JS 内联进 `page.html`，写到 `data-transmission/index.html`（目录不在会自动建）。**启动程序不会导出**，要手动跑 `--export-page`。**不要直接编辑这个文件**。
+导出机制：读取 `web/` 六个文件，把 CSS、`vendor.js` 和按顺序拼接的三段业务 JS 内联进 `page.html`，直接写到根目录 `index.html`。**启动程序不会导出**，要手动跑 `--export-page`。**不要直接编辑这个文件**——改了下次导出就被覆盖。
 
-**对版**：进房点「🕒 房间说明」，底部「页面版本」应为 **`5ad34fab18`**（对应 `index.html` 351,067 字节 / md5 `67247a77`）。线上对不上就是没覆盖上传或被缓存了。
+**对版**：进房点「🕒 房间说明」，底部「页面版本」应为 **`0a4d1bbdc4`**（对应 `index.html` 355,740 字节 / md5 `cf010825`）。线上对不上就是没覆盖上传或被缓存了。
 
 邀请链接和二维码带 `?v=<页面指纹>`，页面一变指纹就变，用来穿透手机浏览器的顽固缓存——程序更新后让访客用**新**二维码进房。
+
+## Windows 提示「已保护你的电脑」怎么办
+
+下载后首次运行，可能先后遇到两种提示：
+
+| 提示 | 出现位置 | 这次怎么过 |
+| --- | --- | --- |
+| 「通常不会下载 数据传输.exe」 | 浏览器下载栏 | 点右侧「…」→「保留」 |
+| 「Windows 已保护你的电脑 / 无法验证此文件是否安全」 | 双击运行时 | 点「更多信息」→「仍要运行」 |
+
+**为什么会这样**：SmartScreen 不看代码，只看「这个文件有没有数字签名」和「下载它的人多不多」。本项目是个人维护的绿色小工具，没有代码签名证书，下载量也远没到积累声誉的量级，所以每出一个新版本都会被先拦一次——这不是判定有病毒，而是「微软不认识它」。
+
+**想彻底不再弹**，只有一条路：给 exe 买一张代码签名证书。
+
+- **EV 证书**（约 3000～5000 元/年，需企业资质和硬件 UKey）：签完立刻受信任，SmartScreen 不再拦。
+- **OV 证书**（约 1000～2000 元/年）：仍要累计下载声誉，前期照样弹。
+
+个人自用或小范围分发，用上面「仍要运行」就够了；也可以把文件报给微软备案（<https://www.microsoft.com/en-us/wdsi/filesubmission>，选「软件开发者」提交误报）——审核通过后 Defender 不再报毒，但 SmartScreen 的下载声誉仍要慢慢攒。
+
+**核对文件没被篡改**：每个版本的 SHA256 都记在「发布更新」一节，下载后比对：
+
+```cmd
+certutil -hashfile 数据传输.exe SHA256
+```
 
 ## 已知限制
 
