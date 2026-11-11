@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>数据传输</title>
+<script>__VENDOR_JS__</script>
+<style>__APP_CSS__</style>
+</head>
+<body>
+
+<div id="gateView">
+  <div class="gate-card">
+    <div class="gate-logo"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5h13m-3.6-3.6 3.6 3.6-3.6 3.6"/><path d="M20.5 15.5h-13m3.6-3.6-3.6 3.6 3.6 3.6"/></svg></div>
+    <div class="gate-title">数据传输</div>
+    <div class="gate-sub">任意设备之间互发文字、文件与桌面</div>
+
+    <div class="gate-list" id="gateChoices">
+      <button class="gate-btn primary" id="gateCreateBtn" onclick="agreeThen(gateCreate)">
+        <span class="gate-ico">＋</span>
+        <span class="gate-txt">
+          <b>创建房间</b>
+          <i>在本机开一个房间</i>
+          <span class="gate-prog">
+            <span class="gate-prog-line"><span id="gateProgText"></span><b id="gateProgPct">0%</b></span>
+            <span class="gate-prog-bar" id="gateProgBar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="gate-prog-fill" id="gateProgFill"></span></span>
+          </span>
+        </span>
+      </button>
+      <button class="gate-btn" id="gateJoinChoiceBtn" onclick="agreeThen(gateShowJoin)">
+        <span class="gate-ico">→</span>
+        <span class="gate-txt"><b>加入房间</b><i>输入对方的房间码</i></span>
+      </button>
+    </div>
+
+    <div id="gateJoin">
+      <input id="gateRoom" placeholder="房间码" maxlength="16" autocomplete="off" spellcheck="false">
+      <div class="gate-row">
+        <button class="gate-back" onclick="gateShowChoices()">返回</button>
+        <button class="gate-btn primary" id="gateJoinBtn" onclick="gateJoin()">
+          <span class="gate-txt"><b>连接</b></span>
+        </button>
+      </div>
+    </div>
+
+    <div id="gateMsg"></div>
+
+    <!-- 创建房间失败（本机程序没在跑）时的补救指引：下载程序 / 启动后重试 -->
+    <div class="gate-fix" id="gateFix" style="display:none;">
+      <a class="gate-fix-dl js-dl" href="https://zvzqvqdvd.github.io/data-transmission/数据传输.exe" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10.5"/><path d="M7.6 10.2 12 14.6l4.4-4.4"/><path d="M4.6 19.4h14.8"/></svg>
+        <span>下载 Windows 程序</span>
+      </a>
+      <button class="gate-fix-retry" onclick="gateCreate()">已启动，重新创建</button>
+      <div class="gate-fix-tip">下载后双击运行，看到「服务已启动」再回来点创建房间</div>
+    </div>
+
+    <!-- 免责声明：只显示复选框一行；点「《免责声明》」打开独立声明页 -->
+    <div class="gate-disc" id="gateDisc">
+      <label class="agree-check">
+        <input type="checkbox" id="agreeCheck" checked>
+        <i class="gd-box" aria-hidden="true"></i>
+        <span>我已阅读并同意<a class="gd-link" onclick="openDiscPage(event)">《免责声明》</a>并同意继续使用</span>
+      </label>
+    </div>
+
+    <!-- 程序下载入口：常驻一行，加入房间的人用不到，创建房间的人得先装 -->
+    <div class="gate-dl-line">
+      <a class="js-dl" href="https://zvzqvqdvd.github.io/data-transmission/数据传输.exe" target="_blank" rel="noopener">下载 Windows 程序</a>
+      <span class="gate-dl-sep">·</span>
+      <a href="https://github.com/zvzqvqdvd/data-transmission" target="_blank" rel="noopener">GitHub 仓库</a>
+    </div>
+
+    <div class="gate-foot">创建房间需要本机已运行程序<br>加入房间不需要，任何设备都能加入</div>
+  </div>
+</div>
+
+<div id="hostView" style="__HOST_DISPLAY__">
+
+<div class="topbar">
+  <div class="topbar-left">
+    <span class="brand-icon"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.1" stroke-linecap="round"><path d="M4.5 12.5a7.5 7.5 0 0 1 7.5-7.5"/><path d="M4.5 17a12 12 0 0 1 12-12"/><circle cx="5.4" cy="18.6" r="1.7" fill="#fff" stroke="none"/></svg></span>
+    <span class="brand-text">
+      <span class="topbar-title">数据传输</span>
+      <span class="topbar-sub">任意设备之间互发文字与文件</span>
+    </span>
+  </div>
+  <div class="topbar-right">
+    <button class="icon-btn" id="netBtn" onclick="showNet()" title="网络与中继设置">🌐</button>
+    <button class="icon-btn" id="helpBtn" onclick="showHelp()" title="使用帮助">?</button>
+    <button class="icon-btn" id="adminBtn" onclick="onAdminClick()" title="设备管理">⚙</button>
+  </div>
+</div>
+
+<!-- 连接信息（局域网 / 外网 / 等待加入）统一放这一栏：宽屏靠右侧竖排，不占聊天区中间 -->
+<aside class="side-info" id="sideInfo">
+<!-- 房间卡片：房间号与房间操作是房间级别的信息，不属于任何一条通道，置顶且只给房主看 -->
+<div id="roomCard" style="display:none;">
+  <div class="room-card-title">房间</div>
+  <b id="roomCode" title="点击复制房间码" onclick="copyRoomCode()"></b>
+  <div class="room-actions">
+    <button class="pill ghost" onclick="copyRoomCode()">复制房间码</button>
+    <button class="pill danger" id="dissolveBtn" onclick="askDissolve()">销毁房间</button>
+  </div>
+</div>
+
+<div id="lanBanner" style="display:none;">
+  <div class="p2p-line">
+    <span class="p2p-label" id="lanLabel">🏠 局域网</span>
+  </div>
+  <code id="lanUrl" title="点击复制局域网地址" onclick="copyLanUrl()">—</code>
+  <div class="side-actions" id="lanActions" style="display:none;">
+    <button class="pill" onclick="copyLanUrl()">复制访问地址</button>
+    <button class="pill" onclick="toggleLanQR()">二维码</button>
+  </div>
+  <div class="chan-state" id="lanState">
+    <div class="chan-count" id="lanCount">局域网已连接 0 台设备</div>
+    <div class="chan-list" id="lanMembers"></div>
+  </div>
+  <!-- 二维码模式：浮层盖在卡片上（卡片自身尺寸不变），点「返回」关掉 -->
+  <div id="lanQrBox" class="qr-float" style="display:none;">
+    <div id="lanQrImg"></div>
+    <button class="pill qr-back" onclick="toggleLanQR()">返回</button>
+  </div>
+</div>
+
+<div id="p2pBanner" style="display:none;">
+  <div class="p2p-line">
+    <span class="p2p-label">🌍 外网直连</span>
+  </div>
+  <code id="p2pUrl" title="点击复制访问地址" style="display:none;"></code>
+  <div id="inviteActions" class="side-actions" style="display:none;">
+    <button class="pill" onclick="copyInviteUrl()">复制访问地址</button>
+    <button class="pill" onclick="toggleQR()">二维码</button>
+  </div>
+  <div id="inviteHint"></div>
+  <div id="hostNotice" class="side-notice" style="display:none;"></div>
+  <div class="chan-state" id="p2pState">
+    <div class="chan-count" id="hostHint">外网已连接 0 台设备</div>
+    <div class="chan-list" id="memberList"></div>
+  </div>
+  <!-- 二维码模式：浮层盖在卡片上，卡片自身尺寸不变 -->
+  <div id="qrBox" class="qr-float" style="display:none;">
+    <div id="qrImg"></div>
+    <button class="pill qr-back" onclick="toggleQR()">返回</button>
+  </div>
+</div>
+
+<!-- 房间说明单独一块：只在侧栏放一个按钮，规则点开弹窗才看 -->
+<div class="side-card room-info" id="roomInfoCard">
+  <button class="room-info-btn" onclick="showTtl()">🕒 房间说明</button>
+</div>
+
+<div id="guestGate" style="__GUEST_DISPLAY__">
+  <div class="p2p-line">
+    <span class="p2p-label" id="connChannel">🌍 外网直连</span>
+  </div>
+  <div class="guest-room">房间号：<b id="linkRoom"></b></div>
+  <div class="self-ip" id="selfIpRow" style="display:none;">本机 IP：<b id="selfIpVal"></b></div>
+  <div class="guest-actions" id="guestActions" style="display:none;">
+    <button class="pill ghost" id="guestConnBtn" onclick="guestConnect()" style="display:none;">重连</button>
+    <button class="pill danger" id="guestDropBtn" onclick="dropGuestConn()">断开连接</button>
+  </div>
+  <div id="guestStatus"></div>
+  <div id="wxTip">检测到 App 内置浏览器，可能无法使用点对点传输。请点右上角「···」选择「在浏览器中打开」。</div>
+  <div id="guestTip"></div>
+  <div id="guestProg"><div id="guestBar"></div></div>
+  <div id="guestProgText"></div>
+</div>
+
+<div id="waitBar" style="display:none;">
+  <span class="w-dot"></span>
+  <span class="w-text" id="waitText">还没有其他设备加入</span>
+  <span class="w-sub" id="waitSub">把房间码或邀请链接发给别人，谁都可以加入这个房间</span>
+</div>
+</aside><!-- /side-info -->
+
+<div class="chat-scroll" id="chatScroll">
+  <div class="chat-inner" id="chatInner">
+    <div id="msgList">
+      <div class="empty"><span class="e-icon">💬</span>暂无消息<span class="e-sub">各设备互发的文字与文件会显示在这里</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="pending-area" id="pendingArea"></div>
+
+<div class="input-bar">
+  <div class="input-inner">
+    <div class="input-row">
+      <button class="folder-btn" onclick="document.getElementById('fileInput').click()" title="发送文件">📁</button>
+      <button class="folder-btn" id="screenBtn" onclick="toggleScreenShare()" title="共享桌面"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="width:18px;height:18px;"><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg></button>
+      <textarea id="textInput" rows="1" placeholder="输入消息，Enter 发送 / Shift+Enter 换行"></textarea>
+      <button class="send-btn" onclick="sendAll()">发送</button>
+      <input type="file" id="fileInput" multiple style="display:none">
+    </div>
+  </div>
+</div>
+
+<div id="dropMask">
+  <div class="drop-card">
+    <div class="drop-ico">📥</div>
+    <div class="drop-t">松手即加入发送队列</div>
+    <div class="drop-s">支持一次拖多个文件；截图按 Ctrl+V 也能直接发</div>
+  </div>
+</div>
+
+<div class="modal-mask" id="netModal">
+  <div class="modal wide">
+    <h3>网络与中继</h3>
+    <p class="modal-tip" style="text-align:left;">直连打不通时（公司/学校网络、对称 NAT），可以加一台 TURN 服务器帮你中转。配置只存在这台设备的浏览器里，不上传、不写进房间。</p>
+    <div class="ice-list" id="iceList"></div>
+    <div class="ice-add">
+      <select id="iceType"><option value="stun">STUN</option><option value="turn">TURN</option></select>
+      <input id="iceUrl" placeholder="stun:example.com:3478" autocomplete="off" spellcheck="false">
+      <input id="iceUser" placeholder="用户名（TURN 才要）" autocomplete="off">
+      <input id="icePass" placeholder="密码（TURN 才要）" autocomplete="off" type="password">
+      <button class="btn-primary" onclick="addIce()">添加</button>
+    </div>
+    <div class="ice-tip" id="iceTip">当前使用默认的 4 个公共 STUN，能连上就别改。</div>
+    <div class="modal-btns">
+      <button class="btn-plain" onclick="resetIce()">恢复默认</button>
+      <button class="btn-plain" onclick="hideNet()">关闭</button>
+    </div>
+  </div>
+</div>
+
+
+<div class="modal-mask" id="helpModal">
+  <div class="modal wide">
+    <h3>使用帮助</h3>
+    <div class="faq">
+      <details open>
+        <summary>房间码是对的，却说找不到房间？</summary>
+        <p>房主点过「新建房间」或「销毁房间」，旧码就作废了；也可能是房主那边的程序或页面已经关掉。找房主重新要房间码，或者直接扫二维码/点邀请链接。</p>
+      </details>
+      <details>
+        <summary>一直卡在「正在连接对方设备」？</summary>
+        <p>先让两台设备连同一个 WiFi，在浏览器里打开房主给的局域网地址，走局域网通道最稳。跨网络时如果双方都在公司网、对称 NAT，直连会失败，可以点右上角 🌐 加一台 TURN 服务器中转；另外微信/QQ 内置浏览器不支持点对点，请用系统浏览器打开。</p>
+      </details>
+      <details>
+        <summary>桌面共享点不动 / 对方看不到？</summary>
+        <p>共享桌面要求页面在 <b>https</b> 或 <b>localhost</b> 下打开，用 <code>http://192.168.x.x</code> 访问时浏览器会禁用采集，这是安全限制。手机浏览器只能看、不能发起共享。</p>
+      </details>
+      <details>
+        <summary>点「复制」没反应？</summary>
+        <p>非 HTTPS 页面不能调用系统剪贴板。本程序会自动退回到老办法复制；如果还是失败，长按或手动选中地址复制即可。</p>
+      </details>
+      <details>
+        <summary>收到的文件存在哪了？</summary>
+        <p>房主那台设备上：<code>数据\房间\&lt;房间码&gt;\接收文件\</code>。其他设备不会自动下载聊天里的文件，点一下文件卡片就会从房主传过来，存在系统的下载目录里。</p>
+      </details>
+      <details>
+        <summary>大文件能传多大？</summary>
+        <p>上传到本机最大 4 GiB。外网设备下载文件走点对点直连，速度取决于双方网络；文件始终保存在房主设备上，其他设备按需下载。</p>
+      </details>
+    </div>
+    <div class="modal-btns"><button class="btn-plain" onclick="hideHelp()">知道了</button></div>
+  </div>
+</div>
+
+<div class="modal-mask" id="ttlModal">
+  <div class="modal">
+    <h3>房间什么时候销毁</h3>
+    <p class="modal-tip" style="text-align:left;line-height:2;">
+      房间是<b>临时</b>的，出现以下任一情况就自动销毁：<br>
+      · 关闭房主页面（刷新不算，页面回来就继续用）<br>
+      · 连续 12 小时没有通信（发消息、传文件、新设备加入都算）<br>
+      · 房主点「销毁房间」<br>
+      销毁时房间码作废，本机的聊天记录与接收文件也一并删除，不做保留。</p>
+    <div class="modal-btns"><button class="btn-plain" onclick="hideTtl()">知道了</button></div>
+    <p style="text-align:center;font-size:11px;color:#b0b3b8;margin:10px 0 0;">页面版本 __PAGE_BUILD__（反馈问题时请带上这一行）</p>
+  </div>
+</div>
+
+<div class="modal-mask" id="adminModal">
+  <div class="modal">
+    <h3>房间里的设备</h3>
+    <p class="modal-tip" style="text-align:left;margin:-4px 0 10px;">外网设备走点对点直连，局域网设备走本机服务；列表只用于查看谁在房间里。</p>
+    <ul class="dev-list">__CLIENT_LIST__</ul>
+    <div class="modal-btns">
+      <button class="btn-plain" onclick="adminLogout()">退出管理</button>
+      <button class="btn-plain" onclick="hideAdmin()">关闭</button>
+    </div>
+  </div>
+</div>
+<div class="modal-mask" id="loginModal">
+  <div class="modal">
+    <h3>管理员登录</h3>
+    <input type="password" id="adminPwd" placeholder="密码">
+    <div class="modal-btns">
+      <button class="btn-plain" onclick="hideLogin()">取消</button>
+      <button class="btn-primary" onclick="doLogin()">登录</button>
+    </div>
+  </div>
+</div>
+<div class="modal-mask" id="dissolveModal">
+  <div class="modal">
+    <h3>销毁房间</h3>
+    <p class="modal-tip">销毁后所有设备会立即断开，房间码作废，已经发出去的邀请链接和二维码都不能再用。<br><b>本机的聊天记录和接收文件也会一并删除，不可恢复。</b></p>
+    <div class="modal-btns">
+      <button class="btn-plain" onclick="hideDissolve()">取消</button>
+      <button class="btn-danger" onclick="dissolveRoom()">销毁</button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+</div><!-- /hostView -->
+
+<!-- 免责声明独立页：点入口页「《免责声明》」整页打开，全文单独展示。
+     放在 body 顶层、<script> 之前（与弹窗同样的解析期安全规则） -->
+<div class="disc-page" id="discPage">
+  <header class="dp-head">
+    <button class="dp-back" onclick="closeDiscPage(event)">返回</button>
+    <span class="dp-title">免责声明</span>
+    <i class="dp-spacer"></i>
+  </header>
+  <div class="dp-body">
+    <p style="text-align:center"><b>发布日期：2026年11月10日　适用范围：数据传输网页版及桌面程序</b></p>
+    <p><b>一、用途限制</b><br>本服务仅供个人学习、研究与技术交流使用。严禁将本服务用于任何商业或盈利活动，严禁用于企业生产环境或对外提供服务。</p>
+    <p><b>二、合法使用</b><br>使用本服务须遵守《中华人民共和国网络安全法》《数据安全法》《个人信息保护法》等法律法规。不得利用本服务从事任何违法活动，包括但不限于：危害国家安全、传播违法违规信息、赌博诈骗、侵犯他人知识产权或隐私、传播木马病毒、非法侵入或干扰他人网络与系统。</p>
+    <p><b>三、内容责任</b><br>您通过本服务发送、接收的文字、文件及共享画面等内容，均由您自行产生并自行负责，相应法律责任由内容发布者承担。请勿传输涉密信息、他人隐私或依法不应传播的内容。</p>
+    <p><b>四、数据与隐私</b><br>本服务基于局域网与点对点直连技术，数据在设备之间直接传输，不经由第三方服务器长期保存。房间内的聊天记录与接收文件仅作临时存放，房间销毁、重建或程序退出后即被删除且不可恢复，请提前自行备份重要数据。</p>
+    <p><b>五、服务无担保</b><br>本服务按「现状」提供，不对可用性、无错误、准确性、完整性或特定用途适用性作任何明示或默示的保证。因网络环境、系统故障或操作不当导致的数据丢失、传输中断等，开发者不承担责任。</p>
+    <p><b>六、责任限制</b><br>对于因使用或无法使用本服务而产生的任何直接或间接损失（包括但不限于数据损失、业务中断、利润损失），开发者在法律允许的最大范围内不承担责任。</p>
+    <p><b>七、条款变更与生效</b><br>本声明可能不时更新，更新后在页面公布。您勾选下方复选框并继续使用本服务，即视为已完整阅读、充分理解并接受本声明全部条款；如您不同意任何一项，请立即停止使用本服务。</p>
+  </div>
+</div>
+
+<!-- 屏幕共享全屏观看层：body 顶层，不随聊天流重渲染；页面内全屏（Esc/双击/✕ 退出） -->
+<div class="scf" id="screenFs">
+  <video id="scfVideo" autoplay playsinline webkit-playsinline x5-playsinline muted ondblclick="closeScreenFs()"></video>
+  <div class="scf-top">
+    <span class="scf-dot"></span>
+    <span class="scf-who" id="scfWho">屏幕共享</span>
+    <span class="scf-dur" id="scfDur">00:00</span>
+    <button class="scf-stop" id="scfStop" style="display:none;" onclick="stopScreenShare()">停止共享</button>
+    <button class="scf-close" onclick="closeScreenFs()" aria-label="退出全屏">
+      <svg viewBox="0 0 12 12" width="12" height="12"><path d="M2 2l8 8M10 2l-8 8" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+  <div class="scf-tip">双击画面或按 Esc 退出全屏</div>
+  <button class="scf-play" id="scfPlay" style="display:none;">▶ 点击播放</button>
+</div>
+
+<script>__APP_JS__</script>
+</body>
+</html>

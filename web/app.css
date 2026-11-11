@@ -1,0 +1,911 @@
+
+* { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+html, body { height:100%; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+  background:#ededed; color:#1a1a1a; overflow:hidden;
+}
+/* 关键：整页纵向弹性，聊天区才能吃满剩余高度、输入框才会贴底 */
+#hostView { display:flex; flex-direction:column; height:100%; }
+
+/* ===== 顶栏 ===== */
+.topbar {
+  flex-shrink:0; display:flex; align-items:center; justify-content:space-between;
+  gap:12px; padding:10px 18px; background:#fff; border-bottom:1px solid #e6e6e6;
+  box-shadow:0 1px 3px rgba(0,0,0,.03); z-index:10;
+}
+.topbar-left { display:flex; align-items:center; gap:10px; min-width:0; }
+.brand-icon {
+  width:32px; height:32px; border-radius:9px; flex-shrink:0;
+  background:linear-gradient(135deg,#07C160,#04a94f);
+  display:flex; align-items:center; justify-content:center;
+  box-shadow:0 2px 6px rgba(7,193,96,.28);
+}
+.brand-icon svg { width:17px; height:17px; display:block; }
+.brand-text { display:flex; flex-direction:column; min-width:0; }
+.topbar-title { font-size:15px; font-weight:600; letter-spacing:.2px; line-height:1.2; }
+.topbar-sub { font-size:11px; color:#9aa0a6; margin-top:2px; }
+.topbar-right { display:flex; align-items:center; gap:8px; flex-shrink:0; }
+.icon-btn {
+  width:32px; height:32px; border-radius:9px; border:none; background:#f1f3f4;
+  font-size:15px; cursor:pointer; color:#5f6368;
+  display:flex; align-items:center; justify-content:center;
+  transition:background .18s, color .18s;
+}
+.icon-btn:hover { background:#e6f7ed; color:#07C160; }
+
+/* ===== 房间卡片：房间号 + 新建 / 销毁，是房间级信息，不塞进任何通道卡片 ===== */
+#roomCard {
+  flex-shrink:0; margin:10px 18px 0; padding:12px 16px;
+  background:#fff; border:1px solid #e2e6ec; border-radius:12px; text-align:center;
+}
+.room-card-title {
+  display:flex; align-items:center; justify-content:center; gap:7px;
+  font-size:12px; font-weight:600; color:#2b3a4b;
+}
+.room-card-title::before {
+  content:''; width:9px; height:9px; border-radius:3px;
+  background:#8a94a3; flex-shrink:0;
+}
+#roomCode {
+  display:block; margin-top:9px; padding:7px 8px;
+  font-family:Menlo,Consolas,monospace; font-size:17px; font-weight:700;
+  letter-spacing:1.4px; color:#1f2d3d; background:#f5f7f9;
+  border-radius:8px; cursor:pointer; word-break:break-all;
+  transition:background .15s, transform .1s;
+}
+#roomCode:hover { background:#eef3f0; }
+#roomCode:active { transform:scale(.99); }
+.room-actions { display:flex; gap:8px; margin-top:10px; }
+.room-actions .pill { flex:1; min-width:0; padding:5px 0; text-align:center; }
+#roomCard .pill.ghost { background:#fff; border-color:#d8dee6; color:#3a4a5a; }
+#roomCard .pill.ghost:hover { background:#07C160; border-color:#07C160; color:#fff; }
+
+/* ===== 外网直连卡片：只放这条通道自己的入口与状态 ===== */
+#p2pBanner {
+  flex-shrink:0; margin:10px 18px 0; padding:12px 16px;
+  background:linear-gradient(180deg,#f3fbf7,#eaf7f0);
+  border:1px solid #cfeada; border-radius:12px; text-align:center;
+}
+.p2p-line { display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:8px; }
+.p2p-label { font-size:12px; color:#3c7a57; }
+.side-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:9px; }
+.pill {
+  border:1px solid #cfeada; background:#fff; color:#0a8f4a; font-size:12px;
+  padding:4px 11px; border-radius:20px; cursor:pointer; text-decoration:none;
+  transition:background .18s, color .18s, border-color .18s, transform .1s; line-height:1.5;
+}
+.pill:hover { background:#07C160; border-color:#07C160; color:#fff; }
+.pill:active { transform:scale(.96); }
+.pill.ghost { background:transparent; border-color:transparent; color:#3c7a57; }
+.pill.ghost:hover { background:#fff; color:#0a8f4a; border-color:#cfeada; }
+#inviteHint { font-size:11px; color:#6b8a78; margin-top:6px; }
+/* 每条通道各自一块「已连接 N 台设备」+ 只属于该通道的设备清单 */
+.chan-state {
+  margin-top:8px; padding-top:7px; text-align:left;
+  border-top:1px dashed rgba(40,80,60,.14);
+}
+.chan-count { font-size:11.5px; font-weight:600; color:#0a8f4a; }
+#lanBanner .chan-count { color:#1a5fb4; }
+.chan-list {
+  display:none; flex-wrap:wrap; justify-content:flex-start;
+  gap:5px; margin-top:6px;
+}
+.chan-list.show { display:flex; }
+/* 设备数 / IP 清单、连接等待条、房间号与新建 / 销毁操作只给房主端看：
+   外网访客、局域网其他设备一律不显示。顶栏那个「局域网 / P2P 直连」小标签
+   对两端也是两种文字，非房主端统一收起，保证两端显示的信息完全一样。 */
+body:not(.is-room-owner) .chan-state,
+body:not(.is-room-owner) .side-notice,
+body:not(.is-room-owner) #waitBar,
+body:not(.is-room-owner) #roomCard { display:none !important; }
+/* 房主端临时提示（连接中 / 传文件中 / 信令错误），单独一行，不占通道状态 */
+.side-notice {
+  margin-top:6px; padding:5px 8px; text-align:left;
+  font-size:11px; line-height:1.6; color:#a05a00;
+  background:#fff8e8; border-radius:6px;
+}
+/* 房间说明：独立一块，但只放按钮；整段规则收进 showTtl() 弹窗 */
+.side-card.room-info {
+  flex-shrink:0; margin:10px 18px 0; padding:0;
+  background:transparent; border:0; border-radius:0; text-align:left;
+}
+.room-info-btn {
+  display:block; width:100%; padding:8px 12px;
+  font-size:11.5px; line-height:1.5; font-family:inherit;
+  background:#fff; border:1px solid #e2e6e9; border-radius:10px;
+  color:#41544a; cursor:pointer;
+}
+.room-info-btn:hover { border-color:#07C160; color:#0a8f4a; }
+.member-row {
+  display:inline-flex; flex-wrap:wrap; align-items:center; gap:6px;
+  max-width:100%; min-width:0;
+  font-size:11px; color:#3c5a4a;
+  background:rgba(255,255,255,.72); border:1px solid #d6ecdf;
+  border-radius:14px; padding:2px 9px;
+}
+.member-tag { padding:1px 6px; border-radius:4px; font-size:10px; flex-shrink:0; }
+.member-tag.wan { background:#e8f0fe; color:#1565c0; }
+.member-tag.lan { background:#e6f7ed; color:#0a8f4a; }
+.member-name { font-weight:600; color:#22352b; flex-shrink:0; }
+/* IPv6 一长串没有空格、不可软换行，不放开 word-break 会把卡片撑破 */
+.member-ip { font-family:ui-monospace,Menlo,Consolas,monospace; color:#6b8a78;
+  min-width:0; overflow-wrap:anywhere; word-break:break-all; text-align:left; }
+#qrBox { padding:10px 0 2px; }
+#qrImg {
+  display:inline-block; background:#fff; padding:4px; border-radius:8px;
+  line-height:0; box-shadow:0 1px 5px rgba(0,0,0,.08);
+}
+#qrImg canvas { width:80px; height:80px; }
+
+/* ===== 局域网入口 ===== */
+/* 和「外网直连」用不同色系区分：局域网是同一 WiFi 内的直连，优先级更高 */
+#lanBanner {
+  flex-shrink:0; margin:10px 18px 0; padding:10px 16px;
+  background:linear-gradient(180deg,#f4f8ff,#eef4ff);
+  border:1px solid #d3e0f5; border-radius:12px; text-align:center;
+}
+#lanLabel { color:#3b6ea5; }
+/* 地址框整行独占（和房号框同款布局），点击框本身也能复制 */
+#lanUrl, #p2pUrl {
+  display:block; margin-top:9px; padding:6px 9px;
+  font-family:Menlo,Consolas,monospace; font-size:13px;
+  background:#fff; border-radius:8px; word-break:break-all; cursor:pointer;
+}
+#lanUrl { color:#1a5fb4; border:1px solid #d3e0f5; }
+#lanUrl:hover { background:#f6f9fe; }
+#p2pUrl { color:#0a8f4a; border:1px solid #cfeada; }
+#p2pUrl:hover { background:#f5fbf7; }
+#lanQrBox { padding:10px 0 2px; }
+#lanQrImg {
+  display:inline-block; background:#fff; padding:4px; border-radius:8px;
+  line-height:0; box-shadow:0 1px 5px rgba(0,0,0,.08);
+}
+#lanQrImg canvas { width:80px; height:80px; }
+
+/* ===== 等待对方加入（房间已开、还没人进来时唯一的提示） ===== */
+#waitBar {
+  flex-shrink:0; margin:10px 18px 0; padding:11px 16px;
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+  background:linear-gradient(90deg,#fffaf0,#fff6e6);
+  border:1px solid #ffe0a3; border-radius:12px;
+}
+#waitBar .w-dot {
+  width:8px; height:8px; border-radius:50%; background:#f0a020; flex-shrink:0;
+  animation:waitPulse 1.4s ease-in-out infinite;
+}
+@keyframes waitPulse {
+  0%, 100% { opacity:.25; transform:scale(.8); }
+  50% { opacity:1; transform:scale(1.15); }
+}
+#waitBar .w-text { font-size:13px; font-weight:600; color:#a05a00; }
+#waitBar .w-sub { font-size:11.5px; color:#b08040; }
+
+/* 没人可发时把输入区压暗，避免点了没反应 */
+body.no-peer .input-bar { opacity:.6; }
+body.no-peer .send-btn,
+body.no-peer .folder-btn { cursor:not-allowed; }
+body.no-peer #textInput { cursor:not-allowed; }
+
+/* 「断开连接」做成一眼能认出的胶囊（浅红底 + 细描边），而不是一行像链接的红字。
+   按钮只在连上之后出现，显隐由 setGuestActions 控制。 */
+.pill.danger { color:#d93025; border-color:#f5c6c2; background:#fff6f5; }
+.pill.danger:hover { background:#fdecea; color:#b3261e; border-color:#eeaba5; }
+.pill.danger:active { background:#f9d9d6; }
+.pill:disabled { opacity:.45; cursor:not-allowed; }
+
+/* ===== 访客：连接状态条（与房主横幅同一套视觉） ===== */
+#guestGate {
+  flex-shrink:0; margin:10px 18px 0; padding:12px 16px;
+  background:linear-gradient(180deg,#f3fbf7,#eaf7f0);
+  border:1px solid #cfeada; border-radius:12px; text-align:center;
+}
+/* 房间号独占一行：左边是「房间号」文字，后面跟房间码 */
+.guest-room {
+  margin-top:7px; font-size:11.5px; color:#3c7a57;
+  line-height:1.6; text-align:center;
+}
+#linkRoom {
+  font-family:Menlo,Consolas,monospace; font-size:14px; font-weight:700;
+  color:#0a8f4a; letter-spacing:1.5px;
+}
+/* 本机 IP：拿到地址才显示，方便加入方和房主端设备清单对号定位 */
+.self-ip {
+  margin-top:5px; font-size:11.5px; color:#3c7a57; line-height:1.6;
+}
+.self-ip b {
+  font-family:Menlo,Consolas,monospace; font-weight:700; color:#0a8f4a;
+  overflow-wrap:anywhere;
+}
+/* 连接中两个按钮都不显示；连上只留「断开连接」，失败停下了才给「重连」 */
+.guest-actions {
+  display:flex; justify-content:center; align-items:center;
+  gap:8px; margin-top:8px;
+}
+/* 连接状态行：只在「还没连上」时显示（正在连接 / 自动重连 / 连接失败），
+   连上之后立刻收起，不显示「✅ 已连接，可以互发文字与文件」这类文字，
+   也不让「接收中 / 已下载」挤进连接卡。局域网端与外网端保持同一套信息。 */
+#guestStatus { display:none; font-size:11.5px; color:#3c7a57; margin-top:7px; line-height:1.6; }
+#guestProg { display:none; height:4px; background:#d9ece2; border-radius:2px; margin-top:9px; overflow:hidden; }
+#guestBar { height:100%; width:0%; background:#07C160; transition:width .2s; }
+#guestTip {
+  display:none; margin-top:8px; padding:8px 10px; text-align:left;
+  background:#fff8e1; color:#b26a00; border-radius:8px; font-size:11.5px; line-height:1.7;
+}
+#wxTip {
+  display:none; margin-top:8px; padding:8px 10px; text-align:left;
+  background:#fff3e0; color:#e65100; border-radius:8px; font-size:11.5px; line-height:1.6;
+}
+
+/* ===== 聊天区 ===== */
+.chat-scroll { flex:1; min-height:0; overflow-y:auto; padding:18px 16px 8px; overscroll-behavior:contain; }
+.chat-inner { max-width:760px; margin:0 auto; }
+.chat-scroll::-webkit-scrollbar { width:6px; }
+.chat-scroll::-webkit-scrollbar-thumb { background:#d5d9dd; border-radius:3px; }
+.chat-scroll::-webkit-scrollbar-thumb:hover { background:#bdc3c7; }
+.empty {
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  min-height:44vh; padding:20px; text-align:center;
+  color:#9aa0a6; font-size:13px; line-height:1.75;
+}
+.empty .e-icon {
+  display:flex; align-items:center; justify-content:center;
+  width:72px; height:72px; border-radius:50%; background:#fff;
+  font-size:32px; margin-bottom:14px; box-shadow:0 2px 10px rgba(0,0,0,.05);
+}
+.empty .e-sub { display:block; font-size:12px; color:#b0b6bb; margin-top:2px; }
+
+/* 键盘可达性：Tab 聚焦时给一圈品牌色描边（鼠标点击不出现） */
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible,
+a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
+  outline:2px solid #07C160; outline-offset:2px;
+}
+#textInput::placeholder { color:#b0b6bb; }
+
+.msg-row { display:flex; margin-bottom:16px; align-items:flex-start; }
+/* 自己发的消息：整行镜像到右边（微信习惯），头像在右 */
+.msg-row.self { flex-direction:row-reverse; }
+.msg-row.self .msg-side { display:flex; flex-direction:column; align-items:flex-end; }
+.msg-row.self .msg-time { text-align:right; }
+.msg-avatar {
+  width:36px; height:36px; border-radius:50%; flex-shrink:0;
+  display:flex; align-items:center; justify-content:center;
+  font-size:15px; font-weight:600; color:#fff;
+  margin-right:10px; background:#b9c2c9; user-select:none;
+}
+/* 匿名头像：所有设备同一个中性剪影，不显示昵称、不带姓名首字 */
+.msg-avatar.anon { background:#cdd8e0; color:#5f7486; }
+.msg-avatar.anon svg { display:block; }
+/* 数字头像：按加入顺序编号（房主=1），字号与剪影协调 */
+.msg-avatar.anon.av-num {
+  background:#07C160; color:#fff;
+  font-size:15px; font-weight:600; letter-spacing:.5px;
+}
+.msg-row.self .msg-avatar { margin-right:0; margin-left:10px; }
+.msg-side { flex:1; min-width:0; }
+.bubble {
+  background:#fff; padding:9px 13px; font-size:15px; line-height:1.55;
+  word-break:break-word; white-space:pre-wrap; border-radius:10px;
+  position:relative; display:inline-block; max-width:100%;
+  box-shadow:0 1px 2px rgba(0,0,0,.06);
+}
+.bubble::before {
+  content:''; position:absolute; left:-5px; top:14px;
+  border:5px solid transparent; border-right-color:#fff; border-left:0;
+}
+/* 自己的文字气泡：品牌绿底白字，小尾巴在右 */
+.bubble.me { background:#07C160; color:#fff; box-shadow:0 1px 3px rgba(7,193,96,.25); }
+.bubble.me::before {
+  left:auto; right:-5px;
+  border:5px solid transparent; border-left-color:#07C160; border-right:0;
+}
+.file-card {
+  display:flex; align-items:center; background:#fff; border-radius:8px;
+  padding:12px; width:min(280px,100%); text-decoration:none; color:inherit;
+  position:relative; box-shadow:0 1px 3px rgba(0,0,0,.06);
+  transition:box-shadow .18s, transform .18s;
+  cursor:pointer;   /* 11-11 定稿：不放下载图标，点卡片本身下载 */
+}
+.file-card:hover { box-shadow:0 4px 12px rgba(0,0,0,.1); transform:translateY(-1px); }
+.file-card:active { transform:scale(.985); }
+/* 文件卡片正下方的拉取进度条（访客端） */
+.pull-wrap { display:none; margin-top:6px; }
+.pull-bar {
+  height:4px; border-radius:3px; overflow:hidden;
+  background:rgba(7,193,96,.15);
+}
+.pull-bar i {
+  display:block; height:100%; width:0; border-radius:3px;
+  background:#07C160; transition:width .25s ease;
+}
+.pull-text { font-size:11px; color:#5b8a6e; margin-top:4px; font-variant-numeric:tabular-nums; }
+.file-card::before {
+  content:''; position:absolute; left:-5px; top:16px;
+  border:5px solid transparent; border-right-color:#fff; border-left:0;
+}
+/* 自己发的文件卡片：小尾巴翻到右侧 */
+.msg-row.self .file-card::before {
+  left:auto; right:-5px;
+  border:5px solid transparent; border-left-color:#fff; border-right:0;
+}
+/* ===== 屏幕共享历史卡：一条卡片两种状态（共享中 / 已停止） ===== */
+.screen-card {
+  background:#fff; border-radius:14px; padding:0;
+  width:min(380px,100%); box-shadow:0 1px 4px rgba(0,0,0,.08);
+  position:relative; overflow:hidden;
+}
+.screen-card::before {
+  content:''; position:absolute; left:-5px; top:16px;
+  border:5px solid transparent; border-right-color:#fff; border-left:0;
+}
+.msg-row.self .screen-card::before {
+  left:auto; right:-5px;
+  border:5px solid transparent; border-left-color:#fff; border-right:0;
+}
+.screen-card.ended { background:#f7f7f5; }
+.screen-card.ended::before { border-right-color:#f7f7f5; }
+.msg-row.self .screen-card.ended::before { border-left-color:#f7f7f5; border-right:0; }
+/* 结束态：浅灰底，图标 + 文案 + 徽标居中，底部一条信息行 */
+.sc-end-body {
+  height:158px; display:flex; flex-direction:column;
+  align-items:center; justify-content:center; gap:7px;
+}
+.sc-end-title { font-size:13.5px; font-weight:600; color:#888780; }
+.sc-end-tip {
+  font-size:11px; color:#9aa7b0; background:#eceae3;
+  border-radius:10px; padding:2px 9px;
+}
+.sc-end-bar {
+  display:flex; justify-content:space-between; gap:8px;
+  padding:6px 12px; border-top:1px solid #ececec;
+  font-size:11px; color:#9aa7b0;
+}
+.sc-end-bar span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.sc-dot {
+  width:8px; height:8px; border-radius:50%; background:#ff4d4f;
+  animation:blink 1.4s infinite; flex:none;
+}
+.file-icon {
+  width:36px; height:36px; border-radius:8px;
+  background:linear-gradient(135deg,#07C160,#04a94f); color:#fff;
+  display:flex; align-items:center; justify-content:center;
+  font-size:10px; font-weight:700; flex-shrink:0; margin-right:10px;
+}
+.file-info { flex:1; min-width:0; }
+.file-name { font-size:14px; word-break:break-all; line-height:1.35; }
+.file-size { font-size:12px; color:#9aa0a6; margin-top:3px; }
+.msg-time { font-size:11px; color:#b0b6bb; margin-top:5px; }
+
+/* ===== 待发送文件 ===== */
+.pending-area { display:none; background:#fff; border-top:1px solid #f0f0f0; padding:8px 16px; }
+.pending-area.show { display:block; }
+
+/* ===== 输入区 ===== */
+.input-bar {
+  flex-shrink:0; background:#fff; border-top:1px solid #e6e6e6;
+  padding:10px 16px calc(10px + env(safe-area-inset-bottom));
+}
+.input-inner { max-width:760px; margin:0 auto; }
+.input-row { display:flex; gap:8px; align-items:flex-end; }
+#textInput {
+  flex:1; border:1px solid #e2e4e6; background:#f7f8f8; border-radius:10px;
+  padding:9px 12px; font-size:15px; font-family:inherit; resize:none; outline:none;
+  line-height:1.45; max-height:120px; overflow-y:auto;
+  /* 输入框里不显示右侧滚动条：内容超长时仍可滚轮/方向键滚动，只是不画那根托条 */
+  scrollbar-width:none; -ms-overflow-style:none;
+  transition:border-color .18s, background .18s, box-shadow .18s;
+}
+#textInput::-webkit-scrollbar { width:0; height:0; display:none; }
+#textInput:focus { border-color:#07C160; background:#fff; box-shadow:0 0 0 2px rgba(7,193,96,.08); }
+.send-btn {
+  padding:0 18px; height:38px; border-radius:10px; background:#07C160; color:#fff;
+  border:none; font-size:14px; font-weight:500; cursor:pointer;
+  transition:background .18s, transform .1s;
+}
+.send-btn:hover { background:#06ad56; }
+.send-btn:active { transform:scale(.97); }
+/* 没人可发时按钮明显变灰，不是只有鼠标悬停才知道点不动 */
+.send-btn:disabled { background:#b9dfc9; color:#f2fbf6; cursor:not-allowed; }
+.send-btn:disabled:hover { background:#b9dfc9; }
+.send-btn:disabled:active { transform:none; }
+.folder-btn {
+  width:38px; height:38px; border-radius:10px; background:#f1f3f4; border:none;
+  font-size:17px; cursor:pointer; color:#5f6368;
+  display:flex; align-items:center; justify-content:center;
+  transition:background .18s, color .18s;
+}
+.folder-btn:hover { background:#e6f7ed; color:#0a8f4a; }
+.folder-btn:disabled { opacity:.5; cursor:not-allowed; }
+.folder-btn:disabled:hover { background:#f1f3f4; color:#5f6368; }
+
+/* ===== 弹窗 / 提示 ===== */
+.modal-mask {
+  display:none; position:fixed; inset:0; background:rgba(0,0,0,.45);
+  z-index:300; justify-content:center; align-items:center; padding:20px;
+}
+.modal-mask.show { display:flex; animation:maskIn .18s ease; }
+@keyframes maskIn { from { background:rgba(0,0,0,0); } to { background:rgba(0,0,0,.45); } }
+.modal {
+  background:#fff; border-radius:14px; padding:22px;
+  width:100%; max-width:420px; max-height:75vh; overflow-y:auto;
+  box-shadow:0 12px 40px rgba(0,0,0,.18);
+}
+.modal-mask.show .modal { animation:modalIn .22s cubic-bezier(.2,.8,.3,1); }
+@keyframes modalIn { from { opacity:0; transform:translateY(12px) scale(.97); } to { opacity:1; transform:none; } }
+.modal h3 { font-size:16px; margin-bottom:14px; }
+.modal input {
+  width:100%; padding:10px 12px; border:1px solid #e2e4e6; border-radius:8px;
+  font-size:14px; margin-bottom:12px; outline:none; transition:border-color .18s;
+}
+.modal input:focus { border-color:#07C160; }
+.modal-btns { display:flex; gap:8px; justify-content:flex-end; margin-top:14px; }
+.modal-btns button { padding:8px 16px; border-radius:8px; border:none; font-size:14px; cursor:pointer; transition:filter .15s, background .15s; }
+.modal-btns button:hover { filter:brightness(.96); }
+.btn-primary { background:#07C160; color:#fff; }
+.btn-primary:hover { background:#06ad56; filter:none; }
+.btn-plain { background:#f1f3f4; color:#3c4043; }
+.btn-danger { background:#d93025; color:#fff; }
+.btn-danger:hover { background:#b3261e; filter:none; }
+.modal-tip { font-size:13px; line-height:1.75; color:#5c6b62; margin:-4px 0 4px; }
+/* 免责声明：入口页只显示复选框一行；点「《免责声明》」整页打开独立声明页 */
+.gate-disc { margin-top:14px; text-align:left; }
+/* 复选框：微信风圆形勾选（绿底白勾），原生 input 隐藏只当状态用 */
+.agree-check { display:flex; align-items:center; justify-content:center; gap:7px;
+  margin-top:12px; font-size:12.5px; color:#41544a; cursor:pointer; user-select:none; position:relative; }
+.agree-check input[type=checkbox] { position:absolute; opacity:0; pointer-events:none; width:0; height:0; }
+.gd-box { flex:none; width:18px; height:18px; border-radius:50%;
+  border:1.5px solid #c2ccc4; background:#fff;
+  display:inline-flex; align-items:center; justify-content:center;
+  transition:background .18s ease, border-color .18s ease; }
+.gd-box::after { content:''; width:9px; height:5px;
+  border-left:2px solid #fff; border-bottom:2px solid #fff;
+  transform:rotate(-45deg); opacity:0; transition:opacity .15s ease; }
+.agree-check input:checked + .gd-box { background:#07C160; border-color:#07C160; }
+.agree-check input:checked + .gd-box::after { opacity:1; }
+.agree-check input:focus-visible + .gd-box { box-shadow:0 0 0 3px rgba(7,193,96,.18); }
+.gd-link { color:#07C160; cursor:pointer; }
+/* 免责声明独立页：盖满全屏，全文单独展示，头部返回按钮 */
+.disc-page { position:fixed; inset:0; z-index:320; background:#f2f5f3;
+  display:none; flex-direction:column; }
+.disc-page.show { display:flex; }
+.dp-head { flex:none; display:flex; align-items:center; gap:10px;
+  padding:14px 16px; background:#fff; border-bottom:1px solid #e3e9e4; }
+.dp-back { flex:none; padding:4px 12px; border:1px solid #d5ddd6; border-radius:999px;
+  background:#fff; font-size:13px; color:#41544a; cursor:pointer; }
+.dp-back:hover { color:#22352b; border-color:#b9c4ba; }
+.dp-back:active { background:#eef3ef; }
+.dp-title { flex:1; text-align:center; font-size:15px; font-weight:600; color:#22352b; }
+.dp-spacer { flex:none; width:64px; }        /* 与返回按钮等宽，标题保持居中 */
+.dp-body { flex:1; overflow-y:auto; overscroll-behavior:contain;
+  padding:20px 18px 32px; max-width:640px; margin:0 auto; width:100%;
+  box-sizing:border-box; font-size:13px; line-height:2; color:#41544a; }
+.dp-body p { margin:0 0 14px; text-align:justify; }
+.dp-body b { color:#22352b; }
+.btn-primary { background:#07C160; color:#fff; }
+.btn-primary:disabled { background:#a8dcbc; color:rgba(255,255,255,.9); cursor:not-allowed; }
+.dev-list { list-style:none; }
+.dev-list li {
+  padding:14px 8px; border-bottom:1px solid #f0f0f0;
+  display:flex; justify-content:space-between; align-items:center; gap:16px;
+}
+.dev-list li:last-child { border-bottom:none; }
+.dev-info { flex:1; min-width:0; }
+.dev-name { font-size:14px; font-weight:500; }
+.dev-ip { font-size:12px; color:#9aa0a6; margin-top:3px;
+  overflow-wrap:anywhere; word-break:break-all; }   /* IPv6 长串防溢出 */
+.badge { display:inline-block; padding:2px 8px; border-radius:4px; font-size:11px; margin-left:6px; vertical-align:middle; }
+.badge.online, .badge.lan { background:#e6f7ed; color:#0a8f4a; }
+.badge.self, .badge.wan { background:#e8f0fe; color:#1565c0; }
+.badge.idle { background:#f1f3f4; color:#5f6368; }
+.toast {
+  position:fixed; top:24px; left:50%; transform:translate(-50%,-10px);
+  background:rgba(32,33,36,.92); color:#fff; padding:9px 18px; border-radius:20px;
+  font-size:13.5px; opacity:0; transition:opacity .22s, transform .22s;
+  z-index:999; pointer-events:none; max-width:86vw; text-align:center;
+}
+.toast.show { opacity:1; transform:translate(-50%,0); }
+
+/* ===== 入口页：创建房间 / 加入房间 ===== */
+#gateView {
+  position:fixed; inset:0; z-index:200; display:none;
+  background:radial-gradient(circle at 22% 12%, #23a86c 0%, #10824f 40%, #0a5f3a 100%);
+  padding:24px; overflow-y:auto;
+  align-items:center; justify-content:center;
+}
+#gateView.show { display:flex; }
+.gate-card {
+  width:100%; max-width:390px; background:#fff; border-radius:20px;
+  padding:30px 26px 22px; box-shadow:0 20px 55px rgba(0,0,0,.3);
+  animation:gateIn .28s cubic-bezier(.2,.8,.3,1);
+}
+@keyframes gateIn { from { opacity:0; transform:translateY(14px) scale(.98); } to { opacity:1; transform:none; } }
+.gate-logo {
+  width:52px; height:52px; border-radius:15px; margin:0 auto 14px;
+  background:linear-gradient(135deg,#07C160,#04a94f);
+  display:flex; align-items:center; justify-content:center;
+  box-shadow:0 6px 16px rgba(7,193,96,.35);
+}
+.gate-logo svg { width:26px; height:26px; }
+.gate-title { text-align:center; font-size:19px; font-weight:600; letter-spacing:.3px; }
+.gate-sub { text-align:center; font-size:12.5px; color:#9aa0a6; margin-top:5px; line-height:1.6; }
+.gate-list { margin-top:22px; display:flex; flex-direction:column; gap:10px; }
+.gate-btn {
+  display:flex; align-items:center; gap:12px; width:100%; text-align:left;
+  padding:14px 16px; border-radius:13px; border:1px solid #e2e4e6; background:#fff;
+  cursor:pointer; font-family:inherit; transition:border-color .18s, background .18s, transform .1s;
+}
+.gate-btn:active { transform:scale(.99); }
+.gate-btn:disabled { opacity:.6; cursor:default; transform:none; }
+.gate-btn:hover { border-color:#07C160; background:#f7fdfa; }
+.gate-btn.primary {
+  background:linear-gradient(135deg,#07C160,#04a94f); border-color:transparent;
+  box-shadow:0 4px 14px rgba(7,193,96,.3);
+}
+.gate-btn.primary:hover { background:linear-gradient(135deg,#08cd67,#05b355); }
+.gate-ico {
+  width:34px; height:34px; border-radius:10px; flex-shrink:0;
+  background:#e6f7ed; color:#0a8f4a; font-size:17px;
+  display:flex; align-items:center; justify-content:center;
+}
+.gate-btn.primary .gate-ico { background:rgba(255,255,255,.22); color:#fff; }
+.gate-txt { display:flex; flex-direction:column; min-width:0; }
+.gate-txt b { font-size:15px; font-weight:600; }
+.gate-txt i { font-style:normal; font-size:11.5px; color:#9aa0a6; margin-top:2px; }
+.gate-btn.primary .gate-txt b { color:#fff; }
+.gate-btn.primary .gate-txt i { color:rgba(255,255,255,.82); }
+/* 创建房间：正在等本机程序回应时，左边的 ＋ 换成一个转圈，期间按钮不可再点。
+   创建进度画在「正在创建房间…」正下方（阶段文字 + 百分比 + 细进度条），
+   下方不再用黄色提示条重复播报等待状态。
+   放在 .gate-btn.primary .gate-ico 之后才能盖住它的 color。 */
+.gate-btn.busy { pointer-events:none; cursor:default; }
+.gate-btn.busy .gate-ico { position:relative; color:transparent; font-size:0; }
+.gate-btn.busy .gate-ico::after {
+  content:''; position:absolute; left:50%; top:50%;
+  width:15px; height:15px; margin:-8.5px 0 0 -8.5px;
+  border:2px solid rgba(255,255,255,.45); border-top-color:#fff; border-radius:50%;
+  animation:gateSpin .7s linear infinite;
+}
+@keyframes gateSpin { to { transform:rotate(360deg); } }
+/* 进度区只在创建中出现，替换掉原来那行静态副标题 */
+.gate-btn.busy .gate-txt > i { display:none; }
+.gate-prog { display:none; margin-top:8px; }
+.gate-btn.busy .gate-prog { display:block; }
+.gate-prog-line { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }
+.gate-prog-line > span {
+  display:flex; flex-wrap:wrap; align-items:center; gap:5px;
+  font-size:10.5px; line-height:1.45; color:rgba(255,255,255,.92);
+}
+.gate-prog-line > b {
+  flex-shrink:0; font-size:10.5px; font-weight:600; color:#fff;
+  font-variant-numeric:tabular-nums;
+}
+.gp-done { color:#fff; }
+.gp-now { color:#fff; font-weight:600; }
+.gp-wait { color:rgba(255,255,255,.55); }
+.gp-sep { color:rgba(255,255,255,.4); }
+.gate-prog-bar {
+  display:block; height:4px; margin-top:6px; border-radius:3px;
+  background:rgba(255,255,255,.3); overflow:hidden;
+}
+.gate-prog-fill {
+  display:block; height:100%; width:0; border-radius:3px;
+  background:#fff; transition:width .22s ease;
+}
+#gateJoin { display:none; margin-top:22px; }
+#gateRoom {
+  width:100%; padding:13px; font-size:19px; text-align:center; letter-spacing:3px;
+  text-transform:uppercase; border:1px solid #e2e4e6; border-radius:11px;
+  outline:none; font-family:Menlo,Consolas,monospace; background:#f7f8f8;
+  transition:border-color .18s, background .18s;
+}
+#gateRoom:focus { border-color:#07C160; background:#fff; }
+.gate-row { display:flex; gap:9px; margin-top:11px; }
+.gate-row .gate-btn { justify-content:center; padding:12px; }
+.gate-row .gate-back {
+  flex:0 0 96px; padding:12px; border-radius:12px; border:1px solid #e2e4e6;
+  background:#fff; color:#5f6368; font-size:14px; cursor:pointer; font-family:inherit;
+}
+.gate-row .gate-back:hover { background:#f1f3f4; }
+#gateMsg {
+  display:none; margin-top:14px; padding:10px 12px; border-radius:10px;
+  font-size:12.5px; line-height:1.65;
+}
+#gateMsg.err { display:block; background:#fdecec; color:#c62828; }
+#gateMsg.info { display:block; background:#fff8e1; color:#a06a00; }
+/* 本机程序没在跑：错误条下面的补救入口（下载程序 / 启动后重试） */
+.gate-fix {
+  margin-top:10px; padding:12px; border-radius:12px;
+  background:#f7f8f7; border:1px solid #e6e8e6;
+}
+.gate-fix-dl {
+  display:flex; align-items:center; justify-content:center; gap:6px;
+  height:42px; border-radius:11px; background:#07C160; color:#fff;
+  font-size:14px; font-weight:500; text-decoration:none;
+}
+.gate-fix-dl:active { background:#06ad56; }
+.gate-fix-retry {
+  width:100%; height:38px; margin-top:8px; border-radius:10px;
+  border:1px solid #dfe2df; background:#fff; color:#3c4043;
+  font-size:13px; font-family:inherit; cursor:pointer;
+}
+.gate-fix-retry:active { background:#f1f3f4; }
+.gate-fix-tip { margin-top:8px; font-size:11px; line-height:1.6; color:#9aa0a6; text-align:center; }
+/* 常驻下载入口：放在页脚上方一行，不抢「创建 / 加入」两个主按钮的注意力 */
+.gate-dl-line { margin-top:14px; text-align:center; font-size:12px; color:#b0b4b8; }
+.gate-dl-line a { color:#5f6368; text-decoration:none; border-bottom:1px solid #dfe2df; padding-bottom:1px; }
+.gate-dl-line a:hover { color:#07C160; border-color:#07C160; }
+.gate-dl-sep { margin:0 6px; color:#d0d3d0; }
+.gate-foot {
+  text-align:center; font-size:11px; color:#b0b4b8; margin-top:18px;
+  line-height:1.7; border-top:1px solid #f0f0f0; padding-top:12px;
+}
+
+/* ===== 桌面共享（聊天流里的直播画面卡：卡片本身就是共享画面）===== */
+.screen-card.live { width:min(380px,100%); }
+.sc-video-wrap {
+  position:relative; border-radius:14px; overflow:hidden;
+  background:#0d0f11; cursor:pointer;
+}
+.sc-video {
+  display:block; width:100%; aspect-ratio:16/9; max-height:44vh;
+  background:#0d0f11; object-fit:cover;
+}
+/* 左上：共享中徽标 */
+.sc-badge {
+  position:absolute; left:0; top:0; z-index:2;
+  display:flex; align-items:center; gap:4px;
+  background:rgba(0,0,0,.6); border-radius:0 0 10px 0; padding:4px 10px;
+  font-size:11px; color:#fff; pointer-events:none;
+}
+.sc-badge i {
+  width:7px; height:7px; border-radius:50%; background:#ff4d4f;
+  animation:blink 1.4s infinite;
+}
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.25} }
+/* 右上：实时共享时长（走秒，停止后卡片切灰色不再显示） */
+.sc-dur {
+  position:absolute; right:0; top:0; z-index:2;
+  background:rgba(0,0,0,.6); border-radius:0 0 0 10px; padding:4px 10px;
+  font-size:11px; color:#fff; font-variant-numeric:tabular-nums; pointer-events:none;
+}
+/* 底部悬浮条：头像编号 + 谁 + 开始时间；右侧停止/全屏 */
+.sc-bar {
+  position:absolute; left:0; right:0; bottom:0; z-index:2;
+  display:flex; align-items:center; gap:7px; padding:6px 9px;
+  background:rgba(0,0,0,.55); color:#fff;
+}
+.sc-av {
+  width:19px; height:19px; border-radius:50%; background:#07C160; color:#fff;
+  font-size:11px; font-style:normal; flex:none;
+  display:flex; align-items:center; justify-content:center;
+}
+.sc-who { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
+.sc-fs {
+  flex:none; width:26px; height:26px; border-radius:50%;
+  background:rgba(255,255,255,.18); pointer-events:none;
+  display:flex; align-items:center; justify-content:center;
+}
+.sc-stop {
+  flex:none; height:24px; padding:0 10px; border:none; border-radius:12px;
+  background:#ff4d4f; color:#fff; font-size:11.5px; cursor:pointer; font-family:inherit;
+}
+.sc-stop:hover { background:#e5484d; }
+.sc-lanhint {
+  position:absolute; left:0; right:0; top:0; bottom:0; z-index:3;
+  display:flex; align-items:center; justify-content:center;
+  font-size:12px; color:#cfd8de; background:rgba(13,15,17,.82);
+  pointer-events:none;
+}
+/* 移动端自动播放被拦时的手势兜底：盖在画面上，点一下再 play() */
+.sc-play {
+  position:absolute; left:0; right:0; top:0; bottom:0; z-index:4;
+  border:none; background:rgba(0,0,0,.62); color:#fff; font-size:13px;
+  font-family:inherit; cursor:pointer; line-height:1.6;
+}
+/* ===== 共享画面全屏观看层（页面内全屏，不依赖系统 Fullscreen API）===== */
+.scf {
+  display:none; position:fixed; left:0; top:0; right:0; bottom:0; z-index:400;
+  background:#000; align-items:center; justify-content:center;
+}
+.scf.show { display:flex; }
+.scf video { width:100%; height:100%; object-fit:contain; background:#000; }
+.scf-top {
+  position:absolute; left:0; right:0; top:0; z-index:2;
+  display:flex; align-items:center; gap:9px; padding:10px 14px;
+  background:rgba(0,0,0,.72); color:#fff;
+}
+.scf-dot {
+  width:7px; height:7px; border-radius:50%; background:#ff4d4f;
+  animation:blink 1.4s infinite; flex:none;
+}
+.scf-who { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
+.scf-dur { font-size:13px; font-variant-numeric:tabular-nums; }
+.scf-stop {
+  flex:none; height:26px; padding:0 12px; border:none; border-radius:13px;
+  background:#ff4d4f; color:#fff; font-size:12px; cursor:pointer; font-family:inherit;
+}
+.scf-close {
+  flex:none; width:28px; height:28px; border:none; border-radius:50%;
+  background:rgba(255,255,255,.18); padding:0; cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+}
+.scf-tip {
+  position:absolute; left:50%; bottom:14px; transform:translateX(-50%); z-index:2;
+  background:rgba(0,0,0,.55); color:rgba(255,255,255,.75); font-size:11px;
+  border-radius:11px; padding:4px 12px; pointer-events:none; white-space:nowrap;
+}
+.scf-play {
+  position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); z-index:3;
+  border:none; background:rgba(0,0,0,.62); color:#fff; font-size:13px;
+  font-family:inherit; cursor:pointer; border-radius:20px; padding:10px 18px;
+}
+body.fs-locked { overflow:hidden; }
+
+/* ===== 窄屏适配 ===== */
+@media (max-width:640px) {
+  .topbar { padding:8px 12px; }
+  .topbar-sub { display:none; }
+  #roomCard, #p2pBanner, #lanBanner { margin:8px 12px 0; padding:10px 12px; }
+  /* 手机屏幕小：直播卡放宽到整行，画面尽量大 */
+  .screen-card.live, .screen-card { width:100%; }
+  .sc-video { max-height:44vh; }
+  .chat-scroll { padding:14px 12px 6px; }
+  .input-bar { padding:8px 12px calc(8px + env(safe-area-inset-bottom)); }
+  .file-card { width:100%; }
+  .empty { padding:56px 16px; }
+  .gate-card { padding:26px 20px 18px; border-radius:18px; }
+}
+
+/* ===== 发送队列（多文件逐项进度） ===== */
+.pq-head {
+  display:flex; align-items:center; justify-content:space-between;
+  max-width:760px; margin:0 auto 6px; font-size:11.5px; color:#6b8a78;
+}
+.pq-head button {
+  border:none; background:none; color:#3c7a57; font-size:11.5px; cursor:pointer;
+  padding:2px 6px; border-radius:5px;
+}
+.pq-head button:hover { background:#eef3f0; color:#0a8f4a; }
+.pq-item {
+  position:relative; display:flex; align-items:center; gap:8px;
+  padding:7px 10px 9px; background:#f4f6f7; border-radius:8px; margin-bottom:6px;
+  max-width:760px; margin-left:auto; margin-right:auto; font-size:13px; overflow:hidden;
+}
+.pq-item.sending { background:#eefaf3; }
+.pq-item.err { background:#fdf0ef; }
+.pq-ico { flex-shrink:0; }
+.pq-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pq-state { flex-shrink:0; font-size:11px; color:#8a949c; white-space:nowrap; }
+.pq-state.ok { color:#0a8f4a; }
+.pq-state.err { color:#d93025; }
+.pq-x {
+  flex-shrink:0; background:none; border:none; color:#9aa0a6;
+  cursor:pointer; font-size:15px; padding:0 2px; line-height:1;
+}
+.pq-x:hover { color:#c62828; }
+.pq-bar {
+  position:absolute; left:0; right:0; bottom:0; height:2px; background:#e8eeeb;
+}
+.pq-fill { height:100%; width:0; background:#07C160; transition:width .18s linear; }
+.pq-item.err .pq-fill { background:#e57373; }
+
+/* ===== 拖拽投放 ===== */
+#dropMask {
+  position:fixed; inset:0; z-index:120; display:none;
+  align-items:center; justify-content:center; padding:24px;
+  background:rgba(7,193,96,.08); border:2px dashed #07C160; border-radius:14px;
+}
+#dropMask.show { display:flex; }
+.drop-card { text-align:center; pointer-events:none; }
+.drop-ico { font-size:40px; }
+.drop-t { font-size:15px; font-weight:600; color:#0a8f4a; margin-top:6px; }
+.drop-s { font-size:12px; color:#3c7a57; margin-top:4px; }
+
+/* ===== 网络与中继设置 ===== */
+.modal.wide { max-width:560px; }
+.ice-list { display:flex; flex-direction:column; gap:6px; margin:10px 0 12px; }
+.ice-row {
+  display:flex; align-items:center; gap:8px;
+  padding:8px 10px; background:#f7f9f8; border-radius:8px; font-size:12.5px;
+}
+.ice-row .why {
+  flex-shrink:0; font-size:10px; padding:1px 6px; border-radius:4px;
+  background:#e6f7ed; color:#0a8f4a;
+}
+.ice-row .why.def { background:#eef1f4; color:#5f6368; }
+.ice-url {
+  flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  font-family:Menlo,Consolas,monospace; color:#1f3d2c;
+}
+.ice-row button {
+  border:none; background:none; color:#c62828; cursor:pointer; font-size:13px;
+}
+.ice-add { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+.ice-add select, .ice-add input {
+  margin:0; padding:8px 10px; border:1px solid #e2e4e6; border-radius:8px;
+  font-size:12.5px; outline:none; background:#fff; min-width:0;
+}
+.ice-add select { flex:0 0 84px; }
+.ice-add #iceUrl { flex:1 1 220px; }
+.ice-add #iceUser, .ice-add #icePass { flex:1 1 140px; }
+.ice-add input:focus, .ice-add select:focus { border-color:#07C160; }
+.ice-add .btn-primary {
+  flex:0 0 auto; margin-left:auto; padding:7px 16px; border:none;
+  border-radius:8px; font-size:13px; cursor:pointer;
+}
+.ice-tip { font-size:11.5px; line-height:1.7; color:#6b8a78; margin-top:9px; }
+
+/* ===== 帮助 ===== */
+.faq { display:flex; flex-direction:column; gap:6px; max-height:52vh; overflow:auto; }
+.faq details { background:#f7f9f8; border-radius:8px; padding:9px 12px; }
+.faq summary { cursor:pointer; font-size:13.5px; font-weight:600; color:#1f3d2c; }
+.faq p { font-size:12.5px; line-height:1.85; color:#5c6b62; margin-top:7px; }
+.faq code {
+  font-family:Menlo,Consolas,monospace; background:#eef3f0;
+  padding:1px 5px; border-radius:4px; font-size:11.5px;
+}
+
+/* ===== 其它小件 ===== */
+#guestProgText {
+  font-size:11.5px; color:#3c7a57; margin-top:5px; text-align:center;
+}
+.member-tag.relay { background:#fff4e5; color:#c86a00; }
+
+/* ===== 连接信息侧栏 =====
+   局域网 / 外网 / 等待条都是「连接信息」，不该堆在聊天区正中：
+   宽屏时统一靠页面右侧竖排，窄屏没空间才退回成顶部横条（文字仍靠左）。 */
+.side-info { flex-shrink:0; display:flex; flex-direction:column; }
+.side-info > #lanBanner,
+.side-info > #p2pBanner,
+.side-info > #guestGate,
+.side-info > #waitBar { text-align:left; }
+.side-info .p2p-line,
+.side-info .side-actions,
+.side-info .room-card-title { justify-content:flex-start; }
+.side-info .guest-room { text-align:left; }
+.side-info .guest-actions { justify-content:flex-start; }
+.side-info #inviteHint,
+.side-info #guestStatus,
+.side-info #qrBox,
+.side-info #lanQrBox,
+.side-info #guestProgText { text-align:left; }
+
+/* 宽屏：右侧固定信息栏；聊天区正中只留消息，连接信息不再横在中间 */
+@media (min-width:1280px) {
+  .side-info {
+    position:fixed; top:62px; right:10px; width:228px;
+    max-height:calc(100vh - 168px); overflow-y:auto;
+    z-index:6; gap:8px;
+    scrollbar-width:thin; scrollbar-color:#cfd8d3 transparent;
+  }
+  .side-info::-webkit-scrollbar { width:4px; }
+  .side-info::-webkit-scrollbar-thumb { background:#cfd8d3; border-radius:2px; }
+  .side-info > * { margin:0 !important; padding:10px 12px !important; }
+  /* 房间说明那一块本身只是容器，别被上面这条套出白底内边距 */
+  .side-info > .room-info {
+    padding:0 !important; background:transparent !important; border:0 !important;
+  }
+  .side-info .p2p-line { gap:6px; }
+  .side-info .pill { font-size:11px; padding:3px 8px; white-space:nowrap; }
+  /* 通道卡里的操作按钮：两枚等分一行，和房间卡按钮同款 */
+  .side-info .side-actions .pill { flex:1; min-width:0; padding:5px 0; text-align:center; }
+  .side-info #roomCode { font-size:16px; letter-spacing:1.2px; padding:6px 8px; }
+  .side-info #lanUrl, .side-info #p2pUrl { font-size:12px; padding:5px 8px; }
+  .side-info #inviteActions, .side-info #lanActions { gap:6px !important; }
+  .side-info #qrImg, .side-info #lanQrImg { padding:4px; }
+  .side-info #qrImg canvas, .side-info #lanQrImg canvas { width:80px; height:80px; }
+  #waitBar { flex-direction:column; align-items:flex-start; gap:4px; }
+}
+
+/* ===== 二维码模式：浮层盖在卡片上，卡片自身尺寸完全不变（不撑大侧栏） ===== */
+#lanBanner, #p2pBanner { position:relative; }
+#lanBanner .qr-float, #p2pBanner .qr-float {
+  position:absolute; inset:0; z-index:3; overflow:hidden;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:5px; padding:6px 10px; text-align:center;
+}
+#lanBanner .qr-float { background:linear-gradient(180deg,#f4f8ff,#eef4ff); border-radius:12px; }
+#p2pBanner .qr-float { background:linear-gradient(180deg,#f3fbf7,#eaf7f0); border-radius:12px; }
+#lanBanner .qr-back, #p2pBanner .qr-back {
+  margin:0; padding:3px 26px; white-space:nowrap; flex-shrink:0;
+}
