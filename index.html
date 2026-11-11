@@ -377,19 +377,21 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 .sc-head { display:flex; align-items:center; gap:8px; }
 .sc-head svg { width:18px; height:18px; flex:none; }
 .sc-title { font-size:13.5px; font-weight:600; color:#1f2933; }
+.screen-card.ended { background:#f1efe8; }
+.screen-card.ended::before { border-right-color:#f1efe8; }
+.msg-row.self .screen-card.ended::before { border-left-color:#f1efe8; border-right:0; }
 .screen-card.ended .sc-head svg { stroke:#888780; }
 .screen-card.ended .sc-title { color:#888780; }
+.sc-noreplay {
+  border-radius:7px; background:#e4e2d9; height:46px;
+  display:flex; align-items:center; justify-content:center; gap:5px;
+  font-size:11px; color:#888780; margin-bottom:8px;
+}
 .sc-dot {
   width:8px; height:8px; border-radius:50%; background:#ff4d4f;
   animation:blink 1.4s infinite; flex:none;
 }
 .sc-sub { font-size:11.5px; color:#9aa7b0; margin-top:5px; line-height:1.5; }
-.sc-watch {
-  display:block; width:100%; margin-top:9px; padding:7px 0;
-  background:#07C160; color:#fff; border:none; border-radius:8px;
-  font-size:13px; cursor:pointer; transition:background .15s;
-}
-.sc-watch:hover { background:#06ad56; }
 .file-icon {
   width:36px; height:36px; border-radius:8px;
   background:linear-gradient(135deg,#07C160,#04a94f); color:#fff;
@@ -642,50 +644,58 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   line-height:1.7; border-top:1px solid #f0f0f0; padding-top:12px;
 }
 
-/* ===== 桌面共享（作为聊天流里的一条卡片，尺寸与普通消息对齐）===== */
-#screenSlot { display:none; margin-bottom:16px; }
-#screenSlot.show { display:block; }
-#screenPanel {
-  display:flex; align-items:flex-start;
+/* ===== 桌面共享（聊天流里的直播画面卡：卡片本身就是共享画面）===== */
+.screen-card.live { width:min(340px,100%); padding:6px; }
+.sc-video-wrap {
+  position:relative; border-radius:8px; overflow:hidden;
+  background:#0d0f11; cursor:pointer;
 }
-.screen-body {
-  width:min(340px,100%); border-radius:10px; overflow:hidden; position:relative;
-  background:#0d0f11; box-shadow:0 1px 4px rgba(0,0,0,.1);
+.sc-video {
+  display:block; width:100%; aspect-ratio:16/9; max-height:34vh;
+  background:#0d0f11; object-fit:contain;
 }
-#screenVideo { width:100%; aspect-ratio:16/9; max-height:30vh; display:block; background:#000; object-fit:contain; }
 /* 移动端自动播放被拦时的手势兜底：盖在画面上，点一下再 play() */
-.screen-play {
-  position:absolute; left:0; right:0; top:0; bottom:34px; z-index:1;
+.sc-play {
+  position:absolute; left:0; right:0; top:0; bottom:0; z-index:3;
   border:none; background:rgba(0,0,0,.62); color:#fff; font-size:13px;
   font-family:inherit; cursor:pointer; line-height:1.6;
 }
-.screen-play:hover { background:rgba(0,0,0,.75); }
-.screen-bar {
-  position:absolute; left:0; right:0; bottom:0; padding:7px 10px; z-index:2;
-  display:flex; align-items:center; justify-content:space-between; gap:8px;
-  background:linear-gradient(transparent, rgba(0,0,0,.72)); color:#fff; font-size:11.5px;
+.sc-badge {
+  position:absolute; right:6px; top:6px; z-index:2;
+  display:flex; align-items:center; gap:4px;
+  background:rgba(0,0,0,.55); border-radius:10px; padding:2px 8px;
+  font-size:11px; color:#fff; pointer-events:none;
 }
-.screen-bar .lb { display:flex; align-items:center; gap:7px; }
-.screen-bar .dot { width:7px; height:7px; border-radius:50%; background:#ff4d4f; animation:blink 1.4s infinite; }
+.sc-badge i {
+  width:7px; height:7px; border-radius:50%; background:#ff4d4f;
+  animation:blink 1.4s infinite;
+}
 @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.25} }
-.screen-bar button {
-  border:none; border-radius:20px; padding:5px 13px; font-size:12px;
-  cursor:pointer; font-family:inherit; background:rgba(255,255,255,.18); color:#fff;
+.sc-lanhint {
+  position:absolute; left:0; right:0; top:0; bottom:0; z-index:2;
+  display:flex; align-items:center; justify-content:center;
+  font-size:12px; color:#cfd8de; background:rgba(13,15,17,.82);
+  pointer-events:none;
 }
-.screen-bar button:hover { background:rgba(255,255,255,.3); }
-.screen-bar button.stop { background:#e5484d; }
-.screen-bar button.stop:hover { background:#d13b40; }
-.screen-bar button.full { padding:5px 9px; font-size:14px; line-height:1; }
+.sc-meta {
+  display:flex; align-items:center; gap:8px; padding:6px 7px 3px;
+  font-size:11.5px; color:#9aa7b0;
+}
+.sc-meta span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.sc-stop {
+  flex:none; border:none; background:none; padding:2px 4px;
+  font-size:11.5px; color:#e5484d; cursor:pointer; font-family:inherit;
+}
+.sc-stop:hover { text-decoration:underline; }
 
 /* ===== 窄屏适配 ===== */
 @media (max-width:640px) {
   .topbar { padding:8px 12px; }
   .topbar-sub { display:none; }
   #roomCard, #p2pBanner, #lanBanner { margin:8px 12px 0; padding:10px 12px; }
-  /* 手机屏幕小：去掉头像占的宽度，把共享画面放大到接近半屏 */
-  #screenPanel > .msg-avatar { display:none; }
-  .screen-body { width:100%; }
-  #screenVideo { max-height:42vh; }
+  /* 手机屏幕小：直播卡放宽到整行，画面尽量大 */
+  .screen-card.live, .screen-card { width:100%; }
+  .sc-video { max-height:44vh; }
   .chat-scroll { padding:14px 12px 6px; }
   .input-bar { padding:8px 12px calc(8px + env(safe-area-inset-bottom)); }
   .file-card { width:100%; }
@@ -786,7 +796,6 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 #guestProgText {
   font-size:11.5px; color:#3c7a57; margin-top:5px; text-align:center;
 }
-.screen-bar .stop.audio { background:rgba(255,255,255,.18); }
 .member-tag.relay { background:#fff4e5; color:#c86a00; }
 
 /* ===== 连接信息侧栏 =====
@@ -1002,21 +1011,6 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 
 <div class="chat-scroll" id="chatScroll">
   <div class="chat-inner" id="chatInner">
-    <div id="screenSlot">
-      <div id="screenPanel">
-        <div class="msg-avatar">💻</div>
-        <div class="screen-body">
-          <video id="screenVideo" autoplay playsinline webkit-playsinline x5-playsinline muted></video>
-          <button id="screenPlay" class="screen-play" style="display:none;">▶ 点击播放共享画面</button>
-          <div class="screen-bar">
-            <span class="lb"><i class="dot"></i><span id="screenLabel">桌面共享中</span></span>
-            <button id="screenAudio" class="stop audio" onclick="toggleScreenAudio()" style="display:none;">开启声音</button>
-            <button id="screenFull" class="stop full" onclick="toggleScreenFull()" title="全屏查看">⛶</button>
-            <button id="screenStop" class="stop" onclick="stopScreenShare()">停止共享</button>
-          </div>
-        </div>
-      </div>
-    </div>
     <div id="msgList">
       <div class="empty"><span class="e-icon">💬</span>暂无消息<span class="e-sub">各设备互发的文字与文件会显示在这里</span></div>
     </div>
@@ -1170,7 +1164,6 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 const chatInner = document.getElementById('chatInner');
 const chatScroll = document.getElementById('chatScroll');
 const msgList = document.getElementById('msgList');
-const screenSlot = document.getElementById('screenSlot');
 const fi = document.getElementById('fileInput');
 const textInput = document.getElementById('textInput');
 const pendingArea = document.getElementById('pendingArea');
@@ -1204,7 +1197,7 @@ let CLIENT_URL = 'https://zvzqvqdvd.github.io/data-transmission/';
 // 页面源文件指纹（由程序按 web/ 源文件现算，在线页 = 导出那一刻的值）。
 // 邀请链接 / 二维码 / 复制的访问地址都带 ?v=<指纹>：手机浏览器对页面缓存
 // 非常顽固，URL 不变就拿旧缓存页连新程序，轻则变慢、重则连不上。
-const PAGE_BUILD = '3b0e139312';
+const PAGE_BUILD = 'b2da88bc29';
 let lastRev = null;
 let pollTimer = null;        // 房主端的 /messages 轮询
 let roomClosed = false;      // 房主已解散房间，页面停在入口页
@@ -1830,8 +1823,21 @@ function pushMsg(m) {
   renderAll();
 }
 function renderAll() {
-  const all = serverMsgs.concat(localMsgs);
+  // 两个来源按 id 跨数组去重：本机先落了一条卡、轮询里又回来同一条时，
+  // 只渲染后端那份（字段更全），杜绝「同一张卡出现两次」
+  const seen = new Set();
+  const all = [];
+  for (const m of serverMsgs) {
+    if (m.id) { if (seen.has(m.id)) continue; seen.add(m.id); }
+    all.push(m);
+  }
+  for (const m of localMsgs) {
+    if (m.id) { if (seen.has(m.id)) continue; seen.add(m.id); }
+    all.push(m);
+  }
   msgList.innerHTML = all.length ? all.map(renderMsg).join('') : EMPTY_HTML;
+  mountScreenVideo(all);      // 共享画面挂到聊天卡上
+  autoWatchLiveCards(all);    // 共享进行中：没流的一端自动请求补推
   chatScroll.scrollTop = chatScroll.scrollHeight;
 }
 
@@ -1877,27 +1883,44 @@ function renderMsg(msg) {
   if (msg.type==='text') {
     bubble = '<div class="bubble'+(self?' me':'')+'">'+esc(msg.content)+'</div>';
   } else if (msg.type==='screen') {
-    // 屏幕共享历史卡：一条卡片两种状态。共享中且自己不是发起人时给「观看共享」，
-    // 已停止只显示时间段——共享是实时流没有录像，技术上也放不出画面。
+    // 屏幕共享直播卡：卡片本身就是共享画面（自动播放、点击全屏），
+    // 停止后同一条卡原地变灰只留起止时间——一次共享全房间只有一张卡。
     const live = msg.status !== 'ended';
     const num = nameNums[msg.ip];
     const who = self ? '你' : (num ? '设备 ' + num : '对方设备');
     const st = String(msg.time || '');
-    const sub = live
-      ? who + ' · 从 ' + esc(st.slice(0,5)) + ' 开始'
-      : (st ? esc(st.slice(0,5)) + (msg.end ? ' – ' + esc(String(msg.end).slice(0,5)) : '')
-            + (msg.dur ? ' · 共 ' + esc(msg.dur) : '') : '已停止');
-    const canWatch = live && !self && !isLanClient && canP2P();
-    bubble = '<div class="screen-card'+(live?' live':' ended')+'">'+
-      '<div class="sc-head">'+
-        '<svg viewBox="0 0 24 24" fill="none" stroke="#07C160" stroke-width="1.9" stroke-linecap="round">'+
-        '<rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>'+
-        '<span class="sc-title">'+(live?'屏幕共享中':'屏幕共享已停止')+'</span>'+
-        (live?'<span class="sc-dot"></span>':'')+
-      '</div>'+
-      '<div class="sc-sub">'+sub+'</div>'+
-      (canWatch?'<button class="sc-watch" onclick="watchScreen(\''+esc(msg.id)+'\')">观看共享</button>':'')+
-    '</div>';
+    if (live) {
+      const noP2P = isLanClient || !canP2P();
+      const sub = self
+        ? '你正在共享屏幕 · 从 ' + esc(st.slice(0,5)) + ' 开始'
+        : esc(who) + ' 的屏幕 · 从 ' + esc(st.slice(0,5)) + ' 开始';
+      bubble = '<div class="screen-card live" data-sid="'+esc(msg.id)+'">'+
+        '<div class="sc-video-wrap" onclick="expandScreenCard()">'+
+          '<video class="sc-video" autoplay playsinline webkit-playsinline x5-playsinline muted></video>'+
+          '<div class="sc-badge"><i></i>共享中</div>'+
+          (noP2P?'<div class="sc-lanhint">局域网访问不支持观看共享</div>':'')+
+          '<button class="sc-play" style="display:none;">▶ 点击播放共享画面</button>'+
+        '</div>'+
+        '<div class="sc-meta"><span>'+sub+'</span>'+
+        (self?'<button class="sc-stop" onclick="stopScreenShare()">停止共享</button>':'')+
+        '</div>'+
+      '</div>';
+    } else {
+      const range = st ? esc(st.slice(0,5)) + (msg.end ? ' – ' + esc(String(msg.end).slice(0,5)) : '')
+                       + (msg.dur ? ' · 共 ' + esc(msg.dur) : '') : '已结束';
+      bubble = '<div class="screen-card ended">'+
+        '<div class="sc-noreplay">'+
+          '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="#888780" stroke-width="2" stroke-linecap="round">'+
+          '<rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>'+
+          '画面不保存回放</div>'+
+        '<div class="sc-head">'+
+          '<svg viewBox="0 0 24 24" fill="none" stroke="#07C160" stroke-width="1.9" stroke-linecap="round">'+
+          '<rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>'+
+          '<span class="sc-title">屏幕共享已关闭</span>'+
+        '</div>'+
+        '<div class="sc-sub">'+esc(who)+' · '+range+'</div>'+
+      '</div>';
+    }
   } else {
     // 文件消息：统一一张文件卡片，不做在线预览；点右侧 ⬇ 才下载
     const nm = esc(msg.name), sz = esc(msg.size || '');
@@ -2221,7 +2244,10 @@ function handleData(data, ctx) {
         stopScreenRelay();
         try { broadcast('SCREEN_END'); } catch (e) {}
       }
-      if (screenRole === 'recv') { screenRole = ''; hideScreenPanel(); }
+      // 收掉手上的接收流：直播卡随后由 SCREEN_STOP 改灰，画面先停
+      if (recvCall) { try { recvCall.close(); } catch (e) {} }
+      screenRecvStream = null;
+      renderAll();
       return;
     }
     // 头像编号表：房主按加入顺序分配，随广播同步给每台外网设备
@@ -2243,7 +2269,7 @@ function handleData(data, ctx) {
       try {
         const c = JSON.parse(data.slice(12));
         if (c && c.id) {
-          pushMsg({ type: 'screen', status: 'live', ip: c.f || '外网设备',
+          pushMsg({ type: 'screen', status: c.status || 'live', ip: c.f || '外网设备',
                     id: c.id, time: c.time || '' });
         }
       } catch (e) {}
@@ -2262,7 +2288,7 @@ function handleData(data, ctx) {
         body: 'status=start&from=' + encodeURIComponent(ctx.name)
             + '&id=' + encodeURIComponent(String(sid).slice(0, 32))
       }).then(() => loadMessages()).catch(() => {});
-      broadcast('SCREEN_CARD:' + JSON.stringify({ id: sid, f: ctx.name, time: (o && o.time) || '' }), ctx.name);
+      // 卡片不在这里手动广播：房主轮询到后端这条消息后由 relayNew 统一转给外网设备
       return;
     }
     // 共享停止：房主把历史卡改成「已停止」，再转给其余外网设备各自改灰
@@ -2387,11 +2413,10 @@ function handleData(data, ctx) {
   }
 }
 // ===== 桌面共享：走 WebRTC 媒体流，与传文件的数据通道互不干扰 =====
-let screenStream = null, screenCalls = [], recvCall = null, screenRole = '';
+let screenStream = null, screenCalls = [], recvCall = null;
 let screenRelayCalls = [];   // 房主把收到的一路共享转给其他外网设备的那些 call
-let screenHasAudio = false;
 let screenMsgId = '';        // 这次共享在聊天历史里的卡片 id（停止时把卡片改成「已停止」）
-let screenRecvStream = null; // 房主收到的一路共享流：转给后来点「观看」的设备用
+let screenRecvStream = null; // 收到的一路共享流：房主转给后来加入的设备用
 // 在本地消息里找屏幕共享卡并原地更新状态（发起方停止时自己先把卡片改灰）
 function findScreenMsg(id) {
   return localMsgs.find(x => x.id === id && x.type === 'screen') ||
@@ -2417,20 +2442,9 @@ function fmtScreenDur(t1, t2) {
   if (d >= 60) return Math.floor(d / 60) + ' 分钟';
   return d + ' 秒';
 }
-function refreshScreenAudioBtn() {
-  const v = document.getElementById('screenVideo');
-  const ab = document.getElementById('screenAudio');
-  if (!ab) return;
-  // 只有「看别人共享」这一端需要声音开关；自己共享时的预览永远静音
-  if (screenRole !== 'recv' || !screenHasAudio) { ab.style.display = 'none'; return; }
-  ab.style.display = '';
-  ab.textContent = (v && v.muted) ? '开启声音' : '静音';
-}
-// 移动端（iOS Safari / 微信等内置浏览器）只肯播放「已经可见」且带 playsinline
-// 的 video：元素还在 display:none 里就 play()，会被直接拒绝，之后也不会自己恢复。
-// 所以先让面板显示出来、把属性补齐，再挂流、再播；失败还要给一个手势入口。
-function playScreenVideo(v) {
-  const btn = document.getElementById('screenPlay');
+// 手机上 play() 可能被自动播放策略拦（iOS Safari / 微信内置浏览器只肯播
+// 「已可见且静音」的 video）：失败时在卡片上显示手势兜底按钮
+function playScreenVideo(v, btn) {
   const hide = () => { if (btn) btn.style.display = 'none'; };
   v.addEventListener('playing', hide, { once: true });
   let p;
@@ -2438,37 +2452,38 @@ function playScreenVideo(v) {
   if (p && p.catch) p.catch(() => {
     if (!btn) return;
     btn.style.display = 'block';
-    btn.onclick = () => {
-      v.muted = true;          // 用户手势触发也要保持静音，iOS 才肯播
+    btn.onclick = ev => {
+      ev.stopPropagation();          // 别触发卡片自己的「全屏」点击
+      v.muted = true;                // 用户手势触发也要保持静音，iOS 才肯播
       try {
         const q = v.play();
         if (q && q.catch) q.catch(() => {});
       } catch (e) {}
       hide();
-      refreshScreenAudioBtn();
     };
   });
 }
-function attachStream(stream, muted) {
-  const v = document.getElementById('screenVideo');
+// 把共享画面挂到聊天流里的直播卡上：
+// 自己在共享 → 挂 screenStream；看别人（房主收到访客共享 / 被补推）→ 挂 screenRecvStream。
+// renderAll 每次重建 DOM，video 是新元素，所以每次渲染都要重新挂一遍。
+function mountScreenVideo(list) {
+  const m = (list || []).find(x => x.type === 'screen' && x.status !== 'ended');
+  if (!m) return;
+  const wrap = document.querySelector('#msgList .screen-card.live .sc-video-wrap');
+  const v = wrap && wrap.querySelector('.sc-video');
   if (!v) return;
-  screenSlot.classList.add('show');       // 必须先可见，否则手机上 play() 直接失败
-  v.playsInline = true;
-  v.setAttribute('playsinline', '');
-  v.setAttribute('webkit-playsinline', '');
-  v.autoplay = true;
-  v.muted = !!muted;                      // 自动播放的前提是静音，声音由「开启声音」按钮放
-  try { v.srcObject = stream; }
-  catch (e) {
-    try { v.src = URL.createObjectURL(stream); } catch (e2) {}   // 老浏览器只认 src
+  const stream = screenStream || screenRecvStream;
+  if (!stream) return;
+  if (v._src !== stream) {
+    v._src = stream;
+    try { v.srcObject = stream; }
+    catch (e) { try { v.src = URL.createObjectURL(stream); } catch (e2) {} }   // 老浏览器只认 src
   }
-  playScreenVideo(v);
-  screenHasAudio = !!(stream && stream.getAudioTracks && stream.getAudioTracks().length);
-  refreshScreenAudioBtn();
+  playScreenVideo(v, wrap.querySelector('.sc-play'));
 }
-// 手机屏幕小，共享画面看不清：点一下进全屏（iOS Safari 只有 video 级全屏）
-function toggleScreenFull() {
-  const v = document.getElementById('screenVideo');
+// 点直播卡：视频进全屏（iOS Safari 只有 video 级全屏可用）
+function expandScreenCard() {
+  const v = document.querySelector('#msgList .screen-card.live .sc-video');
   if (!v) return;
   try {
     if (document.fullscreenElement || document.webkitFullscreenElement) {
@@ -2478,34 +2493,23 @@ function toggleScreenFull() {
     else if (v.webkitEnterFullscreen) v.webkitEnterFullscreen();
   } catch (e) {}
 }
-function toggleScreenAudio() {
-  const v = document.getElementById('screenVideo');
-  const ab = document.getElementById('screenAudio');
-  if (!v) return;
-  v.muted = !v.muted;
-  if (!v.muted) {
-    const p = v.play();       // 取消静音必须由用户手势触发，这里正好是点击
-    if (p && p.catch) p.catch(() => {});
+// 直播卡在、画面还没到手上：自动请求补推（不用再点「观看共享」按钮）。
+// 每张卡只请求一次，防止反复骚扰；共享方自己 / 局域网端不需要。
+const watchAsked = new Set();
+function autoWatchLiveCards(list) {
+  const m = (list || []).find(x => x.type === 'screen' && x.status !== 'ended');
+  if (!m || m.ip === myName) return;
+  if (screenStream || screenRecvStream) return;   // 画面已经在播
+  if (isLanClient || !canP2P()) return;
+  if (watchAsked.has(m.id)) return;
+  watchAsked.add(m.id);
+  if (MODE === 'host') {
+    // 房主刷新过页面、手里没有访客的流：请共享方重新呼叫一次
+    const sharer = hostList().find(x => x.name === m.ip);
+    if (sharer) { try { sharer.conn.send('SCREEN_RECALL'); } catch (e) {} }
+  } else {
+    try { guestConn.send('SCREEN_WATCH'); } catch (e) {}
   }
-  if (ab) ab.textContent = v.muted ? '开启声音' : '静音';
-}
-function showScreenPanel(role) {
-  screenRole = role;
-  document.getElementById('screenLabel').textContent = role === 'send' ? '正在共享你的桌面' : '对方正在共享桌面';
-  document.getElementById('screenStop').textContent = role === 'send' ? '停止共享' : '关闭';
-  screenSlot.classList.add('show');
-  refreshScreenAudioBtn();
-  chatScroll.scrollTop = 0;
-}
-function hideScreenPanel() {
-  screenSlot.classList.remove('show');
-  const v = document.getElementById('screenVideo');
-  try { v.pause(); } catch (e) {}
-  try { v.srcObject = null; } catch (e) {}
-  const play = document.getElementById('screenPlay');
-  if (play) { play.style.display = 'none'; play.onclick = null; }
-  screenHasAudio = false;
-  refreshScreenAudioBtn();
 }
 // ===== 共享画质调优 =====
 // 浏览器给视频发送端默认的码率上限只有约 2.5 Mbps，桌面文字很容易糊；
@@ -2566,9 +2570,7 @@ async function toggleScreenShare() {
   screenStream = stream;
   const track = stream.getVideoTracks()[0];
   if (track) track.addEventListener('ended', () => stopScreenShare());
-  // 先把面板显示出来再挂流：手机浏览器不给隐藏的 video 自动播放
-  showScreenPanel('send');
-  attachStream(stream, true);
+  // 画面直接进聊天流：本机先落一张直播卡（后端那份回来后按 id 去重合并）
   // 房主共享：房间里每台外网设备都送一路；访客共享：只有房主这一路
   const targets = MODE === 'host'
     ? hostList().map(x => x.conn.peer).filter(Boolean)
@@ -2587,8 +2589,9 @@ async function toggleScreenShare() {
     stopScreenShare();
     return;
   }
-  // 共享真正送出去了：往聊天历史里写一条「屏幕共享中」的卡片，
-  // 后加入的设备从历史里就能看到，共享没停还能点按钮补看实时画面
+  // 共享真正送出去了：往聊天历史里写一张「共享中」直播卡。
+  // 卡片只由后端落盘一个真源，外网设备由房主转发（relayNew）拿到；
+  // 本机先 pushMsg 一份让画面立刻出现，轮询回来后按 id 去重不会重影。
   const sid = uid();
   screenMsgId = sid;
   const tstr = nowHMS();
@@ -2599,11 +2602,11 @@ async function toggleScreenShare() {
       body: 'status=start&from=' + encodeURIComponent(myName || '房主')
           + '&id=' + encodeURIComponent(sid)
     }).then(() => loadMessages()).catch(() => {});
-    broadcast('SCREEN_CARD:' + JSON.stringify({ id: sid, f: myName || '房主', time: tstr }));
   } else {
     try { guestConn.send('SCREEN_START:' + JSON.stringify({ id: sid, f: myName, time: tstr })); } catch (e) {}
-    pushMsg({ type: 'screen', status: 'live', ip: myName, id: sid, time: tstr });
   }
+  pushMsg({ type: 'screen', status: 'live', ip: myName, id: sid, time: tstr });
+  renderAll();
 }
 function stopScreenShare() {
   const wasSending = !!screenStream;
@@ -2640,8 +2643,7 @@ function stopScreenShare() {
     }
   }
   screenMsgId = '';
-  screenRole = '';
-  hideScreenPanel();
+  renderAll();      // 直播卡收掉（此时卡应已由 updateScreenMsg 改灰，这里兜底重画）
 }
 // 房主把收到的一路共享转给其余外网设备：访客发起的共享原来只有房主能看到，
 // 走这里之后所有外网设备都能看到（转发占用的是房主上行，和房主自己共享一样）
@@ -2663,47 +2665,17 @@ function acceptScreenCall(call) {
   // 同一时间只显示一路；有人换了共享源就切到新的那路
   if (recvCall) { try { recvCall.close(); } catch (e) {} }
   recvCall = call;
-  // 接收端（尤其是手机）同理：先让视频可见，再挂流播放
   call.on('stream', stream => {
-    screenRecvStream = stream;   // 房主留一份：后来点「观看共享」的设备从这里补推
-    showScreenPanel('recv');
-    attachStream(stream, true);
+    screenRecvStream = stream;   // 房主留一份：后来加入的设备从这里补推
+    renderAll();                 // 画面挂到聊天流里的直播卡上
     relayScreenToOthers(stream, call.peer);
   });
   call.on('close', () => {
     if (recvCall === call) recvCall = null;
-    screenRecvStream = null;     // 流跟着这条呼叫走：断了之后观看要走「重新呼叫」
-    if (screenRole === 'recv') { screenRole = ''; hideScreenPanel(); }
+    screenRecvStream = null;     // 流跟着这条呼叫走：断了之后要走「重新呼叫」
     stopScreenRelay();
+    renderAll();
   });
-}
-
-// 点历史卡上的「观看共享」：共享还在进行时，让持有流的一端补推一路过来。
-// 共享发起方是房主 → 房主直接呼叫；发起方是某台访客 → 房主把收到的那路流
-// 再呼叫一次（转发），自己已经关掉画面的房主则请共享方重新呼叫。
-function watchScreen(mid) {
-  const m = findScreenMsg(mid);
-  if (!m || m.status === 'ended') { notify('该次共享已经结束'); return; }
-  if (screenStream) { toast('你正在共享屏幕'); return; }
-  if (screenRole === 'recv' && screenSlot.classList.contains('show')) return;   // 已经在看
-  if (!canP2P()) {
-    notify(isLanClient ? '局域网访问不支持观看共享' : '还没有建立直连，无法观看共享');
-    return;
-  }
-  if (MODE === 'host') {
-    if (screenStream || screenRecvStream) {
-      // 流在自己手上（自己是共享方，或正替访客转发）：直接呼叫自己看
-      // 房主本来就开着面板时不会走到这里（上面已 return）
-      notify('共享画面已在观看');
-      return;
-    }
-    const sharer = hostList().find(x => x.name === m.ip);
-    if (sharer) { try { sharer.conn.send('SCREEN_RECALL'); } catch (e) {} }
-    else notify('共享的设备已不在线');
-    return;
-  }
-  try { guestConn.send('SCREEN_WATCH'); }
-  catch (e) { notify('发送观看请求失败'); }
 }
 
 // ===== 按需下载（访客端）：⬇ 按钮 → 向房主要文件本体 → 存到下载目录 =====
@@ -3802,7 +3774,9 @@ function resetToGate() {
   document.getElementById('wxTip').style.display = 'none';
   showGuestTip('');
   setGuestProgress(-1);
-  hideScreenPanel();
+  // 回入口页：收掉手上的共享画面和连接
+  if (recvCall) { try { recvCall.close(); } catch (e) {} recvCall = null; }
+  screenRecvStream = null;
   // 邀请链接带来的 ?room= 也要清掉，否则刷新又会自动连回去
   try { history.replaceState(null, '', location.pathname); } catch (e) {}
   renderAll();
