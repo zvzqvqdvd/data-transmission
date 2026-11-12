@@ -357,7 +357,7 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   display: flex; align-items: center;
   background: var(--surface); border: 1px solid var(--line);
   border-radius: var(--r-md); padding: 12px 14px;
-  width: min(300px, 100%); text-decoration: none; color: inherit;
+  width: 340px; max-width: 100%; text-decoration: none; color: inherit;
   position: relative; box-shadow: var(--sh1);
   transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
   cursor: pointer;
@@ -376,6 +376,20 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 .file-info { flex: 1; min-width: 0; }
 .file-name { font-size: 13.5px; font-weight: 500; word-break: break-all; line-height: 1.4; }
 .file-size { font-size: 11.5px; color: var(--t3); margin-top: 3px; }
+
+/* 下载按钮：自己画的 SVG，所有设备长得一样（⬇ emoji 在 iOS / 安卓 / Windows 上
+   分别是三种形状，还会被系统上色）。放在卡片右侧，点它和点卡片是同一个动作。 */
+.file-dl {
+  flex: 0 0 auto; width: 30px; height: 30px; margin-left: 10px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--brand-line); border-radius: 9px;
+  background: var(--brand-soft); color: var(--brand-700);
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+  transition: background .15s ease, border-color .15s ease, color .15s ease, transform .15s ease;
+}
+.file-dl svg { display: block; }
+.file-dl:hover { background: var(--brand); border-color: var(--brand); color: #fff; }
+.file-dl:active { transform: scale(.93); }
 
 /* 文件卡片下方的拉取进度条（访客端） */
 .pull-wrap { display: none; margin-top: 7px; }
@@ -921,16 +935,29 @@ body.fs-locked { overflow: hidden; }
 .side-info > #guestGate, .side-info > #waitBar { text-align: left; }
 
 @media (max-width: 1099px) {
+  /* 窄屏：卡片横向滑动，一张一张看。
+     宽度按视口算而不是写死 320px——写死的时候，390 宽的机器上
+     左边「房间说明」按钮 + 右边 320 的卡片就直接顶出屏幕，房间号卡片被切掉一半。
+     右边留出一小截下一张卡的边，既是「还能往右滑」的提示，也保证当前这张完整可见。 */
   .side-info {
     flex-direction: row; align-items: flex-start; gap: 10px;
-    padding: 10px 20px 0; overflow-x: auto; overscroll-behavior-x: contain;
+    padding: 10px 12px 0; overflow-x: auto; overscroll-behavior-x: contain;
     scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    /* 关掉滚动锚定：卡片是后出现的（进房后 guestGate 才 display:block），
+       Chrome 为了「保持可见内容不动」会自动往右补偿，结果一进房整条
+       就被顶到最右边，第一张卡左半边跑到屏幕外——看起来就是溢出。 */
+    overflow-anchor: none;
   }
   .side-info::-webkit-scrollbar { display: none; }
-  .side-info > * { flex: 0 0 auto; margin: 0 !important; width: min(320px, 82vw); }
-  .side-info > .room-info { width: auto; }
-  .side-info > .room-info .room-info-btn { width: 100%; height: 100%; white-space: nowrap; }
-  #waitBar { width: min(360px, 86vw); }
+  .side-info > * {
+    flex: 0 0 auto; margin: 0 !important;
+    width: min(calc(100vw - 64px), 380px);
+  }
+  /* 「房间说明」只是个小按钮，排到卡片后面去：排在第一位会把第一张卡挤出屏幕 */
+  .side-info > .room-info { order: 20; width: auto; }
+  .side-info > .room-info .room-info-btn { width: auto; height: 34px; padding: 0 14px; white-space: nowrap; }
+  #waitBar { width: min(calc(100vw - 64px), 380px); }
 }
 
 /* 宽屏：右侧固定信息栏 */
@@ -973,7 +1000,7 @@ body.fs-locked { overflow: hidden; }
   .topbar { height: 52px; padding: 0 14px; }
   .topbar-sub { display: none; }
   .side-info { padding: 8px 12px 0; gap: 8px; }
-  .side-info > * { width: min(300px, 84vw); }
+  .side-info > * { width: min(calc(100vw - 56px), 380px); }
   #roomCard, #p2pBanner, #lanBanner, #guestGate { padding: 12px; }
   .screen-card, .screen-card.live { width: 100%; }
   .sc-video { max-height: 42vh; }

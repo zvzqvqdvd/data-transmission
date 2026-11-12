@@ -227,18 +227,26 @@ function renderMsg(msg) {
     }
   } else {
     // 文件消息：一律一张文件卡片，不区分图片（11-11 定稿：图片预览整体下线）。
-    // 卡片上不放下载图标（⬇ 在手机 / 电脑 / iOS 上渲染不一致），
-    // 点卡片本体就是下载：房主/局域网走本机 HTTP，外网访客走点对点从房主拉取。
+    // 卡片右侧带一个自己画的下载按钮：点卡片、点按钮是同一个动作，
+    // 按钮用内联 SVG 而不是 ⬇ emoji——emoji 在手机 / 电脑 / iOS 上是三种形状。
     const nm = esc(msg.name), sz = esc(msg.size || '');
     const ext = String(msg.name || '').split('.').pop().toUpperCase().slice(0, 4);
     const inner = '<div class="file-icon">' + esc(ext) + '</div>' +
       '<div class="file-info"><div class="file-name">' + nm + '</div>' +
       '<div class="file-size">' + sz + '</div></div>';
+    const dlSvg = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"' +
+      ' stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M12 3.6v10.2"/><path d="M7.7 10 12 14.3 16.3 10"/><path d="M4.6 18.6h14.8"/></svg>';
     if (MODE === 'guest' && msg.id) {
-      bubble = '<div class="file-card" title="点击下载" onclick="pullFile(\'' + esc(msg.id) + '\')">' + inner + '</div>';
+      const act = 'pullFile(\'' + esc(msg.id) + '\')';
+      bubble = '<div class="file-card" title="点击下载" onclick="' + act + '">' + inner +
+        '<button type="button" class="file-dl" title="下载" aria-label="下载"' +
+        ' onclick="event.stopPropagation();' + act + '">' + dlSvg + '</button></div>';
     } else {
       bubble = '<div class="file-card" title="点击下载" data-name="' + esc(msg.name) + '" ' +
-        'onclick="downloadLocal(this)">' + inner + '</div>';
+        'onclick="downloadLocal(this)">' + inner +
+        '<button type="button" class="file-dl" title="下载" aria-label="下载"' +
+        ' onclick="event.stopPropagation();downloadLocal(this.parentNode)">' + dlSvg + '</button></div>';
     }
   }
   // 访客文件卡片正下方的下载进度条（平时隐藏，下载中由 txRender 填充）
@@ -268,7 +276,7 @@ function downloadLocal(btn) {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  toast('开始下载：' + name);
+  // 开始下载不弹提示：浏览器自己就有下载条，再弹一次是多余的
 }
 
 // 换了（重）连接：上一条通道上的拉取全都作废，队列跟着清空，
@@ -589,6 +597,24 @@ function handleData(data, ctx) {
       renderAll();
       return;
     }
+    // 探活：房主每 5 秒敲一次，收到就回 PONG。手机切后台、进程被系统冻结时
+    // 数据通道看着还是开的，但对面已经不响应了，只有主动敲才知道人还在不在。
+    if (data === 'PING') {
+      try { if (ctx && ctx.conn) ctx.conn.send('PONG'); } catch (e) {}
+      return;
+    }
+    if (data === 'PONG') {
+      const e = ctx && hostConns.get(ctx.id);
+      if (e) { e.lastPong = Date.now(); e.missed = 0; }
+      return;
+    }
+    // 房主把我们自己的地址回告过来。外网访客自己从 ICE 里只能读到候选地址，
+    // 手机浏览器上 host 候选会被 mDNS 混淆成 xxx.local，读不出真 IP；
+    // 房主那边看到的才是准的（和侧栏设备清单同一份，两边能对号）。
+    if (data.startsWith('SELFIP:')) {
+      if (MODE === 'guest') setSelfIp(data.slice(7));
+      return;
+    }
     // 头像编号表：房主按加入顺序分配，随广播同步给每台外网设备
     if (data.startsWith('NUMS:')) {
       try {
@@ -720,8 +746,8 @@ function handleData(data, ctx) {
           mid: meta.mid || '',
           from: meta.f || (ctx && ctx.name) || '外网设备'
         });
-        if (MODE === 'guest') { txStart(meta.name, meta.size, meta.mid || ''); setStatus('接收中: ' + meta.name); }
-        else if (!isLanClient) { showHostHint('正在接收：' + meta.name + '（' + fmtSize(meta.size) + '）'); }
+        // 收文件只留进度（访客是卡片下方的进度条），不再往状态行/提示行推文字
+        if (MODE === 'guest') txStart(meta.name, meta.size, meta.mid || '');
       } catch (e) { recvBuf.delete(key); }
     } else if (data.startsWith('FILE_END:')) {
       const buf = recvBuf.get(key);
@@ -759,15 +785,8 @@ function appendChunk(key, ab) {
   if (buf.mid && pullInFlight.has(buf.mid)) pullStartAt.set(buf.mid, Date.now());
   if (MODE === 'guest') {
     txTick(buf.received, buf.size);
-  } else if (!isLanClient) {
-    // 房主页面没有进度条，就在提示行里报一下；400ms 一次，别把界面刷爆
-    const now = Date.now();
-    if (!buf._t || now - buf._t > 400) {
-      buf._t = now;
-      showHostHint('正在接收：' + buf.name + ' · ' +
-        (buf.size ? (buf.received / buf.size * 100).toFixed(0) + '%' : fmtSize(buf.received)));
-    }
   }
+  // 房主端不报「正在接收 x%」：收文件是后台动作，进度看聊天里的卡片就行
 }
 // 收全了：拼成 Blob 交给上层（房主落盘 / 访客存下载）
 function finishRecv(key, buf) {
@@ -1215,7 +1234,6 @@ async function onFileReceived(blob, name, mid, from) {
     else pushMsg({ type: 'file', name: name, size: fmtSize(blob.size), url: url,
                    ip: from || '外网设备', id: mid || uid() });
     txEnd();
-    setStatus(name + ' 已下载', true);
     saveBlob(url, name);
     if (mid) { pullInFlight.delete(mid); pullStartAt.delete(mid); }
     pumpPullQueue();
@@ -1230,7 +1248,7 @@ async function onFileReceived(blob, name, mid, from) {
     const r = await fetch(API + '/upload', { method: 'POST', body: fd });
     const d = await r.json();
     if (!d.ok) throw new Error(d.msg || '保存失败');
-    toast('已收到 ' + ((d.names && d.names[0]) || name) + '（存到 接收文件\\）' + (from ? '，来自 ' + from : ''));
+    // 收到文件不弹提示：消息列表里会出现这张卡，落盘位置固定是「接收文件」
     loadMessages();
   } catch (e) { toast('保存失败: ' + e.message); }
   updateHostRoomHint();
@@ -1715,7 +1733,7 @@ function startHostPeer(roomCode) {
     hostSeq++;
     const id = 'c' + hostSeq;
     const entry = { conn: c, name: '', seq: hostSeq, peerId: c.peer || '', ip: '', dev: mdDev, metaNick: mdNick,
-                    registered: false, regTimer: null };
+                    registered: false, regTimer: null, lastPong: Date.now(), missed: 0, createdAt: Date.now() };
     hostConns.set(id, entry);
     showHostHint(HOST_CONNECT_HINT);
     c.on('open', () => {
@@ -1737,15 +1755,10 @@ function startHostPeer(roomCode) {
     c.on('close', () => {
       const n = entry.name || ('访客' + entry.seq);
       if (entry.regTimer) { clearTimeout(entry.regTimer); entry.regTimer = null; }
-      // 只有真正进过房间的设备才算「离开」；半路断的从来没进过，不打扰房主
-      const wasIn = entry.registered && hostConns.has(id);
       hostConns.delete(id);
       recvBuf.delete(id);
       clearConnectHint();   // 握手中的连接断了也收提示，别让「正在建立直连」挂满 10 秒
-      if (wasIn) {
-        broadcast('NOTE:' + JSON.stringify({ t: '有设备离开了房间' }));
-        toast('有设备离开了房间');
-      }
+      // 进出房间不再广播提示：设备来去本来就该安静，人数在侧栏随时能看到
       sendPeers();
       updateNums();   // 编号不回收：人走了号留着，重连回来还是原来的数字
       refreshReady();
@@ -1818,6 +1831,15 @@ function registerGuest(ctx, nick, dev) {
   if (!e || e.registered) return;
   const did = dev || e.dev || '';
   e.dev = did;
+  // 同一台设备重连时，旧连接往往还挂着：手机切后台、上划杀掉浏览器，
+  // 对端连关闭帧都发不出来，close 事件永远不会到。设备 ID 一样就是同一台机器，
+  // 新连接进房的同时把旧的摘掉，清单里就不会出现两条「设备 2」。
+  if (did) {
+    for (const [oid, ox] of hostConns) {
+      if (oid === ctx.id || !ox || !ox.registered || ox.dev !== did) continue;
+      dropHostConnQuiet(oid);
+    }
+  }
   e.registered = true;
   if (e.regTimer) { clearTimeout(e.regTimer); e.regTimer = null; }
   clearConnectHint();   // 这台设备已进房，握手指示该收了（还有别的在握手中则先留着）
@@ -1831,8 +1853,6 @@ function registerGuest(ctx, nick, dev) {
   try { e.conn.send('WELCOME:' + JSON.stringify({ name: name, proto: PROTOCOL })); } catch (err) {}
   pushHistoryTo(e.conn);
   updateNums();   // 新设备入房：编号表跟着变（重连设备沿用原号）
-  broadcast('NOTE:' + JSON.stringify({ t: '有设备加入了房间' }), name);
-  toast('有设备加入了房间');
   sendPeers();
   refreshReady();
   renderAll();
@@ -1905,6 +1925,10 @@ function resolvePeerIp(entry, left) {
   readPeerIp(entry).then(ip => {
     if (ip) {
       if (entry.ip !== ip) { entry.ip = ip; updateHostRoomHint(); reportDevices(); }
+      // 把自己看到的地址回告对方：外网访客在自己的页面上读不出真 IP
+      // （手机浏览器把 host 候选混淆成 mDNS 名），但房主这边是准的。
+      // 推过去之后访客卡片上就能显示「本机 IP」，和房主侧栏的设备清单对得上。
+      sendSelfIp(entry, ip);
     } else if (tries > 0) {
       setTimeout(() => resolvePeerIp(entry, tries - 1), 1500);
     }
@@ -1914,6 +1938,14 @@ function resolvePeerIp(entry, left) {
   detectRelay(entry).then(r => {
     if (entry.relay !== r) { entry.relay = r; renderMembers(); updateHostRoomHint(); }
   });
+}
+
+// 地址只推一次：重复推会让访客卡片闪，reconnect 后 entry 是新的会重推
+function sendSelfIp(entry, ip) {
+  if (!entry || !ip || !entry.conn || !entry.conn.open) return;
+  if (entry.selfIpSent === ip) return;
+  entry.selfIpSent = ip;
+  try { entry.conn.send('SELFIP:' + ip); } catch (e) {}
 }
 
 // 这条连接走的是直连还是 TURN 中继：看被选中的候选对里本端候选的类型
@@ -2020,8 +2052,61 @@ function dropHostConnById(id, byPeer) {
   if (!byPeer) { try { e.conn.send('BYE'); } catch (err) {} }
   setTimeout(() => { try { e.conn.close(); } catch (err) {} }, 80);
   stopScreenShare();
-  broadcast('NOTE:' + JSON.stringify({ t: '有设备离开了房间' }));
   sendPeers();
+  refreshReady();
+  renderAll();
+}
+
+// ===== 连接体检：把「人已经走了、清单还挂着」的鬼影清掉 =====
+// close 事件不能全指望：手机切后台、上划杀掉浏览器、系统冻结进程，
+// 这些情况对端连关闭帧都发不出来，房主这边永远等不到 close，
+// 只能刷新页面才干净——这就是「显示已连接但其实早走了」的根因。
+// 所以房主每 5 秒主动扫一遍：
+//   1) 数据通道已关 / 底层 PeerConnection 已经 failed 或 closed → 立刻摘掉
+//   2) 通道还开着但 12 秒没回 PONG（每轮敲一次 PING）→ 记一次，连续两次摘掉
+// 阈值有意放宽：弱网下短暂卡顿不该把人踢掉，约 15 秒无响应才判定离开。
+const SCAN_MS = 5000;
+const PONG_TIMEOUT_MS = 12000;
+let connScanTimer = null;
+
+function startConnScan() {
+  if (MODE !== 'host' || isLanClient || connScanTimer) return;
+  connScanTimer = setInterval(scanHostConns, SCAN_MS);
+}
+function scanHostConns() {
+  if (MODE !== 'host' || isLanClient || !hostConns.size) return;
+  const now = Date.now();
+  for (const [id, e] of hostConns) {
+    if (!e || !e.conn) { hostConns.delete(id); continue; }
+    // 刚建连、握手还没走完（open 还没触发）的先放过，否则慢网下会被误杀
+    if (now - (e.createdAt || 0) < 20000 && !e.registered) {
+      try { e.conn.send('PING'); } catch (err) {}
+      continue;
+    }
+    const pc = e.conn.peerConnection;
+    const pcState = pc ? (pc.connectionState || pc.iceConnectionState || '') : '';
+    if (!e.conn.open || pcState === 'closed' || pcState === 'failed') {
+      dropStaleConn(id);
+      continue;
+    }
+    if (now - (e.lastPong || 0) > PONG_TIMEOUT_MS) {
+      e.missed = (e.missed || 0) + 1;
+      if (e.missed >= 2) { dropStaleConn(id); continue; }
+    }
+    try { e.conn.send('PING'); } catch (err) {}
+  }
+}
+// 静默摘掉一条已失效的连接：不广播、不弹提示，只是让清单回到真实状态
+function dropStaleConn(id) {
+  const e = hostConns.get(id);
+  if (!e) return;
+  if (e.regTimer) { clearTimeout(e.regTimer); e.regTimer = null; }
+  const c = e.conn;
+  hostConns.delete(id);
+  recvBuf.delete(id);
+  setTimeout(() => { try { c.close(); } catch (err) {} }, 60);
+  sendPeers();
+  updateNums();
   refreshReady();
   renderAll();
 }
@@ -2032,6 +2117,7 @@ function startHostUI(fromWeb, lanUrl, lanClient) {
   // 但它不是房主，名字要算自己的一台设备，不能也叫「房主」
   isLanClient = !!lanClient;
   startHostHeartbeat();   // 只有真房主页面会生效（局域网设备页面自动跳过）
+  startConnScan();        // 同上：只有房主需要盯着「谁还在」
   // 重新开房：把上一次「已解散」的状态清干净，否则界面会立刻又退回入口页
   roomClosed = false;
   applyDevicePrivacy();   // 局域网设备不是房主：设备数 / IP 清单不显示
@@ -2646,13 +2732,9 @@ async function sendAll() {
     // 失败的项保留，方便点右侧 ↻ 重试
     pendingFiles = pendingFiles.filter(x => x.status !== 'done');
     renderPending();
-    if (!failed) {
-      toast(done > 1 ? ('已发送 ' + done + ' 个文件') : '发送完成');
-      // 房主自己上传完的文件就在本机：说清楚存哪了
-      if (MODE === 'host' && done === 1 && items[0].savedName) {
-        toast('已保存到 接收文件\\' + items[0].savedName);
-      }
-    } else if (done) {
+    // 发送完成不弹提示：成没成看聊天里那张卡就知道，成功的项直接从列表消失。
+    // 只有失败才弹——那是要用户处理的，不是「通知」。
+    if (failed && done) {
       toast('部分文件发送失败，点失败项右侧的 ↻ 重试');
     }
   }
