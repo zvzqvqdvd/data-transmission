@@ -706,26 +706,36 @@ body.fs-locked { overflow: hidden; }
 #gateView.show { display: flex; }
 .gate-card {
   width: 100%; max-width: 400px; background: var(--surface);
-  border-radius: var(--r-xl); padding: 34px 28px 22px;
+  border-radius: var(--r-xl); padding: 24px 26px 16px;
   border: 1px solid rgba(16, 24, 40, .05);
   box-shadow: 0 24px 64px -20px rgba(16, 24, 40, .22), 0 2px 6px rgba(16, 24, 40, .04);
   animation: gateIn .3s cubic-bezier(.2, .8, .3, 1);
 }
 @keyframes gateIn { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: none; } }
 .gate-logo {
-  width: 56px; height: 56px; border-radius: 17px; margin: 0 auto 16px;
+  width: 44px; height: 44px; border-radius: 14px; margin: 0 auto 12px;
   background: linear-gradient(140deg, #0ACB69 0%, var(--brand) 45%, var(--brand-700) 100%);
   display: flex; align-items: center; justify-content: center;
-  box-shadow: 0 10px 24px -8px rgba(7, 193, 96, .6);
+  box-shadow: 0 8px 20px -8px rgba(7, 193, 96, .6);
 }
-.gate-logo svg { width: 27px; height: 27px; }
-.gate-title { text-align: center; font-size: 20px; font-weight: 600; letter-spacing: .2px; }
-.gate-sub { text-align: center; font-size: 12.5px; color: var(--t3); margin-top: 6px; line-height: 1.7; }
+.gate-logo svg { width: 22px; height: 22px; }
+.gate-title { text-align: center; font-size: 19px; font-weight: 600; letter-spacing: .2px; }
+.gate-sub { text-align: center; font-size: 12px; color: var(--t3); margin-top: 4px; line-height: 1.7; }
 
-.gate-list { margin-top: 24px; display: flex; flex-direction: column; gap: 10px; }
+/* 内容区：三块视图（选择 / 输入房间码 / 下载程序）叠在同一格里 ——
+   用 grid 同格叠放，格子高度天然等于最高那块，窗口怎么变都不用重新量。
+   隐藏用 visibility 而不是 display：隐藏的那块仍然参与撑高，
+   这样切屏、点按钮、冒提示都不会让卡片长高变矮。 */
+.gate-body { margin-top: 14px; }
+.gate-views { display: grid; }
+.gate-view { grid-area: 1 / 1; align-self: center; visibility: hidden; }
+.gate-view.on { visibility: visible; }
+
+.gate-list { display: flex; flex-direction: column; gap: 8px; }
 .gate-btn {
-  display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
-  padding: 15px 16px; border-radius: var(--r-lg);
+  position: relative; overflow: hidden;
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  padding: 12px 14px; border-radius: var(--r-lg);
   border: 1px solid var(--line-2); background: var(--surface);
   cursor: pointer; font-family: inherit;
   transition: border-color .16s ease, background .16s ease, box-shadow .16s ease, transform .1s ease;
@@ -733,6 +743,8 @@ body.fs-locked { overflow: hidden; }
 .gate-btn:hover { border-color: var(--brand-line); background: var(--brand-soft); }
 .gate-btn:active { transform: scale(.995); }
 .gate-btn:disabled { opacity: .6; cursor: default; transform: none; }
+/* 正在创建时只是不能点，不该整块发灰：进度文字要看得清 */
+.gate-btn.busy:disabled { opacity: 1; }
 .gate-btn.primary {
   background: linear-gradient(140deg, #0ACB69 0%, var(--brand) 50%, #06A852 100%);
   border-color: transparent;
@@ -740,15 +752,16 @@ body.fs-locked { overflow: hidden; }
 }
 .gate-btn.primary:hover { background: linear-gradient(140deg, #12D473 0%, #07C860 50%, #06AC55 100%); }
 .gate-ico {
-  width: 36px; height: 36px; border-radius: 11px; flex-shrink: 0;
-  background: var(--brand-soft); color: var(--brand-700); font-size: 17px;
+  width: 32px; height: 32px; border-radius: 10px; flex-shrink: 0;
+  background: var(--brand-soft); color: var(--brand-700); font-size: 16px;
   border: 1px solid var(--brand-line);
   display: flex; align-items: center; justify-content: center;
 }
 .gate-btn.primary .gate-ico { background: rgba(255, 255, 255, .18); color: #fff; border-color: rgba(255, 255, 255, .22); }
 .gate-txt { display: flex; flex-direction: column; min-width: 0; }
-.gate-txt b { font-size: 15px; font-weight: 600; letter-spacing: .1px; }
-.gate-txt i { font-style: normal; font-size: 11.5px; color: var(--t3); margin-top: 2px; }
+.gate-txt b { font-size: 14px; font-weight: 600; letter-spacing: .1px; line-height: 19px; }
+/* 行高写死 16px：忙碌时这行要换成进度文字，两行同高按钮才不会变高 */
+.gate-txt i { font-style: normal; font-size: 11px; color: var(--t3); margin-top: 1px; line-height: 15px; }
 .gate-btn.primary .gate-txt b { color: #fff; }
 .gate-btn.primary .gate-txt i { color: rgba(255, 255, 255, .85); }
 
@@ -763,15 +776,18 @@ body.fs-locked { overflow: hidden; }
 }
 @keyframes gateSpin { to { transform: rotate(360deg); } }
 .gate-btn.busy .gate-txt > i { display: none; }
-.gate-prog { display: none; margin-top: 9px; }
+/* 进度只占副标题那一行、进度条压在按钮底边（绝对定位）：
+   按钮高度不因为「开始创建」而变，卡片也就不会跟着长高 */
+.gate-prog { display: none; margin-top: 1px; }
 .gate-btn.busy .gate-prog { display: block; }
-.gate-prog-line { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.gate-prog-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 15px; }
 .gate-prog-line > span {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 5px;
-  font-size: 10.5px; line-height: 1.45; color: rgba(255, 255, 255, .92);
+  display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; min-width: 0;
+  font-size: 10.5px; line-height: 16px; color: rgba(255, 255, 255, .92);
+  white-space: nowrap; overflow: hidden;
 }
 .gate-prog-line > b {
-  flex-shrink: 0; font-size: 10.5px; font-weight: 600; color: #fff;
+  flex-shrink: 0; margin-left: auto; font-size: 10.5px; font-weight: 600; color: #fff;
   font-variant-numeric: tabular-nums;
 }
 .gp-done { color: #fff; }
@@ -779,12 +795,11 @@ body.fs-locked { overflow: hidden; }
 .gp-wait { color: rgba(255, 255, 255, .55); }
 .gp-sep { color: rgba(255, 255, 255, .4); }
 .gate-prog-bar {
-  display: block; height: 4px; margin-top: 7px; border-radius: 2px;
-  background: rgba(255, 255, 255, .28); overflow: hidden;
+  position: absolute; left: 0; right: 0; bottom: 0; display: block; height: 3px;
+  background: rgba(255, 255, 255, .22); overflow: hidden;
 }
-.gate-prog-fill { display: block; height: 100%; width: 0; border-radius: 2px; background: #fff; transition: width .22s ease; }
+.gate-prog-fill { display: block; height: 100%; width: 0; background: #fff; transition: width .22s ease; }
 
-#gateJoin { display: none; margin-top: 24px; }
 #gateRoom {
   width: 100%; padding: 14px; font-size: 19px; text-align: center;
   letter-spacing: 4px; text-transform: uppercase;
@@ -809,47 +824,36 @@ body.fs-locked { overflow: hidden; }
 }
 .gate-row .gate-back:hover { background: var(--surface-2); border-color: var(--line-2); color: var(--t1); }
 
-#gateMsg { display: none; margin-top: 14px; padding: 11px 13px; border-radius: var(--r-md); font-size: 12.5px; line-height: 1.7; }
-#gateMsg.err { display: block; background: var(--danger-soft); border: 1px solid var(--danger-line); color: #C4292E; }
-#gateMsg.info { display: block; background: var(--warn-soft); border: 1px solid var(--warn-line); color: var(--warn); }
+/* 提示和底部那一栏叠在同一格里：谁高用谁。隐藏用 visibility，
+   隐藏的那块照样撑格子，所以出提示、清提示卡片高度一分都不动 */
+#gateMsg {
+  grid-area: 1 / 1; visibility: hidden;
+  display: flex; align-items: center; justify-content: center;
+  padding: 6px 10px; border-radius: var(--r-md);
+  font-size: 11.5px; line-height: 1.5; text-align: center;
+}
+#gateMsg.err { visibility: visible; background: var(--danger-soft); color: #C4292E; }
+#gateMsg.info { visibility: visible; background: transparent; color: var(--t3); }
 
-/* 本机程序没在跑：下载程序 / 启动后重试 */
-.gate-fix {
-  margin-top: 12px; padding: 12px;
-  border-radius: var(--r-md); background: var(--surface-2); border: 1px solid var(--line);
-}
-.gate-fix-dl {
-  display: flex; align-items: center; justify-content: center; gap: 7px;
-  height: 44px; border-radius: var(--r-md); background: var(--brand); color: #fff;
-  font-size: 14px; font-weight: 500; text-decoration: none;
-  box-shadow: 0 6px 16px -8px rgba(7, 193, 96, .7);
-}
-.gate-fix-dl:active { background: var(--brand-600); }
-.gate-fix-retry {
-  width: 100%; height: 40px; margin-top: 8px; border-radius: var(--r-md);
-  border: 1px solid var(--line-2); background: var(--surface); color: var(--t1);
-  font-size: 13px; font-family: inherit; cursor: pointer;
-}
-.gate-fix-retry:active { background: var(--surface-2); }
-.gate-fix-tip { margin-top: 9px; font-size: 11px; line-height: 1.65; color: var(--t3); text-align: center; }
 
 /* 免责声明：复选框一行 */
-.gate-disc { margin-top: 18px; }
+.gate-disc { margin-top: 12px; }
 .agree-check {
-  display: flex; align-items: center; justify-content: center; gap: 8px;
-  font-size: 12.5px; color: var(--t2); cursor: pointer; user-select: none; position: relative;
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  font-size: 12px; color: var(--t2); cursor: pointer; user-select: none; position: relative;
   line-height: 1.6;
 }
 .agree-check input[type=checkbox] { position: absolute; opacity: 0; pointer-events: none; width: 0; height: 0; }
+/* 圆角方框 + 细勾：勾的笔画收细、重心上提一点，才不会显得往下坠 */
 .gd-box {
-  flex: none; width: 18px; height: 18px; border-radius: 50%;
+  flex: none; width: 17px; height: 17px; border-radius: 5px;
   border: 1.5px solid var(--line-2); background: var(--surface);
   display: inline-flex; align-items: center; justify-content: center;
   transition: background .18s ease, border-color .18s ease;
 }
 .gd-box::after {
-  content: ''; width: 9px; height: 5px;
-  border-left: 2px solid #fff; border-bottom: 2px solid #fff;
+  content: ''; width: 8px; height: 4px; margin-top: -1.5px;
+  border-left: 1.8px solid #fff; border-bottom: 1.8px solid #fff;
   transform: rotate(-45deg); opacity: 0; transition: opacity .15s ease;
 }
 .agree-check input:checked + .gd-box { background: var(--brand); border-color: var(--brand); }
@@ -858,19 +862,70 @@ body.fs-locked { overflow: hidden; }
 .gd-link { color: var(--brand-700); cursor: pointer; text-decoration: none; }
 .gd-link:hover { text-decoration: underline; }
 
-/* 常驻下载入口 */
-.gate-dl-line { margin-top: 16px; text-align: center; font-size: 12px; color: var(--t4); }
-.gate-dl-line a {
-  color: var(--t2); text-decoration: none;
+/* 底部一栏：两句引导挨着放，仓库入口跟在第二句后面。
+   和 #gateMsg 叠在同一格里（grid 同格），显示哪块都不改卡片高度 */
+.gate-foot-wrap { display: grid; margin-top: 12px; }
+.gate-foot {
+  grid-area: 1 / 1;
+  text-align: center; font-size: 11px; color: var(--t4);
+  line-height: 1.7; border-top: 1px solid var(--line); padding-top: 9px;
+}
+.gate-foot .gf-a { color: var(--t3); }
+/* 出提示时整栏让位给 #gateMsg：只切 visibility，格子高度不变 */
+.gate-foot.hide { visibility: hidden; }
+.gf-dot { margin: 0 3px; color: var(--t4); }
+.gf-gh {
+  color: var(--t4); text-decoration: none;
   border-bottom: 1px solid var(--line-2); padding-bottom: 1px;
   transition: color .16s ease, border-color .16s ease;
 }
-.gate-dl-line a:hover { color: var(--brand-700); border-color: var(--brand-line); }
-.gate-dl-sep { margin: 0 8px; color: var(--t4); }
-.gate-foot {
-  text-align: center; font-size: 11px; color: var(--t4); margin-top: 18px;
-  line-height: 1.75; border-top: 1px solid var(--line); padding-top: 14px;
+.gf-gh:hover { color: var(--brand-700); border-color: var(--brand-line); }
+
+/* ===== 创建房间失败：卡片内切换到「下载程序」视图 =====
+   与「加入房间」同一套切换方式：标题换掉、按钮区换一块、底栏给「返回」。
+   不弹窗、不遮罩；这一屏换进换出，卡片的长宽都不变。 */
+.gdl-main {
+  position: relative; display: flex; align-items: center; justify-content: center;
+  width: 100%; height: 52px; padding: 0;
+  border: 1px solid transparent; border-radius: var(--r-lg);
+  background: var(--brand); color: #fff;
+  font-family: inherit; font-size: 15px; font-weight: 600; letter-spacing: .2px;
+  cursor: pointer; overflow: hidden;
+  box-shadow: 0 10px 22px -12px rgba(7, 193, 96, .85);
+  transition: background .16s ease, color .16s ease, border-color .16s ease;
 }
+.gdl-main:hover { background: var(--brand-600); }
+.gdl-main:active { background: var(--brand-700); }
+.gdl-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: rgba(255, 255, 255, .24); }
+.gdl-fill::after { content: ''; position: absolute; left: 0; bottom: 0; width: 100%; height: 3px; background: #fff; }
+.gdl-label { position: relative; display: flex; align-items: center; gap: 9px; }
+/* 体积徽标宽度写死：网络慢时先显示「…」，探到真值再换成「8.8 MB」，
+   宽度不变 → 按钮里的文字永远不会被推着左右跳。（值本身由 HEAD 实时取，绝不写死） */
+.gdl-label em {
+  font-style: normal; font-size: 12px; font-weight: 400;
+  display: inline-block; box-sizing: border-box; min-width: 62px; text-align: center; white-space: nowrap;
+  background: rgba(255, 255, 255, .26); border-radius: 5px; padding: 2px 6px;
+  font-variant-numeric: tabular-nums;
+  transition: background .16s ease, color .16s ease, opacity .16s ease;
+}
+/* 缓存中：变浅绿，进度就是按钮本身（底色填充 + 底边 3px 实线） */
+.gdl-main.busy { background: var(--brand-soft); border-color: var(--brand-line); color: var(--brand-700); cursor: default; box-shadow: none; }
+.gdl-main.busy:hover, .gdl-main.busy:active { background: var(--brand-soft); }
+.gdl-main.busy .gdl-fill { background: rgba(7, 193, 96, .13); }
+.gdl-main.busy .gdl-fill::after { background: var(--brand); }
+.gdl-main.busy .gdl-ar { visibility: hidden; }
+.gdl-main.busy .gdl-label em { background: var(--brand); color: #fff; }
+/* 缓存完成：已落盘 */
+.gdl-main.done { background: var(--brand-soft); border-color: var(--brand-line); color: var(--brand-700); box-shadow: none; }
+.gdl-main.done:hover, .gdl-main.done:active { background: var(--brand-soft); }
+.gdl-main.done .gdl-ar { visibility: hidden; }
+.gdl-main.done .gdl-label em { background: var(--brand); color: #fff; }
+
+/* 按钮下面不再挂说明行：状态全写在按钮本身，切到哪一态高度都一样 */
+#gateDl .gate-row { margin-top: 12px; }
+/* 底栏两个按钮平分：下载是唯一的绿色主按钮，这里都走描边，别抢焦点 */
+#gateDl .gate-row .gate-back { flex: 1 1 0; height: 42px; padding: 0; border-radius: var(--r-lg); font-size: 14px; }
+/* 下载视图里页脚换成「装好回来点重新创建」：只换字、不删行，卡片高度才不会缩 */
 
 /* 免责声明独立页 */
 .disc-page { position: fixed; inset: 0; z-index: 320; background: var(--bg); display: none; flex-direction: column; }

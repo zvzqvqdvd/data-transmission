@@ -96,26 +96,216 @@ function probeRoom(room, timeoutMs) {
 }
 
 // ===== 入口页：创建房间 / 加入房间 =====
+// 提示和底部那一栏叠在同一格里：只切 visibility，不切 display。
+// 隐藏的那块照样撑格子，所以出提示、清提示，卡片高度一分都不动。
 function gateMsg(text, kind) {
   const el = document.getElementById('gateMsg');
+  const foot = document.querySelector('.gate-foot');
   el.className = kind || 'err';
   el.textContent = text;
+  // 同格叠着：提示上来，说明就藏起来，免得浅红底色压不干净两层字
+  if (foot) foot.classList.add('hide');
 }
 function gateClearMsg() {
   const el = document.getElementById('gateMsg');
+  const foot = document.querySelector('.gate-foot');
   el.className = '';
   el.textContent = '';
-  gateFixShow(false);
+  if (foot) foot.classList.remove('hide');
 }
-// 本机程序没在跑时的补救引导：下载程序 / 启动好了再试一次。
-// 只在「程序不在」这类错误上出现——房间已满、网络问题给下载链接也是误导。
-// 引导出来时把页脚那行常驻下载入口收掉，屏幕上只留一个下载按钮。
-function gateFixShow(on) {
-  const box = document.getElementById('gateFix');
-  if (box) box.style.display = on ? 'block' : 'none';
-  const line = document.querySelector('.gate-dl-line');
-  if (line) line.style.display = on ? 'none' : '';
+// 只换底部两行的字，不动结构 —— 仓库链接挂在第二行末尾，整块 innerHTML 重写会把它冲掉
+function setFoot(a, b) {
+  const fa = document.querySelector('.gate-foot .gf-a');
+  const fb = document.querySelector('.gate-foot .gf-b');
+  if (fa && a != null) fa.textContent = a;
+  if (fb && b != null) fb.textContent = b;
 }
+// ===== 卡片内视图切换 =====
+// 三块视图用 grid 叠在同一格里，只改 .on（= visibility），不改 display：
+// 隐藏的那块照样撑高度，所以换来换去卡片的长宽都不变。
+const GATE_VIEWS = ['gateChoices', 'gateJoin', 'gateDl'];
+function gateView(id) {
+  for (let i = 0; i < GATE_VIEWS.length; i++) {
+    const el = document.getElementById(GATE_VIEWS[i]);
+    if (el) el.classList.toggle('on', GATE_VIEWS[i] === id);
+  }
+}
+// ===== 创建房间失败：卡片内切到「下载程序」视图 =====
+// 和「加入房间」一样的方式：换标题、换卡片中间那块内容、底栏给「返回」。
+// 不弹窗、不遮挡页面。下载按钮自己就是进度条：fetch 流式缓存到 Blob，
+// 进度实时写在按钮上，缓存满 100% 再落盘（浏览器直接存进「下载」文件夹）。
+// 三行提示都压在 2 行内（每行 ≤20 字）：行数一变，卡片高度就会变
+// 缓存进度、完成、降级都写在按钮本身上，按钮下面不再挂说明行
+let DL_ABORT = null;
+let DL_STATE = '';              // '' 待下载 | 'busy' 缓存中 | 'done' 已落盘
+let DL_SIZE = 0;                // HEAD 探到的真实字节数；0 = 还不知道（绝不写死大小）
+
+function dlmEl(id) { return document.getElementById(id); }
+function fmtMB(n) {
+  if (!n) return '0 MB';
+  return (n / 1048576).toFixed(1) + ' MB';
+}
+// 徽标只换字、不动宽度（min-width 写死）：探测中「…」→ 真实大小，
+// 按钮里的文字位置一点都不会挪。拿不到大小时整块藏起来，白占的宽度照样留着。
+function dlmSizeText(t) {
+  const em = dlmEl('dlmSize');
+  if (!em) return;
+  em.textContent = t || '';
+  em.style.visibility = t ? '' : 'hidden';
+}
+// 程序体积跟着文件走：打开这一屏先 HEAD 一次拿 Content-Length，换成真值。
+// 拿不到（跨域被拦 / 断网）就把徽标藏起来，宁可空着也不显示一个会过期的数字。
+async function dlmProbeSize() {
+  const em = dlmEl('dlmSize');
+  if (!em) return;
+  if (DL_SIZE) { dlmSizeText(fmtMB(DL_SIZE)); return; }
+  dlmSizeText('…');
+  try {
+    const r = await fetch(downloadUrl(), { method: 'HEAD', cache: 'no-store' });
+    const n = parseInt(r.headers.get('content-length') || '0', 10) || 0;
+    if (n > 0) { DL_SIZE = n; dlmSizeText(fmtMB(n)); return; }
+  } catch (e) {}
+  dlmSizeText('');
+}
+// 进入下载视图前先记住卡片头部，返回时原样还回去（下载视图会换标题与页脚）
+let GATE_HDR = null;
+function gateSaveHdr() {
+  if (GATE_HDR) return;
+  const t = document.querySelector('.gate-title');
+  const s = document.querySelector('.gate-sub');
+  const f = document.querySelector('.gate-foot');
+  GATE_HDR = {
+    t: t ? t.textContent : '',
+    s: s ? s.textContent : '',
+    f: f ? f.innerHTML : '',
+    c: f ? f.className : ''
+  };
+}
+function gateRestoreHdr() {
+  if (!GATE_HDR) return;
+  const t = document.querySelector('.gate-title');
+  const s = document.querySelector('.gate-sub');
+  const f = document.querySelector('.gate-foot');
+  if (t) t.textContent = GATE_HDR.t;
+  if (s) s.textContent = GATE_HDR.s;
+  if (f) { f.innerHTML = GATE_HDR.f; f.className = GATE_HDR.c; }
+  GATE_HDR = null;
+}
+// 切到「本机程序不在」这一屏：和 gateShowJoin() 同一个套路
+function gateShowDl() {
+  if (JOIN_REQUIRED) { gateMsg('这个页面只能加入房间，创建房间请在本机双击运行「数据传输.exe」。', 'info'); return; }
+  gateSaveHdr();
+  const t = document.querySelector('.gate-title');
+  const s = document.querySelector('.gate-sub');
+  if (t) t.textContent = '创建房间需要本机程序';
+  if (s) s.textContent = '在这台电脑上运行「数据传输.exe」';
+  // 底部第一行换成「装好回来点重新创建」：只换字、不删行
+  setFoot('程序装好后回来点「重新创建」', null);
+  gateView('gateDl');
+  gateClearMsg();
+  dlmReset();
+  dlmProbeSize();
+}
+// 离开下载视图 / 关闭页面时，把还在跑的缓存请求停掉
+function dlmAbort() {
+  if (DL_ABORT) { try { DL_ABORT.abort(); } catch (e) {} DL_ABORT = null; }
+}
+function dlmHide() {
+  dlmAbort();
+  gateRestoreHdr();
+}
+// 回到「还没开始下载」的样子（进度、文案、按钮配色一起复位）
+function dlmReset() {
+  DL_STATE = '';
+  const btn = dlmEl('dlmBtn'), fill = dlmEl('dlmFill');
+  const txt = dlmEl('dlmBtnText');
+  if (btn) { btn.className = 'gdl-main'; btn.disabled = false; }
+  if (fill) fill.style.width = '0%';
+  if (txt) txt.textContent = '下载 Windows 程序';
+  dlmSizeText(DL_SIZE ? fmtMB(DL_SIZE) : '…');
+}
+function dlmPaint(got, total, speed) {
+  const fill = dlmEl('dlmFill'), txt = dlmEl('dlmBtnText');
+  const pct = total ? Math.min(100, Math.round(got / total * 100)) : 0;
+  if (fill) fill.style.width = (total ? pct : 0) + '%';
+  if (txt) {
+    txt.textContent = total
+      ? (fmtMB(got) + ' / ' + fmtMB(total))
+      : ('正在缓存 ' + fmtMB(got));
+  }
+  dlmSizeText(total ? (pct + '%') : (speed ? fmtMB(speed) + '/s' : '…'));
+}
+async function dlmStart() {
+  if (DL_STATE === 'busy') return;
+  const url = downloadUrl();
+  const btn = dlmEl('dlmBtn');
+  DL_STATE = 'busy';
+  if (btn) { btn.className = 'gdl-main busy'; btn.disabled = true; }
+  dlmPaint(0, 0, 0);
+
+  DL_ABORT = new AbortController();
+  let fellBack = false;
+  try {
+    const resp = await fetch(url, { signal: DL_ABORT.signal, cache: 'no-store' });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    if (!resp.body || !resp.body.getReader) throw new Error('no-stream');
+    const total = parseInt(resp.headers.get('content-length') || '0', 10) || 0;
+    if (total > 0) DL_SIZE = total;
+    const reader = resp.body.getReader();
+    const chunks = [];
+    let got = 0, lastT = Date.now(), lastGot = 0, speed = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      got += value.length;
+      const now = Date.now();
+      if (now - lastT >= 300) {
+        speed = (got - lastGot) / ((now - lastT) / 1000);
+        lastT = now; lastGot = got;
+      }
+      dlmPaint(got, total, speed);
+    }
+    const blob = new Blob(chunks, { type: 'application/octet-stream' });
+    dlmSave(blob, EXE_FILE);
+    dlmDone(blob.size);
+  } catch (e) {
+    if (e && e.name === 'AbortError') { dlmReset(); return; }
+    // CORS / 老浏览器 / 中途断网：退回普通直链，没有进度但一定能下
+    fellBack = true;
+    dlmReset();
+    try { window.location.href = url; } catch (e2) {}
+  } finally {
+    DL_ABORT = null;
+    if (btn && !fellBack) btn.disabled = false;
+  }
+}
+// Blob 落盘：临时 <a download> 点一下就交给浏览器的下载管理器
+function dlmSave(blob, name) {
+  const a = document.createElement('a');
+  const u = URL.createObjectURL(blob);
+  a.href = u; a.download = name; a.style.display = 'none';
+  document.body.appendChild(a);
+  try { a.click(); } catch (e) {}
+  setTimeout(() => { try { a.remove(); } catch (e) {} URL.revokeObjectURL(u); }, 4000);
+}
+function dlmDone(size) {
+  DL_STATE = 'done';
+  const btn = dlmEl('dlmBtn'), fill = dlmEl('dlmFill');
+  const txt = dlmEl('dlmBtnText');
+  if (btn) { btn.className = 'gdl-main done'; btn.disabled = false; }
+  if (fill) fill.style.width = '100%';
+  if (txt) txt.textContent = '已保存 ' + fmtMB(size);
+  dlmSizeText('完成');
+}
+// 装好后直接在卡片里重新创建：不用回上一屏、不用重新输任何东西
+function dlmRetry() {
+  gateShowChoices();
+  // 立刻回一句「在检查」，否则第二次仍然失败时这一屏长得一模一样，像点了没反应
+  gateMsg('正在检查本机程序…', 'info');
+  setTimeout(() => { try { gateCreate(); } catch (e) {} }, 180);
+}
+
 // ===== 程序下载地址 =====
 // 页面和 exe 都躺在同一个仓库（GitHub Pages）里，所以下载地址直接跟着
 // 在线页基地址走：换自定义域名时页面里的链接自动跟着换，不用改 HTML。
@@ -127,14 +317,9 @@ function downloadUrl() {
   if (!base) base = DL_FALLBACK_BASE;
   return base.replace(/\/*$/, '/') + encodeURIComponent(EXE_FILE);
 }
-function syncDownloadLinks() {
-  const url = downloadUrl();
-  document.querySelectorAll('a.js-dl').forEach(a => { a.href = url; });
-}
 function showGate() {
   document.getElementById('gateView').classList.add('show');
   document.getElementById('hostView').style.display = 'none';
-  syncDownloadLinks();           // 下载地址跟着当前基地址走（换域名后自动生效）
 }
 function hideGate() {
   document.getElementById('gateView').classList.remove('show');
@@ -188,8 +373,7 @@ function agreeThen(fn) {
   agreeHintFlash();
 }
 function gateShowJoin() {
-  document.getElementById('gateChoices').style.display = 'none';
-  document.getElementById('gateJoin').style.display = 'block';
+  gateView('gateJoin');
   gateClearMsg();
   // 若上一条预热连接失败过，趁用户输码再补一条，别让「加入」时从零握手
   prewarmSignal();
@@ -198,17 +382,17 @@ function gateShowJoin() {
 }
 function gateShowChoices() {
   if (JOIN_REQUIRED) return;      // 局域网设备只能加入，没有「创建房间」可选
+  dlmHide();                      // 从「下载程序」视图返回：停掉缓存、还原标题与页脚
   const joinBtn = document.getElementById('gateJoinChoiceBtn');
   if (joinBtn) joinBtn.style.display = '';
-  document.getElementById('gateChoices').style.display = 'flex';
-  document.getElementById('gateJoin').style.display = 'none';
+  gateView('gateChoices');
   gateClearMsg();
 }
 // 本机打开页面、程序里还没有房间：只留「创建房间」这一步
 function showHostGate() {
   showGate();
-  document.getElementById('gateChoices').style.display = 'flex';
-  document.getElementById('gateJoin').style.display = 'none';
+  GATE_HDR = null;
+  gateView('gateChoices');
   // 本机就是房主，「加入房间」没有意义，藏起来免得点进去连自己
   const joinBtn = document.getElementById('gateJoinChoiceBtn');
   if (joinBtn) joinBtn.style.display = 'none';
@@ -216,21 +400,19 @@ function showHostGate() {
   if (title) title.textContent = '数据传输';
   const sub = document.querySelector('.gate-sub');
   if (sub) sub.textContent = '点「创建房间」开一个房间，别人用房间码加入';
-  const foot = document.querySelector('.gate-foot');
-  if (foot) foot.innerHTML = '房间是临时的：关掉房主页面或 12 小时无通信就会自动销毁<br>销毁时聊天记录与接收文件一并删除';
+  setFoot('房间是临时的：关掉房主页面或 12 小时无通信就会自动销毁', '销毁时聊天记录与接收文件一并删除');
   gateClearMsg();
 }
 // 局域网设备打开页面：只留「输入房间码」这一步
 function showLanGate() {
   showGate();
-  document.getElementById('gateChoices').style.display = 'none';
-  document.getElementById('gateJoin').style.display = 'block';
+  GATE_HDR = null;
+  gateView('gateJoin');
   const title = document.querySelector('.gate-title');
   if (title) title.textContent = '加入房间';
   const sub = document.querySelector('.gate-sub');
   if (sub) sub.textContent = '输入房主给你的房间码，就能加入这个房间';
-  const foot = document.querySelector('.gate-foot');
-  if (foot) foot.innerHTML = '房间码显示在房主那台设备的房间栏里<br>同一个网络下输入房间码即可加入';
+  setFoot('房间码显示在房主那台设备的房间栏里', '同一个网络下输入房间码即可加入');
   const back = document.querySelector('.gate-back');
   if (back) back.style.display = 'none';
   gateClearMsg();
@@ -269,8 +451,8 @@ async function resumeHostFromWeb() {
   } catch (e) {
     try { history.replaceState(null, '', location.pathname); } catch (e2) {}
     gateShowChoices();
-    gateMsg('没有检测到本机程序，点下面的「下载 Windows 程序」装好后再创建；已经装了就双击运行它。', 'err');
-    gateFixShow(true);          // 顺手把「下载程序 / 已启动重试」摆出来
+    // 本机程序不在：卡片内切到下载视图（不弹窗）
+    gateShowDl();
     return;
   }
   if (info.client_url) applyClientUrl(info.client_url);
@@ -346,8 +528,8 @@ async function gateCreate() {
   // 本机页面开了外网直连、或在线页要当房主，都要等房主 Peer 在信令注册成功
   const needP2P = P2P_ENABLED || SEED_MODE !== 'host';
   gateProgReset(needP2P
-    ? ['检查本机程序', '创建房间', '连接外网通道']
-    : ['检查本机程序', '创建房间']);
+    ? ['检查程序', '创建房间', '外网通道']
+    : ['检查程序', '创建房间']);
   gateProgress(0, 8);
   try {
     // 检查本机程序 + 开房间并行发出：两次都是本机请求，串行纯属白等；
@@ -359,7 +541,7 @@ async function gateCreate() {
         fetch(HOST_API + '/api/room/create', { method: 'POST' }),
       ]);
     } catch (e) {
-      throw new Error('没有检测到本机程序。还没装就点下面「下载 Windows 程序」；装好了直接双击运行，看到「服务已启动」再回来点「创建房间」。');
+      throw new Error('没有检测到本机程序');
     }
     // 邀请链接以本机程序当前的 client_url.txt 为准（在线页那份是导出时的旧值）
     applyClientUrl(info.client_url);
@@ -388,10 +570,13 @@ async function gateCreate() {
     startHostHeartbeat();
   } catch (e) {
     const m = (e && e.message) || '创建房间失败，请稍后再试。';
-    gateMsg(m, 'err');
-    // 程序没开（或本机服务没起来）：直接把「下载 / 已启动重试」摆出来，
-    // 用户不用自己去猜去哪里装
-    gateFixShow(m.indexOf('没有检测到本机程序') >= 0);
+    if (m.indexOf('没有检测到本机程序') >= 0) {
+      // 程序没开（或本机服务没起来）：卡片直接切到下载视图，不再叠红字
+      gateClearMsg();
+      gateShowDl();
+    } else {
+      gateMsg(m, 'err');
+    }
     gateProgReset([]);          // 清掉进度，下次创建重新从 0 开始
   } finally {
     // 失败要退回来能再点；成功时页面已经切走了，恢复也不影响
@@ -519,5 +704,8 @@ window.addEventListener('online', () => { try { flushGuestRetry(); } catch (e) {
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) { try { flushGuestRetry(); } catch (e) {} }
 });
+
+// 卡片尺寸不用再算：三块视图在 CSS 里用 grid 叠在同一格，
+// 格子高度天然等于最高那块，切屏时不会变。
 
 // 房间生命周期：临时房间（页面关闭 / 12 小时无通信 / 手动销毁），没有可设的选项了

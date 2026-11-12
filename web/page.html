@@ -15,7 +15,12 @@
     <div class="gate-title">数据传输</div>
     <div class="gate-sub">任意设备之间互发文字、文件与桌面</div>
 
-    <div class="gate-list" id="gateChoices">
+    <!-- 内容区：三块视图叠在同一格里（高度固定 = 最高那块），
+         切屏、点按钮、冒提示都不会让卡片长高变矮 -->
+    <div class="gate-body">
+    <div class="gate-views" id="gateViews">
+
+    <div class="gate-view gate-list on" id="gateChoices">
       <button class="gate-btn primary" id="gateCreateBtn" onclick="agreeThen(gateCreate)">
         <span class="gate-ico">＋</span>
         <span class="gate-txt">
@@ -33,7 +38,7 @@
       </button>
     </div>
 
-    <div id="gateJoin">
+    <div id="gateJoin" class="gate-view">
       <input id="gateRoom" placeholder="房间码" maxlength="16" autocomplete="off" spellcheck="false">
       <div class="gate-row">
         <button class="gate-back" onclick="gateShowChoices()">返回</button>
@@ -43,17 +48,25 @@
       </div>
     </div>
 
-    <div id="gateMsg"></div>
-
-    <!-- 创建房间失败（本机程序没在跑）时的补救指引：下载程序 / 启动后重试 -->
-    <div class="gate-fix" id="gateFix" style="display:none;">
-      <a class="gate-fix-dl js-dl" href="https://zvzqvqdvd.github.io/data-transmission/数据传输.exe" target="_blank" rel="noopener">
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10.5"/><path d="M7.6 10.2 12 14.6l4.4-4.4"/><path d="M4.6 19.4h14.8"/></svg>
-        <span>下载 Windows 程序</span>
-      </a>
-      <button class="gate-fix-retry" onclick="gateCreate()">已启动，重新创建</button>
-      <div class="gate-fix-tip">下载后双击运行，看到「服务已启动」再回来点创建房间<br>首次运行若提示「Windows 已保护你的电脑」，点「更多信息」→「仍要运行」</div>
+    <!-- 本机没装/没启动程序：卡片内切到这一屏（和「输入房间号」同一种切换方式），不弹窗 -->
+    <div id="gateDl" class="gate-view">
+      <button class="gdl-main" id="dlmBtn" onclick="dlmStart()">
+        <i class="gdl-fill" id="dlmFill"></i>
+        <span class="gdl-label">
+          <svg class="gdl-ar" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10"/><path d="M7.6 9.6 12 14l4.4-4.4"/><path d="M4.6 19.4h14.8"/></svg>
+          <span id="dlmBtnText">下载 Windows 程序</span>
+          <em id="dlmSize">…</em>
+        </span>
+      </button>
+      <div class="gate-row">
+        <button class="gate-back" onclick="gateShowChoices()">返回</button>
+        <button class="gate-back" onclick="dlmRetry()">重新创建</button>
+      </div>
     </div>
+
+    </div><!-- /gate-views -->
+
+    </div><!-- /gate-body -->
 
     <!-- 免责声明：只显示复选框一行；点「《免责声明》」打开独立声明页 -->
     <div class="gate-disc" id="gateDisc">
@@ -64,14 +77,16 @@
       </label>
     </div>
 
-    <!-- 程序下载入口：常驻一行，加入房间的人用不到，创建房间的人得先装 -->
-    <div class="gate-dl-line">
-      <a class="js-dl" href="https://zvzqvqdvd.github.io/data-transmission/数据传输.exe" target="_blank" rel="noopener">下载 Windows 程序</a>
-      <span class="gate-dl-sep">·</span>
-      <a href="https://github.com/zvzqvqdvd/data-transmission" target="_blank" rel="noopener">GitHub 仓库</a>
+    <!-- 底部一栏：两句引导挨在一起，仓库入口跟在第二句后面。
+         出错时整栏换成一条提示（同格叠放），高度一分不变 -->
+    <div class="gate-foot-wrap">
+      <div class="gate-foot">
+        <span class="gf-a">创建房间需要本机已运行程序</span><br>
+        <span class="gf-b">加入房间不需要，任何设备都能加入</span>
+        <span class="gf-dot">·</span><a class="gf-gh" href="https://github.com/zvzqvqdvd/data-transmission" target="_blank" rel="noopener">GitHub</a>
+      </div>
+      <div id="gateMsg"></div>
     </div>
-
-    <div class="gate-foot">创建房间需要本机已运行程序<br>加入房间不需要，任何设备都能加入</div>
   </div>
 </div>
 
@@ -240,6 +255,10 @@
     <h3>使用帮助</h3>
     <div class="faq">
       <details open>
+        <summary>下载或启动时提示「不安全 / Windows 已保护你的电脑」？</summary>
+        <p>程序没买数字签名证书（一年上千元），Windows 和 Chrome 认不出发布者，会按「未知发布者」拦一次，<b>不是病毒</b>。过法：Chrome 下载栏点「…」→「保留」；Windows 弹「已保护你的电脑」点<b>「更多信息」→「仍要运行」</b>。只从本页面或 GitHub 仓库下载，别用别处来的同名文件。</p>
+      </details>
+      <details>
         <summary>房间码是对的，却说找不到房间？</summary>
         <p>房主点过「新建房间」或「销毁房间」，旧码就作废了；也可能是房主那边的程序或页面已经关掉。找房主重新要房间码，或者直接扫二维码/点邀请链接。</p>
       </details>
@@ -257,7 +276,7 @@
       </details>
       <details>
         <summary>收到的文件存在哪了？</summary>
-        <p>房主那台设备上：<code>数据\房间\&lt;房间码&gt;\接收文件\</code>。其他设备不会自动下载聊天里的文件，点一下文件卡片就会从房主传过来，存在系统的下载目录里。</p>
+        <p>房主那台设备上：<code>数据\房间\&lt;房间码&gt;\接收文件\</code>。其他设备不会自动下载聊天里的文件，点文件卡片右边的下载按钮，就会从房主那边传过来，存在系统的下载目录里。</p>
       </details>
       <details>
         <summary>大文件能传多大？</summary>
