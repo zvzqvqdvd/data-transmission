@@ -394,8 +394,8 @@ function addFiles(list) {
     n++;
   }
   if (n) {
+    // 不弹「已加入队列」：底部列表立刻出现在眼前，再顶一个黑条是打扰
     renderPending();
-    toast(n + ' 个文件已加入队列，点「发送」开始');
   }
   return n;
 }
@@ -473,17 +473,24 @@ function itemState(it) {
   if (it.status === 'fail') return '失败' + (it.err ? '：' + it.err : '');
   return fmtSize(it.file.size);
 }
+const PQ_X = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6.6 6.6l10.8 10.8M17.4 6.6 6.6 17.4"/></svg>';
+const PQ_RETRY = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19.2 12a7.2 7.2 0 1 1-2.1-5.1"/><path d="M19.6 4.4v4.3h-4.3"/></svg>';
 function itemHTML(it) {
-  const cls = it.status === 'sending' ? ' sending' : it.status === 'fail' ? ' err' : '';
+  const cls = it.status === 'sending' ? ' sending'
+            : it.status === 'fail' ? ' err'
+            : it.status === 'done' ? ' done' : '';
   const sCls = it.status === 'done' ? ' ok' : it.status === 'fail' ? ' err' : '';
+  const ext = String(it.file.name || '').split('.').pop().toUpperCase().slice(0, 4) || 'FILE';
   const retry = it.status === 'fail'
-    ? '<button class="pq-x" title="重试" onclick="retryOne(\'' + it.uid + '\')">↻</button>' : '';
+    ? '<button class="pq-btn" title="重试" aria-label="重试" onclick="retryOne(\'' + it.uid + '\')">' + PQ_RETRY + '</button>' : '';
   return '<div class="pq-item' + cls + '" data-uid="' + it.uid + '">' +
-      '<span class="pq-ico">📎</span>' +
-      '<span class="pq-name" title="' + esc(it.file.name) + '">' + esc(it.file.name) + '</span>' +
-      '<span class="pq-state' + sCls + '">' + esc(itemState(it)) + '</span>' +
+      '<span class="pq-ico">' + esc(ext) + '</span>' +
+      '<span class="pq-meta">' +
+        '<span class="pq-name" title="' + esc(it.file.name) + '">' + esc(it.file.name) + '</span>' +
+        '<span class="pq-state' + sCls + '">' + esc(itemState(it)) + '</span>' +
+      '</span>' +
       retry +
-      '<button class="pq-x" title="移除" onclick="removePending(\'' + it.uid + '\')">✕</button>' +
+      '<button class="pq-btn" title="移除" aria-label="移除" onclick="removePending(\'' + it.uid + '\')">' + PQ_X + '</button>' +
       '<div class="pq-bar"><div class="pq-fill" style="width:' + (it.pct || 0) + '%"></div></div>' +
     '</div>';
 }
@@ -495,8 +502,9 @@ function renderPending() {
   }
   pendingArea.classList.add('show');
   const done = pendingFiles.filter(x => x.status === 'done').length;
+  const left = pendingFiles.length - done;
   pendingArea.innerHTML =
-    '<div class="pq-head"><span>' + pendingFiles.length + ' 个文件' +
+    '<div class="pq-head"><span>待发送 <b>' + left + '</b> 个文件' +
       (done ? ' · 已完成 ' + done : '') + '</span>' +
       (done ? '<button onclick="clearDone()">清空已完成</button>' : '') + '</div>' +
     pendingFiles.map(itemHTML).join('');
@@ -541,4 +549,15 @@ function toast(m) {
   const t=document.getElementById('toast'); t.textContent=m; t.classList.add('show');
   setTimeout(()=>t.classList.remove('show'),1800);
 }
+
+// 窄屏：通道卡片默认收起，点标题行展开
+// 手机上一屏就那么大，房间号永远要看得见（别人靠它加入），
+// 地址 / 复制按钮 / 二维码这些「偶尔用一次」的点一下再出来。
+document.querySelectorAll('#lanBanner .p2p-line, #p2pBanner .p2p-line').forEach(el => {
+  el.addEventListener('click', () => {
+    if (window.innerWidth > 640) return;
+    const box = el.parentNode;
+    if (box) box.classList.toggle('open');
+  });
+});
 

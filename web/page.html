@@ -89,6 +89,9 @@
     <button class="icon-btn" id="netBtn" onclick="showNet()" title="网络与中继设置" aria-label="网络与中继设置">
       <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17"/><path d="M12 3.5c2.2 2.4 3.3 5.3 3.3 8.5S14.2 18.1 12 20.5c-2.2-2.4-3.3-5.3-3.3-8.5S9.8 5.9 12 3.5Z"/></svg>
     </button>
+    <button class="icon-btn" id="ttlBtn" onclick="showTtl()" title="房间说明" aria-label="房间说明">
+      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6.6 3.9h7l4.1 4.1v12.1a1 1 0 0 1-1 1H6.6a1 1 0 0 1-1-1V4.9a1 1 0 0 1 1-1Z"/><path d="M13.4 3.9V8.2h4.3"/><path d="M9.1 13h5.8M9.1 16.2h3.8"/></svg>
+    </button>
     <button class="icon-btn" id="helpBtn" onclick="showHelp()" title="使用帮助" aria-label="使用帮助">
       <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.4a2.5 2.5 0 1 1 3.2 2.4c-.6.2-.9.8-.9 1.4v.4"/><circle cx="12" cy="16.6" r=".9" fill="currentColor" stroke="none"/></svg>
     </button>
@@ -150,11 +153,6 @@
     <div id="qrImg"></div>
     <button class="pill qr-back" onclick="toggleQR()">返回</button>
   </div>
-</div>
-
-<!-- 房间说明单独一块：只在侧栏放一个按钮，规则点开弹窗才看 -->
-<div class="side-card room-info" id="roomInfoCard">
-  <button class="room-info-btn" onclick="showTtl()"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px;"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.6V12l3 1.8"/></svg>房间说明</button>
 </div>
 
 <div id="guestGate" style="__GUEST_DISPLAY__">

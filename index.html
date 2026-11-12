@@ -214,20 +214,6 @@ body:not(.is-room-owner) #roomCard { display: none !important; }
   border-radius: var(--r-sm);
 }
 
-/* 房间说明入口 */
-.side-card.room-info {
-  flex-shrink: 0; margin: 10px 20px 0; padding: 0;
-  background: transparent; border: 0; border-radius: 0;
-}
-.room-info-btn {
-  display: block; width: 100%; padding: 9px 12px;
-  font-size: 12px; line-height: 1.5; font-family: inherit;
-  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md);
-  color: var(--t2); cursor: pointer;
-  transition: border-color .16s ease, color .16s ease;
-}
-.room-info-btn:hover { border-color: var(--brand-line); color: var(--brand-700); }
-
 .member-row {
   display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px;
   max-width: 100%; min-width: 0;
@@ -383,11 +369,10 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   border-radius: var(--r-md); padding: 12px 14px;
   width: 340px; max-width: 100%; text-decoration: none; color: inherit;
   position: relative; box-shadow: var(--sh1);
-  transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
-  cursor: pointer;
+  /* 卡片本体不可点：只有右侧按钮能下载。所以不给 hover 抬起 / 手型光标，
+     否则等于骗人去点——点了没反应比不能点更气人。 */
+  cursor: default;
 }
-.file-card:hover { border-color: var(--brand-line); box-shadow: var(--sh2); transform: translateY(-1px); }
-.file-card:active { transform: scale(.99); }
 .file-card::before { display: none; }
 .file-icon {
   width: 38px; height: 38px; border-radius: 10px;
@@ -542,43 +527,82 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 }
 body.fs-locked { overflow: hidden; }
 
-/* ===== 待发送文件 / 发送队列 ===== */
+/* ===== 待发送文件 / 发送队列 =====
+   和消息区的文件卡用同一套语言：扩展名徽标 + 文件名 + 次要信息，
+   一眼能看出「这是什么文件」；右侧只留一个圆形小按钮，安静不抢戏。 */
 .pending-area {
   display: none; flex-shrink: 0;
-  background: var(--surface); border-top: 1px solid var(--line);
-  padding: 10px 20px;
+  background: var(--surface-2); border-top: 1px solid var(--line);
+  padding: 10px 20px 12px;
+  /* 选十几个文件时别把聊天区吃光：超出就内部滚 */
+  max-height: 34vh; overflow-y: auto; overscroll-behavior: contain;
 }
 .pending-area.show { display: block; }
 .pq-head {
   display: flex; align-items: center; justify-content: space-between;
   max-width: 820px; margin: 0 auto 8px;
-  font-size: 11.5px; color: var(--t3);
+  font-size: 12px; color: var(--t3);
 }
+.pq-head b { color: var(--t1); font-weight: 600; }
 .pq-head button {
-  border: none; background: none; color: var(--t2); font-size: 11.5px;
-  cursor: pointer; padding: 3px 8px; border-radius: 6px;
+  border: none; background: none; color: var(--t3); font-size: 12px;
+  font-family: inherit; cursor: pointer; padding: 3px 8px; border-radius: 6px;
+  transition: background .15s ease, color .15s ease;
 }
 .pq-head button:hover { background: var(--surface-3); color: var(--t1); }
+
 .pq-item {
-  position: relative; display: flex; align-items: center; gap: 9px;
-  padding: 8px 11px 10px; background: var(--surface-2);
+  position: relative; display: flex; align-items: center; gap: 10px;
+  padding: 9px 10px 10px 11px; background: var(--surface);
   border: 1px solid var(--line); border-radius: var(--r-md);
-  margin-bottom: 6px; max-width: 820px; margin-left: auto; margin-right: auto;
-  font-size: 13px; overflow: hidden;
+  box-shadow: var(--sh1);
+  margin: 0 auto 7px; max-width: 820px;
+  overflow: hidden;
+  transition: border-color .15s ease, background .15s ease;
 }
+.pq-item:last-child { margin-bottom: 0; }
 .pq-item.sending { background: var(--brand-soft); border-color: var(--brand-line); }
+.pq-item.done { background: var(--surface-2); box-shadow: none; }
+.pq-item.done .pq-name { color: var(--t2); }
 .pq-item.err { background: var(--danger-soft); border-color: var(--danger-line); }
-.pq-ico { flex-shrink: 0; }
-.pq-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pq-state { flex-shrink: 0; font-size: 11px; color: var(--t3); white-space: nowrap; }
+
+/* 扩展名徽标：和消息里的 .file-icon 同一族，只是小一号 */
+.pq-ico {
+  flex-shrink: 0; width: 34px; height: 34px;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--mono); font-size: 10px; font-weight: 700;
+  letter-spacing: .02em; line-height: 1;
+  color: var(--brand-700); background: var(--brand-soft);
+  border: 1px solid var(--brand-line); border-radius: var(--r-sm);
+  overflow: hidden;
+}
+.pq-item.err .pq-ico { color: var(--danger); background: var(--danger-soft); border-color: var(--danger-line); }
+
+.pq-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pq-name {
+  font-size: 13px; font-weight: 500; color: var(--t1); line-height: 1.45;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pq-state { font-size: 11.5px; color: var(--t3); line-height: 1.4; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
 .pq-state.ok { color: var(--brand-700); }
 .pq-state.err { color: var(--danger); }
-.pq-x {
-  flex-shrink: 0; background: none; border: none; color: var(--t3);
-  cursor: pointer; font-size: 15px; padding: 0 2px; line-height: 1;
+
+.pq-btn {
+  flex-shrink: 0; width: 28px; height: 28px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: transparent; border: 1px solid transparent; border-radius: 50%;
+  color: var(--t3); cursor: pointer;
+  transition: background .15s ease, color .15s ease, border-color .15s ease;
 }
-.pq-x:hover { color: var(--danger); }
-.pq-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--surface-3); }
+.pq-btn:hover { background: var(--surface-3); color: var(--t1); border-color: var(--line-2); }
+.pq-item.err .pq-btn:first-of-type:hover { color: var(--brand-700); }
+
+.pq-bar {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 2px;
+  background: var(--surface-3);
+}
+.pq-item:not(.sending):not(.err) .pq-bar { display: none; }
 .pq-fill { height: 100%; width: 0; background: var(--brand); transition: width .18s linear; }
 .pq-item.err .pq-fill { background: #E57373; }
 
@@ -952,36 +976,28 @@ body.fs-locked { overflow: hidden; }
 .faq code { font-family: var(--mono); background: var(--surface-3); padding: 1px 5px; border-radius: 4px; font-size: 11.5px; }
 
 /* ===== 连接信息侧栏 =====
-   窄屏：横向可滑的一排卡片（省纵向空间，手机不再被卡片占满）；
+   窄屏：纵向堆叠、卡片全宽（手机就该上下排，不该逼人左右滑）；
    宽屏：固定到右侧竖排，聊天区独享中间。 */
 .side-info { flex-shrink: 0; display: flex; flex-direction: column; }
 .side-info > #lanBanner, .side-info > #p2pBanner,
 .side-info > #guestGate, .side-info > #waitBar { text-align: left; }
 
 @media (max-width: 1099px) {
-  /* 窄屏：卡片横向滑动，一张一张看。
-     宽度按视口算而不是写死 320px——写死的时候，390 宽的机器上
-     左边「房间说明」按钮 + 右边 320 的卡片就直接顶出屏幕，房间号卡片被切掉一半。
-     右边留出一小截下一张卡的边，既是「还能往右滑」的提示，也保证当前这张完整可见。 */
+  /* 窄屏：纵向排、卡片占满整行。
+     手机是上下滚的设备，横向滑动藏内容是反直觉的——看不见的那几张
+     等于不存在。全部铺开、上下排，一眼看全。
+     卡片多的时候侧栏内部纵向滚，不把聊天区顶掉。 */
   .side-info {
-    flex-direction: row; align-items: flex-start; gap: 10px;
-    padding: 10px 12px 0; overflow-x: auto; overscroll-behavior-x: contain;
-    scrollbar-width: none;
-    -webkit-overflow-scrolling: touch;
-    /* 关掉滚动锚定：卡片是后出现的（进房后 guestGate 才 display:block），
-       Chrome 为了「保持可见内容不动」会自动往右补偿，结果一进房整条
-       就被顶到最右边，第一张卡左半边跑到屏幕外——看起来就是溢出。 */
-    overflow-anchor: none;
+    flex-direction: column; align-items: stretch; gap: 8px;
+    padding: 10px 12px 0;
+    max-height: 46vh; overflow-y: auto; overscroll-behavior: contain;
+    scrollbar-width: none; -webkit-overflow-scrolling: touch;
   }
   .side-info::-webkit-scrollbar { display: none; }
   .side-info > * {
     flex: 0 0 auto; margin: 0 !important;
-    width: min(calc(100vw - 64px), 380px);
+    width: 100% !important; max-width: none;
   }
-  /* 「房间说明」只是个小按钮，排到卡片后面去：排在第一位会把第一张卡挤出屏幕 */
-  .side-info > .room-info { order: 20; width: auto; }
-  .side-info > .room-info .room-info-btn { width: auto; height: 34px; padding: 0 14px; white-space: nowrap; }
-  #waitBar { width: min(calc(100vw - 64px), 380px); }
 }
 
 /* 宽屏：右侧固定信息栏 */
@@ -996,7 +1012,6 @@ body.fs-locked { overflow: hidden; }
   .side-info::-webkit-scrollbar { width: 4px; }
   .side-info::-webkit-scrollbar-thumb { background: #D3D9E0; border-radius: 2px; }
   .side-info > * { margin: 0 !important; }
-  .side-info > .room-info { padding: 0 !important; background: transparent !important; border: 0 !important; }
   .side-info .p2p-line { gap: 6px; }
   .side-info .side-actions .pill { flex: 1; min-width: 0; padding: 5px 0; text-align: center; }
   .side-info #roomCode { font-size: 15.5px; letter-spacing: 1.4px; padding: 7px 8px; }
@@ -1023,9 +1038,56 @@ body.fs-locked { overflow: hidden; }
 @media (max-width: 640px) {
   .topbar { height: 52px; padding: 0 14px; }
   .topbar-sub { display: none; }
-  .side-info { padding: 8px 12px 0; gap: 8px; }
-  .side-info > * { width: min(calc(100vw - 56px), 380px); }
-  #roomCard, #p2pBanner, #lanBanner, #guestGate { padding: 12px; }
+
+  /* 手机屏高有限，房间信息必须压扁：三张卡加起来要能在一屏内看完，
+     否则只能内部滚动，而"卡片被切断一半"是最难看的形态。 */
+  .side-info { padding: 8px 10px 0; gap: 7px; max-height: 50vh; }
+  .pending-area { padding: 9px 10px 10px; max-height: 36vh; }
+  .pq-item { padding: 8px 8px 9px 9px; }
+  .pq-ico { width: 32px; height: 32px; font-size: 9.5px; }
+  .pq-name { font-size: 12.5px; }
+  .side-info > * { width: 100% !important; }
+  #roomCard, #p2pBanner, #lanBanner, #guestGate { padding: 10px 11px; }
+  #waitBar { padding: 10px 11px; }
+
+  /* 「房间」两个字在这里是废话：10 位房间号摆在那儿，谁都认得 */
+  .room-card-title { display: none; }
+  #roomCode { font-size: 16.5px; letter-spacing: 1.5px; padding: 6px 10px; }
+  .room-actions { margin-top: 6px; gap: 6px; }
+  .room-actions .pill { padding: 5px 0; font-size: 12px; }
+
+  /* 通道卡：标签 + 地址 + 按钮，每一行都收紧一档 */
+  .p2p-label { font-size: 12.5px; }
+  #lanUrl, #p2pUrl { font-size: 11.5px; padding: 5px 8px; letter-spacing: 0; }
+  .side-actions { margin-top: 6px; gap: 6px; }
+  .side-actions .pill { padding: 4px 11px; font-size: 11.5px; }
+  .chan-count { font-size: 11.5px; }
+  #guestGate .guest-room { font-size: 12.5px; }
+  /* 通道卡片默认收起：手机上屏幕太贵。房间号始终可见（别人要靠它加入），
+     地址、复制/二维码按钮、成员清单这些「偶尔看一眼」的，点标题行再铺开。
+     收起的卡片仍然显示连接台数，一眼知道有没有人在线。 */
+  #lanBanner .p2p-line, #p2pBanner .p2p-line { cursor: pointer; -webkit-user-select: none; user-select: none; }
+  #lanBanner .p2p-line::after, #p2pBanner .p2p-line::after {
+    content: ''; margin-left: auto; flex-shrink: 0; width: 7px; height: 7px;
+    border-right: 1.6px solid var(--t4); border-bottom: 1.6px solid var(--t4);
+    transform: rotate(45deg) translate(-2px, -2px);
+    transition: transform .2s ease;
+  }
+  #lanBanner.open .p2p-line::after, #p2pBanner.open .p2p-line::after {
+    transform: rotate(-135deg) translate(-2px, -2px);
+  }
+  #lanBanner:not(.open) #lanUrl,
+  #lanBanner:not(.open) .side-actions,
+  #lanBanner:not(.open) .chan-list,
+  #p2pBanner:not(.open) #p2pUrl,
+  #p2pBanner:not(.open) .side-actions,
+  #p2pBanner:not(.open) #inviteHint,
+  #p2pBanner:not(.open) .chan-list { display: none !important; }
+
+  /* 等待条在手机上只留一句话，副标题那种「把房间码发给别人…」是给宽屏看的 */
+  #waitBar { flex-direction: row; align-items: center; gap: 7px; }
+  #waitBar .w-sub { display: none; }
+  #guestGate .self-ip { font-size: 12px; }
   .screen-card, .screen-card.live { width: 100%; }
   .sc-video { max-height: 42vh; }
   .chat-scroll { padding: 16px 12px 8px; }
@@ -1121,6 +1183,9 @@ body.fs-locked { overflow: hidden; }
     <button class="icon-btn" id="netBtn" onclick="showNet()" title="网络与中继设置" aria-label="网络与中继设置">
       <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17"/><path d="M12 3.5c2.2 2.4 3.3 5.3 3.3 8.5S14.2 18.1 12 20.5c-2.2-2.4-3.3-5.3-3.3-8.5S9.8 5.9 12 3.5Z"/></svg>
     </button>
+    <button class="icon-btn" id="ttlBtn" onclick="showTtl()" title="房间说明" aria-label="房间说明">
+      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6.6 3.9h7l4.1 4.1v12.1a1 1 0 0 1-1 1H6.6a1 1 0 0 1-1-1V4.9a1 1 0 0 1 1-1Z"/><path d="M13.4 3.9V8.2h4.3"/><path d="M9.1 13h5.8M9.1 16.2h3.8"/></svg>
+    </button>
     <button class="icon-btn" id="helpBtn" onclick="showHelp()" title="使用帮助" aria-label="使用帮助">
       <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.4a2.5 2.5 0 1 1 3.2 2.4c-.6.2-.9.8-.9 1.4v.4"/><circle cx="12" cy="16.6" r=".9" fill="currentColor" stroke="none"/></svg>
     </button>
@@ -1182,11 +1247,6 @@ body.fs-locked { overflow: hidden; }
     <div id="qrImg"></div>
     <button class="pill qr-back" onclick="toggleQR()">返回</button>
   </div>
-</div>
-
-<!-- 房间说明单独一块：只在侧栏放一个按钮，规则点开弹窗才看 -->
-<div class="side-card room-info" id="roomInfoCard">
-  <button class="room-info-btn" onclick="showTtl()"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px;"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.6V12l3 1.8"/></svg>房间说明</button>
 </div>
 
 <div id="guestGate" style="display:block;">
@@ -1312,7 +1372,7 @@ body.fs-locked { overflow: hidden; }
       · 房主点「销毁房间」<br>
       销毁时房间码作废，本机的聊天记录与接收文件也一并删除，不做保留。</p>
     <div class="modal-btns"><button class="btn-plain" onclick="hideTtl()">知道了</button></div>
-    <p style="text-align:center;font-size:11px;color:#b0b3b8;margin:10px 0 0;">页面版本 e50daeb87c（反馈问题时请带上这一行）</p>
+    <p style="text-align:center;font-size:11px;color:#b0b3b8;margin:10px 0 0;">页面版本 35313bf884（反馈问题时请带上这一行）</p>
   </div>
 </div>
 
@@ -1423,7 +1483,7 @@ let CLIENT_URL = 'https://zvzqvqdvd.github.io/data-transmission/';
 // 页面源文件指纹（由程序按 web/ 源文件现算，在线页 = 导出那一刻的值）。
 // 邀请链接 / 二维码 / 复制的访问地址都带 ?v=<指纹>：手机浏览器对页面缓存
 // 非常顽固，URL 不变就拿旧缓存页连新程序，轻则变慢、重则连不上。
-const PAGE_BUILD = 'e50daeb87c';
+const PAGE_BUILD = '35313bf884';
 let lastRev = null;
 let pollTimer = null;        // 房主端的 /messages 轮询
 let roomClosed = false;      // 房主已解散房间，页面停在入口页
@@ -1782,8 +1842,8 @@ function addFiles(list) {
     n++;
   }
   if (n) {
+    // 不弹「已加入队列」：底部列表立刻出现在眼前，再顶一个黑条是打扰
     renderPending();
-    toast(n + ' 个文件已加入队列，点「发送」开始');
   }
   return n;
 }
@@ -1861,17 +1921,24 @@ function itemState(it) {
   if (it.status === 'fail') return '失败' + (it.err ? '：' + it.err : '');
   return fmtSize(it.file.size);
 }
+const PQ_X = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6.6 6.6l10.8 10.8M17.4 6.6 6.6 17.4"/></svg>';
+const PQ_RETRY = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19.2 12a7.2 7.2 0 1 1-2.1-5.1"/><path d="M19.6 4.4v4.3h-4.3"/></svg>';
 function itemHTML(it) {
-  const cls = it.status === 'sending' ? ' sending' : it.status === 'fail' ? ' err' : '';
+  const cls = it.status === 'sending' ? ' sending'
+            : it.status === 'fail' ? ' err'
+            : it.status === 'done' ? ' done' : '';
   const sCls = it.status === 'done' ? ' ok' : it.status === 'fail' ? ' err' : '';
+  const ext = String(it.file.name || '').split('.').pop().toUpperCase().slice(0, 4) || 'FILE';
   const retry = it.status === 'fail'
-    ? '<button class="pq-x" title="重试" onclick="retryOne(\'' + it.uid + '\')">↻</button>' : '';
+    ? '<button class="pq-btn" title="重试" aria-label="重试" onclick="retryOne(\'' + it.uid + '\')">' + PQ_RETRY + '</button>' : '';
   return '<div class="pq-item' + cls + '" data-uid="' + it.uid + '">' +
-      '<span class="pq-ico">📎</span>' +
-      '<span class="pq-name" title="' + esc(it.file.name) + '">' + esc(it.file.name) + '</span>' +
-      '<span class="pq-state' + sCls + '">' + esc(itemState(it)) + '</span>' +
+      '<span class="pq-ico">' + esc(ext) + '</span>' +
+      '<span class="pq-meta">' +
+        '<span class="pq-name" title="' + esc(it.file.name) + '">' + esc(it.file.name) + '</span>' +
+        '<span class="pq-state' + sCls + '">' + esc(itemState(it)) + '</span>' +
+      '</span>' +
       retry +
-      '<button class="pq-x" title="移除" onclick="removePending(\'' + it.uid + '\')">✕</button>' +
+      '<button class="pq-btn" title="移除" aria-label="移除" onclick="removePending(\'' + it.uid + '\')">' + PQ_X + '</button>' +
       '<div class="pq-bar"><div class="pq-fill" style="width:' + (it.pct || 0) + '%"></div></div>' +
     '</div>';
 }
@@ -1883,8 +1950,9 @@ function renderPending() {
   }
   pendingArea.classList.add('show');
   const done = pendingFiles.filter(x => x.status === 'done').length;
+  const left = pendingFiles.length - done;
   pendingArea.innerHTML =
-    '<div class="pq-head"><span>' + pendingFiles.length + ' 个文件' +
+    '<div class="pq-head"><span>待发送 <b>' + left + '</b> 个文件' +
       (done ? ' · 已完成 ' + done : '') + '</span>' +
       (done ? '<button onclick="clearDone()">清空已完成</button>' : '') + '</div>' +
     pendingFiles.map(itemHTML).join('');
@@ -1929,6 +1997,17 @@ function toast(m) {
   const t=document.getElementById('toast'); t.textContent=m; t.classList.add('show');
   setTimeout(()=>t.classList.remove('show'),1800);
 }
+
+// 窄屏：通道卡片默认收起，点标题行展开
+// 手机上一屏就那么大，房间号永远要看得见（别人靠它加入），
+// 地址 / 复制按钮 / 二维码这些「偶尔用一次」的点一下再出来。
+document.querySelectorAll('#lanBanner .p2p-line, #p2pBanner .p2p-line').forEach(el => {
+  el.addEventListener('click', () => {
+    if (window.innerWidth > 640) return;
+    const box = el.parentNode;
+    if (box) box.classList.toggle('open');
+  });
+});
 
 
 // ===== room.js — 房间内逻辑 =====
@@ -2160,8 +2239,8 @@ function renderMsg(msg) {
     }
   } else {
     // 文件消息：一律一张文件卡片，不区分图片（11-11 定稿：图片预览整体下线）。
-    // 卡片右侧带一个自己画的下载按钮：点卡片、点按钮是同一个动作，
-    // 按钮用内联 SVG 而不是 ⬇ emoji——emoji 在手机 / 电脑 / iOS 上是三种形状。
+    // 下载只认右侧那个按钮——卡片本体点了不下载（误触太容易，手机上尤其）。
+    // 按钮用内联 SVG 而不是 ⬇ emoji：emoji 在手机 / 电脑 / iOS 上是三种形状。
     const nm = esc(msg.name), sz = esc(msg.size || '');
     const ext = String(msg.name || '').split('.').pop().toUpperCase().slice(0, 4);
     const inner = '<div class="file-icon">' + esc(ext) + '</div>' +
@@ -2171,15 +2250,13 @@ function renderMsg(msg) {
       ' stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
       '<path d="M12 3.6v10.2"/><path d="M7.7 10 12 14.3 16.3 10"/><path d="M4.6 18.6h14.8"/></svg>';
     if (MODE === 'guest' && msg.id) {
-      const act = 'pullFile(\'' + esc(msg.id) + '\')';
-      bubble = '<div class="file-card" title="点击下载" onclick="' + act + '">' + inner +
+      bubble = '<div class="file-card">' + inner +
         '<button type="button" class="file-dl" title="下载" aria-label="下载"' +
-        ' onclick="event.stopPropagation();' + act + '">' + dlSvg + '</button></div>';
+        ' onclick="pullFile(\'' + esc(msg.id) + '\')">' + dlSvg + '</button></div>';
     } else {
-      bubble = '<div class="file-card" title="点击下载" data-name="' + esc(msg.name) + '" ' +
-        'onclick="downloadLocal(this)">' + inner +
+      bubble = '<div class="file-card" data-name="' + esc(msg.name) + '">' + inner +
         '<button type="button" class="file-dl" title="下载" aria-label="下载"' +
-        ' onclick="event.stopPropagation();downloadLocal(this.parentNode)">' + dlSvg + '</button></div>';
+        ' onclick="downloadLocal(this.parentNode)">' + dlSvg + '</button></div>';
     }
   }
   // 访客文件卡片正下方的下载进度条（平时隐藏，下载中由 txRender 填充）

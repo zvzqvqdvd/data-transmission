@@ -227,8 +227,8 @@ function renderMsg(msg) {
     }
   } else {
     // 文件消息：一律一张文件卡片，不区分图片（11-11 定稿：图片预览整体下线）。
-    // 卡片右侧带一个自己画的下载按钮：点卡片、点按钮是同一个动作，
-    // 按钮用内联 SVG 而不是 ⬇ emoji——emoji 在手机 / 电脑 / iOS 上是三种形状。
+    // 下载只认右侧那个按钮——卡片本体点了不下载（误触太容易，手机上尤其）。
+    // 按钮用内联 SVG 而不是 ⬇ emoji：emoji 在手机 / 电脑 / iOS 上是三种形状。
     const nm = esc(msg.name), sz = esc(msg.size || '');
     const ext = String(msg.name || '').split('.').pop().toUpperCase().slice(0, 4);
     const inner = '<div class="file-icon">' + esc(ext) + '</div>' +
@@ -238,15 +238,13 @@ function renderMsg(msg) {
       ' stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
       '<path d="M12 3.6v10.2"/><path d="M7.7 10 12 14.3 16.3 10"/><path d="M4.6 18.6h14.8"/></svg>';
     if (MODE === 'guest' && msg.id) {
-      const act = 'pullFile(\'' + esc(msg.id) + '\')';
-      bubble = '<div class="file-card" title="点击下载" onclick="' + act + '">' + inner +
+      bubble = '<div class="file-card">' + inner +
         '<button type="button" class="file-dl" title="下载" aria-label="下载"' +
-        ' onclick="event.stopPropagation();' + act + '">' + dlSvg + '</button></div>';
+        ' onclick="pullFile(\'' + esc(msg.id) + '\')">' + dlSvg + '</button></div>';
     } else {
-      bubble = '<div class="file-card" title="点击下载" data-name="' + esc(msg.name) + '" ' +
-        'onclick="downloadLocal(this)">' + inner +
+      bubble = '<div class="file-card" data-name="' + esc(msg.name) + '">' + inner +
         '<button type="button" class="file-dl" title="下载" aria-label="下载"' +
-        ' onclick="event.stopPropagation();downloadLocal(this.parentNode)">' + dlSvg + '</button></div>';
+        ' onclick="downloadLocal(this.parentNode)">' + dlSvg + '</button></div>';
     }
   }
   // 访客文件卡片正下方的下载进度条（平时隐藏，下载中由 txRender 填充）
