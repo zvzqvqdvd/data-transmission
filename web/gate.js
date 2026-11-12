@@ -700,9 +700,17 @@ if (MODE === 'host') {
 }
 // 网络恢复 / 手机解锁回到前台：退避定时器还没走完也立刻再试一次，
 // 不用干等好几秒才恢复聊天。flushGuestRetry 自带房主/访客与连接状态守卫。
-window.addEventListener('online', () => { try { flushGuestRetry(); } catch (e) {} });
+// 房主 / 局域网设备这边：长轮询可能正挂在一条已经死掉的 TCP 上（切了 WiFi、
+// 合盖再打开），主动重开一轮比干等超时快得多。
+window.addEventListener('online', () => {
+  try { flushGuestRetry(); } catch (e) {}
+  try { if (MODE === 'host' && !roomClosed) startPolling(); } catch (e) {}
+});
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) { try { flushGuestRetry(); } catch (e) {} }
+  if (document.hidden) return;
+  try { flushGuestRetry(); } catch (e) {}
+  // 回到前台补拉一次：后台时浏览器可能把页面冻住，挂着的请求不一定还活着
+  try { if (MODE === 'host' && !roomClosed) loadMessages(); } catch (e) {}
 });
 
 // 卡片尺寸不用再算：三块视图在 CSS 里用 grid 叠在同一格，

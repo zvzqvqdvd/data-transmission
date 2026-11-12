@@ -446,6 +446,14 @@ MIME_TYPES = {
 MESSAGES = []
 DATA_LOCK = threading.RLock()      # 保护 MESSAGES / CLIENTS / 消息文件
 
+# ===== 长轮询 =====
+# 以前前端每 2 秒问一次后端，别人发的消息平均要等 1 秒才上屏 ——
+# 局域网本来 1ms 就能到，全被这个等待吞掉了。
+# 现在改成「请求挂在这里，有变化立刻放行」，延迟 = 一次本机 HTTP 往返。
+LONGPOLL_MAX_MS = 20000   # 单次最多挂 20 秒；到点返回「没变化」，前端立刻再发一个
+LONGPOLL_TICK = 0.15      # 挂起期间多久查一次变化：决定新增延迟的上限
+LONGPOLL_TOUCH = 5        # 挂起期间每 5 秒续一次「我还活着」，别被 PEER_TIMEOUT 误判离开
+
 # 管理员会话令牌只保存在服务端，cookie 无法伪造
 def _env_first(*names, default=''):
     """按顺序取第一个有值的环境变量：新名字优先，旧名字兜底
@@ -625,18 +633,36 @@ def load_messages():
             MESSAGES = data if isinstance(data, list) else []
             _MSG_CACHE = (f, mt2)
         except Exception:
-            MESSAGES = []
+            # 读到半截文件（写入方还没写完）不等于「消息被清空」：
+            # 保留上一份内存里的内容，下次再重试，别让聊天区突然空屏。
             _MSG_CACHE = None
+
+def messages_fp():
+    """消息文件的廉价指纹：长轮询每 150ms 查一次变化，靠它决定要不要重算整包"""
+    try:
+        st = os.stat(msg_file())
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return (0, 0)
 
 def save_messages():
     if not has_room():
         return
     with DATA_LOCK:
+        target = msg_file()
+        tmp = target + '.tmp'
         try:
-            with open(msg_file(), 'w', encoding='utf-8') as f:
+            with open(tmp, 'w', encoding='utf-8') as f:
                 json.dump(MESSAGES, f, ensure_ascii=False, indent=2)
+            # 原子替换：读的一方要么看到旧的完整文件，要么看到新的完整文件。
+            # 直接 open('w') 会先把文件截断成 0 字节，长轮询恰好在那几毫秒里
+            # 读就会读到空文件 —— 页面上表现为「消息全没了」。
+            os.replace(tmp, target)
         except Exception:
-            pass
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
 # 迁移与首次加载放到 main() 里做：import 这个模块（自动化测试、外部脚本）不该
 # 顺手改动 数据/ 目录——之前这两行写在模块级，一 import 就真的搬了一遍文件。
@@ -708,6 +734,22 @@ def track_client(handler, joined=None):
         if joined:
             CLIENTS[cid]["joined"] = True
     return cid
+
+
+def touch_client(cid):
+    """续一下「这台设备还在」，不动 joined 等语义
+
+    长轮询会把一个请求挂到 20 秒：这期间 track_client 只在请求开头跑过一次，
+    不续期的话 PEER_TIMEOUT（25 秒）会把正在安静等消息的设备当成已离开。
+    """
+    if not cid:
+        return
+    with DATA_LOCK:
+        info = CLIENTS.get(cid)
+        if info is None:
+            return
+        info['ts'] = time.time()
+        info['last_seen'] = time.strftime("%H:%M:%S")
 
 
 PEER_TIMEOUT = 25     # 秒：超过这么久没发过任何请求，算这台设备已经离开
@@ -816,6 +858,28 @@ def lan_devices():
                         'last': info.get('last_seen', '')})
     out.sort(key=lambda x: x['name'])
     return out
+
+
+def room_state_key(payload):
+    """房间状态的稳定指纹：长轮询靠它判断「挂着的时候状态变没变」。
+
+    刻意不含 devices 里的 last（秒级的最后活跃时间）。那玩意每次请求都在动，
+    算进指纹的话，别人一轮询就把这边唤醒，长轮询立刻退化成忙轮询。
+    只留「谁在房间里」这类真正需要立刻反映给页面的东西。
+    """
+    devs = payload.get('devices') or []
+    return (
+        payload.get('room') or '',
+        bool(payload.get('closed')),
+        payload.get('peers'), payload.get('p2p'),
+        payload.get('self_ip') or '',
+        payload.get('client_url') or '',
+        tuple((d.get('name') or '', d.get('ip') or '',
+               d.get('dev') or d.get('cid') or '',
+               d.get('channel') or '', bool(d.get('joined', True)))
+              for d in devs),
+        tuple(sorted((payload.get('nums') or {}).items())),
+    )
 
 
 def _js_literal(v):
@@ -1363,6 +1427,57 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Length', '0')
         self.end_headers()
 
+    def _messages_snapshot(self):
+        """消息列表 + 内容指纹。这是重活（读文件、过滤丢失的文件、算 md5），
+        长轮询每 150ms 检查一次时不能每次都做，所以单独拆出来复用。"""
+        # 每次从磁盘重载，保证手动删除磁盘文件后能同步
+        load_messages()
+        with DATA_LOCK:
+            snapshot = [dict(m) for m in MESSAGES]
+        result = []
+        updir = upload_dir()
+        for m in snapshot:
+            if m.get('type') == 'file':
+                fpath = os.path.join(updir, m.get('name', ''))
+                if not os.path.isfile(fpath):
+                    continue
+            result.append(m)
+        # 内容指纹：删一条加一条导致数量不变时，前端也能感知变化
+        payload = json.dumps(result, ensure_ascii=False, sort_keys=True)
+        rev = hashlib.md5(payload.encode('utf-8')).hexdigest()[:12]
+        return rev, result
+
+    def _messages_payload(self, want_rev, cur_rev=None):
+        """构建一次 /messages 的响应体。
+
+        want_rev 与当前内容指纹一致 → 只回状态字段（unchanged=True），
+        不回整包聊天记录。状态字段（人数 / 设备 / 编号 / 关闭）每次都带，
+        这样长轮询挂起期间有人进出，页面也能立刻看到。
+
+        cur_rev 已知时传进来：只重算状态，省掉把整包聊天记录序列化一遍。
+        """
+        result = None
+        if cur_rev is None:
+            cur_rev, result = self._messages_snapshot()
+        # devices 里带每个成员的 IP：其他设备只拿「几台设备」这类数字，
+        # 不给清单（前端也只给房主端显示人数与 IP）。
+        owner_view = (not self._is_guest_client()) or self._is_admin()
+        devices = (p2p_devices() + lan_devices()) if owner_view else []
+        status = {'room': ROOM, 'peers': lan_peer_count(),
+                  'p2p': p2p_report_count(), 'devices': devices,
+                  # 每台设备自己的来源 IP：加入方页面上显示「本机 IP」用，
+                  # 谁请求就是谁的，不泄露别人地址
+                  'self_ip': self.client_address[0],
+                  # 头像编号表（设备名 -> 编号）：房主上报，所有设备渲染消息头像用
+                  'nums': dict(ROOM_NUMS),
+                  # 顺带把当前在线地址给页面：在线页（静态文件）靠它跟上 client_url.txt 的改动
+                  'client_url': _read_client_url(), 'closed': False}
+        if want_rev and want_rev == cur_rev:
+            return dict(status, ok=True, unchanged=True, rev=cur_rev)
+        if result is None:
+            cur_rev, result = self._messages_snapshot()
+        return dict(status, ok=True, messages=result, rev=cur_rev)
+
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
@@ -1432,40 +1547,47 @@ class Handler(BaseHTTPRequestHandler):
                             'peers': 0, 'p2p': 0, 'devices': [],
                             'client_url': _read_client_url(), 'closed': True})
                 return
-            # 每次从磁盘重载，保证手动删除磁盘文件后能同步
-            load_messages()
-            with DATA_LOCK:
-                snapshot = [dict(m) for m in MESSAGES]
-            result = []
-            updir = upload_dir()
-            for m in snapshot:
-                if m.get('type') == 'file':
-                    fpath = os.path.join(updir, m.get('name', ''))
-                    if not os.path.isfile(fpath):
-                        continue
-                result.append(m)
-            # 内容指纹：删一条加一条导致数量不变时，前端也能感知变化
-            payload = json.dumps(result, ensure_ascii=False, sort_keys=True)
-            rev = hashlib.md5(payload.encode('utf-8')).hexdigest()[:12]
-            # devices 里带每个成员的 IP：其他设备只拿「几台设备」这类数字，
-            # 不给清单（前端也只给房主端显示人数与 IP）。
-            owner_view = (not self._is_guest_client()) or self._is_admin()
-            devices = (p2p_devices() + lan_devices()) if owner_view else []
-            status = {'room': ROOM, 'peers': lan_peer_count(),
-                      'p2p': p2p_report_count(), 'devices': devices,
-                      # 每台设备自己的来源 IP：加入方页面上显示「本机 IP」用，
-                      # 谁请求就是谁的，不泄露别人地址
-                      'self_ip': self.client_address[0],
-                      # 头像编号表（设备名 -> 编号）：房主上报，所有设备渲染消息头像用
-                      'nums': dict(ROOM_NUMS),
-                      # 顺带把当前在线地址给页面：在线页（静态文件）靠它跟上 client_url.txt 的改动
-                      'client_url': _read_client_url(), 'closed': False}
-            # 轮询短路：客户端带上旧指纹且消息没变 → 只回状态字段，不回整包消息。
-            # 人数 / 设备 / 关闭状态仍随每次轮询下发，设备进出照样即时可见。
-            if qs.get('rev', [''])[0] == rev and rev:
-                self._json(dict(status, ok=True, unchanged=True, rev=rev))
-                return
-            self._json(dict(status, ok=True, messages=result, rev=rev))
+            want_rev = qs.get('rev', [''])[0]
+            try:
+                wait_ms = int(qs.get('wait', ['0'])[0] or 0)
+            except (TypeError, ValueError):
+                wait_ms = 0
+            wait_ms = max(0, min(wait_ms, LONGPOLL_MAX_MS))
+            resp = self._messages_payload(want_rev)
+            if wait_ms and resp.get('unchanged'):
+                # 长轮询：内容没变就挂着不返回，直到有变化或到点。
+                # 前端收到后立刻再发一个，中间不留空档 —— 消息延迟从
+                # 「一个轮询周期（平均 1 秒）」降到「一次本机 HTTP 往返 + 半个 tick」。
+                deadline = time.monotonic() + wait_ms / 1000.0
+                key = room_state_key(resp)
+                touched = time.monotonic()
+                fp = messages_fp()
+                cur_rev = resp.get('rev')
+                while has_room() and time.monotonic() < deadline:
+                    time.sleep(LONGPOLL_TICK)
+                    # 先看文件动没动：没动就只刷状态字段，不用把整包聊天记录
+                    # 序列化一遍再算 md5（聊天记录越长这笔开销越明显）
+                    now_fp = messages_fp()
+                    if now_fp != fp:
+                        fp = now_fp
+                        nxt = self._messages_payload(want_rev)
+                    else:
+                        nxt = self._messages_payload(want_rev, cur_rev)
+                    cur_rev = nxt.get('rev') or cur_rev
+                    if not nxt.get('unchanged') or room_state_key(nxt) != key:
+                        resp = nxt
+                        break
+                    resp = nxt
+                    now = time.monotonic()
+                    if now - touched >= LONGPOLL_TOUCH:
+                        touched = now
+                        touch_client(cid)
+                if not has_room():
+                    # 挂着的时候房间被解散了：立刻放行，别让它干等到超时
+                    resp = {'ok': True, 'messages': [], 'rev': '', 'room': '',
+                            'peers': 0, 'p2p': 0, 'devices': [],
+                            'client_url': _read_client_url(), 'closed': True}
+            self._json(resp)
 
         elif path == '/p2p-client':
             # 兼容旧的「下载页面」入口，内容与在线版逐字一致

@@ -106,6 +106,10 @@ const EMPTY_HTML = '<div class="empty"><span class="e-icon">'
   + '</span>暂无消息<span class="e-sub">发的文字与文件会显示在这里，后加入的设备也能看到</span></div>';
 let serverMsgs = [], localMsgs = [];
 let seenIds = new Set();     // 同一条消息可能既走本机也走广播，按 id 去重
+// 已渲染的每一条消息的签名：新列表若是「原封不动 + 尾部多几条」，就只追加，
+// 不重建 DOM。屏幕共享的 <video> 一旦被重建就会断流，得靠补推重来一次。
+let _renderedSigs = [];
+let _firstRenderDone = false;
 // 头像编号：设备名 -> 房间内编号。房主按加入顺序分配（房主=1，同一台设备
 // 断开后重连沿用原号，计数器只增不减），P2P 访客走 NUMS 广播同步，
 // 局域网设备从 /messages 的 nums 字段拿。
@@ -125,6 +129,12 @@ function pushMsg(m) {
   localMsgs.push(m);
   renderAll();
 }
+// 单条消息的渲染签名：id 之外连内容一起算。
+// 屏幕共享卡从「进行中」变「已结束」是同一条 id、内容变了，必须当改动处理。
+function msgSig(m) { return (m.id || '') + '|' + JSON.stringify(m); }
+function isNearBottom() {
+  return chatScroll.scrollHeight - chatScroll.scrollTop - chatScroll.clientHeight < 120;
+}
 function renderAll() {
   // 两个来源按 id 跨数组去重：本机先落了一条卡、轮询里又回来同一条时，
   // 只渲染后端那份（字段更全），杜绝「同一张卡出现两次」
@@ -138,11 +148,46 @@ function renderAll() {
     if (m.id) { if (seen.has(m.id)) continue; seen.add(m.id); }
     all.push(m);
   }
-  msgList.innerHTML = all.length ? all.map(renderMsg).join('') : EMPTY_HTML;
+
+  const sigs = new Array(all.length);
+  let canAppend = _renderedSigs.length > 0 && all.length >= _renderedSigs.length;
+  for (let i = 0; i < all.length; i++) {
+    sigs[i] = msgSig(all[i]);
+    if (canAppend && i < _renderedSigs.length && sigs[i] !== _renderedSigs[i]) canAppend = false;
+  }
+  const lastMsg = all[all.length - 1];
+  const lastSig = sigs.length ? sigs[sigs.length - 1] : '';
+  const prevLastSig = _renderedSigs.length ? _renderedSigs[_renderedSigs.length - 1] : '';
+  const newOwn = !!lastMsg && lastSig !== prevLastSig && isSelfMsg(lastMsg);
+
+  // 滚动：贴着底部或刚轮到自己发话才跟到底，用户往上翻历史时别把他拽回来
+  const stick = !_firstRenderDone || isNearBottom();
+  const prevTop = chatScroll.scrollTop;
+  let rebuilt = false;
+
+  if (canAppend && all.length === _renderedSigs.length) {
+    // 一模一样：DOM 一个字都不动，收尾函数照跑（直播计时之类的要走）
+  } else if (canAppend) {
+    // 只在尾部追加：正在播放的 <video> / <audio> 不会被打断，
+    // 也省掉每次轮询把整屏几百个节点重建一遍
+    msgList.insertAdjacentHTML('beforeend',
+      all.slice(_renderedSigs.length).map(renderMsg).join(''));
+  } else {
+    msgList.innerHTML = all.length ? all.map(renderMsg).join('') : EMPTY_HTML;
+    rebuilt = true;
+  }
+  _renderedSigs = sigs;
+
   mountScreenVideo(all);      // 共享画面挂到聊天卡上
   autoWatchLiveCards(all);    // 共享进行中：没流的一端自动请求补推
   ensureScDurTimer(all);      // 直播时长走秒（没有直播卡时会顺带收掉全屏层）
-  chatScroll.scrollTop = chatScroll.scrollHeight;
+
+  if (stick || newOwn) {
+    chatScroll.scrollTop = chatScroll.scrollHeight;
+  } else if (rebuilt) {
+    chatScroll.scrollTop = prevTop;   // 全量重建会把滚动条甩到顶，还原回去
+  }
+  _firstRenderDone = true;
 }
 
 function extOf(name) {
@@ -288,31 +333,74 @@ function resetPullsForReconnect() {
 }
 
 
+// ===== 长轮询 =====
+// 请求挂在后端，有变化才返回；收到就立刻再发一个，中间不留空档。
+// 以前固定 2 秒问一次，别人发的消息平均要等 1 秒才上屏 ——
+// 局域网本来 1ms 就能到，全被那个等待吞掉了。
+const LONGPOLL_WAIT = 20000;                    // 与后端 LONGPOLL_MAX_MS 对齐
+const POLL_TIMEOUT_PAD = 6000;                  // 客户端多等一会儿，别和服务端同时到点打架
+const POLL_BACKOFF = [400, 900, 1800, 3000];    // 连续失败时的退避间隔
+let LONGPOLL_OK = true;                         // 后端是否真的会挂起（老程序不认识 wait）
+let _fastUnchanged = 0;                         // 连续「秒回且没变化」的次数
+
 function stopPolling() {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  pollGen++;                    // 在途请求的结果一律作废
+  if (pollAbort) { try { pollAbort.abort(); } catch (e) {} pollAbort = null; }
 }
 function startPolling() {
   stopPolling();
-  pollTimer = setInterval(loadMessages, 2000);
+  pollBackoff = 0;
+  pollLoop(pollGen);
 }
-async function loadMessages() {
-  if (MODE !== 'host' || roomClosed) return;
+async function pollLoop(gen) {
+  while (gen === pollGen && MODE === 'host' && !roomClosed) {
+    let ok = false;
+    try { ok = await loadMessages(LONGPOLL_WAIT, gen); } catch (e) { ok = false; }
+    if (gen !== pollGen) return;
+    if (ok) {
+      pollBackoff = 0;
+      // 旧程序不认识 wait，会立刻返回「没变化」：这时候再立刻重发就是忙轮询，
+      // 退回原来的 2 秒一次。网页比程序新的时候靠这一条保命。
+      if (!LONGPOLL_OK) await sleep(2000);
+      continue;
+    }
+    // 连不上就别死循环猛敲：退避后再来，连续失败由 loadMessages 判定该退场
+    await sleep(POLL_BACKOFF[Math.min(pollBackoff, POLL_BACKOFF.length - 1)]);
+    pollBackoff++;
+  }
+}
+async function loadMessages(wait, gen) {
+  if (MODE !== 'host' || roomClosed) return false;
+  const t0 = Date.now();
+  const myGen = (typeof gen === 'number') ? gen : pollGen;
+  let url = API + '/messages';
+  const q = [];
+  if (lastRev) q.push('rev=' + encodeURIComponent(lastRev));
+  if (wait) q.push('wait=' + wait);
+  if (q.length) url += '?' + q.join('&');
+  // 长轮询要能被「换房间 / 关页面 / 重新开始」立刻打断，否则旧请求的结果
+  // 会在新房间的状态上乱写。超时兜底比服务端多给 POLL_TIMEOUT_PAD 秒。
+  let ctl = null, timer = null;
+  if (wait && typeof AbortController !== 'undefined') {
+    ctl = new AbortController();
+    pollAbort = ctl;
+    timer = setTimeout(() => { try { ctl.abort(); } catch (e) {} }, wait + POLL_TIMEOUT_PAD);
+  }
   try {
     // no-store：房间状态必须每次都问后端，绝不能让浏览器缓存一份「房间还在」。
     // 带上上次的内容指纹：没变化时后端只回状态字段，不重复发整包聊天记录
-    const r = await fetch(API + '/messages' + (lastRev ? '?rev=' + encodeURIComponent(lastRev) : ''),
-                          { cache: 'no-store' });
+    const r = await fetch(url, { cache: 'no-store', signal: ctl ? ctl.signal : undefined });
     // 房主换了房间码或解散了房间：这台设备的凭证失效，回入口页重新输码
     if (r.status === 403) {
       let d0 = {};
       try { d0 = await r.json(); } catch (e) {}
-      if (d0.code === 'NEED_JOIN') { msgFailStreak = 0; onNeedJoin(); return; }
+      if (d0.code === 'NEED_JOIN') { msgFailStreak = 0; onNeedJoin(); return true; }
       throw new Error('forbidden');   // 其他 403 也算一次异常，攒够次数就回起始页
     }
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
     msgFailStreak = 0;               // 拿到后端的明确回应，失败计数清零
-    if (!d.ok) return;
+    if (!d.ok) return true;
     // 本机 client_url.txt 改了：这份页面（尤其是线上那份）跟着换成新地址
     if (d.client_url) applyClientUrl(d.client_url);
     // 房间已被解散：本机页面和局域网设备都退回入口页
@@ -320,12 +408,12 @@ async function loadMessages() {
       if (!dissolving) {
         onRoomClosed('房间已销毁，房间码已作废。点「创建房间」可以重新开一个。');
       }
-      return;
+      return true;
     }
     // 后端换了房间码（别处新建/销毁过房间），本机这份页面持有的码已过期
     if (d.room && ROOM && d.room !== ROOM) {
       onRoomClosed('房间码已经变更，请重新创建或加入房间。');
-      return;
+      return true;
     }
     // 有人进来 / 离开都要立刻反映到输入区能不能用
     let peerChanged = false;
@@ -366,19 +454,33 @@ async function loadMessages() {
       }
     }
     updateNums();
-    if (d.rev === lastRev) return;
+    // 连续三次「秒回且没变化」= 后端根本没挂起（老版本程序不认 wait）。
+    // 单次不判：刚好有人加入时状态变化也会秒回，那一次不算。
+    if (wait && d.unchanged && Date.now() - t0 < 500) {
+      if (++_fastUnchanged >= 3) LONGPOLL_OK = false;
+    } else {
+      _fastUnchanged = 0;
+    }
+    if (d.rev === lastRev) return true;
     lastRev = d.rev;
     serverMsgs = d.messages || [];
     renderAll();
     relayNew(serverMsgs);
+    return true;
   } catch (e) {
+    // 主动停止（换房间 / 关页面 / 重新开始）不算失败：那一代的请求已经作废
+    if (myGen !== pollGen) return false;
     // 以前这里是空 catch：程序被关掉 / 网络断开时页面会永远停在聊天主界面。
-    // 连续 3 次（约 6 秒）问不到后端就认定房间已不可达，退回起始页。
+    // 连续 3 次问不到后端就认定房间已不可达，退回起始页。
     msgFailStreak++;
     if (msgFailStreak >= 3) {
       msgFailStreak = 0;
       onRoomClosed('连接不到本机程序，房间可能已经关闭，已返回起始页。请确认程序仍在运行后重新创建或加入房间。');
     }
+    return false;
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (ctl && pollAbort === ctl) pollAbort = null;
   }
 }
 

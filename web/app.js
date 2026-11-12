@@ -37,7 +37,9 @@ let CLIENT_URL = '__CLIENT_URL__';
 // 非常顽固，URL 不变就拿旧缓存页连新程序，轻则变慢、重则连不上。
 const PAGE_BUILD = '__PAGE_BUILD__';
 let lastRev = null;
-let pollTimer = null;        // 房主端的 /messages 轮询
+let pollGen = 0;             // 轮询代际：换代 / 停止时让在途请求的结果作废
+let pollAbort = null;        // 在途长轮询的 AbortController
+let pollBackoff = 0;         // 连续失败次数，决定退避多久
 let roomClosed = false;      // 房主已解散房间，页面停在入口页
 let dissolving = false;      // 正在请求解散，避免轮询抢先提示
 let msgFailStreak = 0;       // /messages 连续失败次数（程序被关掉 / 网络断了）
