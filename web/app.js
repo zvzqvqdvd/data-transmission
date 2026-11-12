@@ -60,7 +60,6 @@ let recvBuf = new Map();
 let chunkChain = Promise.resolve();
 let guestPeer = null, guestConn = null;
 let myName = '';             // 本机在房间里的名字（房主为「房主」，访客由房主分配）
-let guestNames = [];         // 房间成员名单（房主广播过来的）
 let pushedIds = new Set();   // 房主端：已经转发给外网设备的消息 id
 let relaySeeded = false;     // 首次拉 /messages 只记 id 不转发（历史由 HISTORY 单独推）
 // 分片大小必须小于 PeerJS 内部的 chunkedMTU(16300)：一旦超过，PeerJS 会把每片

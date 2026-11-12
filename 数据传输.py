@@ -190,11 +190,16 @@ def ensure_room(room=None):
     f = msg_file(room)
     # 0 字节的空壳（写到一半被打断、或被别的进程先建了个空文件）也算"没有"
     if not os.path.exists(f) or os.path.getsize(f) == 0:
+        tmp = f + '.tmp'
         try:
-            with open(f, 'w', encoding='utf-8') as fp:
+            with open(tmp, 'w', encoding='utf-8') as fp:
                 json.dump([], fp)
+            os.replace(tmp, f)
         except OSError:
-            pass
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
 
 def _new_room():
@@ -403,18 +408,13 @@ P2P_DEVICE_TTL = 60      # 秒：超过这么久没被再次上报，说明这�
 
 
 # ── 跨域白名单 ────────────────────────────────────────────────────────────
-# 在线页（自定义域名 / GitHub Pages 地址）要读本机 http://127.0.0.1:8000 的接口，
-# 属于跨源请求，必须明确放行。只放行自己的在线地址与本机回环，不用 *。
-LEGACY_ORIGINS = {
-    # 两个入口都常驻放行：client_url.txt 只能填一个，另一个靠这里兜住，
-    # 否则换地址后从旧入口打开的页面会读不到本机服务（跨域被拒）。
-    'https://zvzqvqdvd.top',         # 自定义域名
-    'https://zvzqvqdvd.github.io',   # GitHub Pages 域名（含 /data-transmission 子路径）
-}
+# 主页（client_url.txt 指向的在线地址）要读本机 http://127.0.0.1:8000 的接口，
+# 属于跨源请求，必须明确放行。只放行当前配置的在线地址与本机回环，不用 *。
+# 改地址不用重启：_allowed_origins() 每次按 client_url.txt 现读。
 
 
 def _allowed_origins():
-    origins = set(LEGACY_ORIGINS)
+    origins = set()
     current = _read_client_url()      # 跟着 client_url.txt 走，改了地址不用重启
     if current:
         p = urllib.parse.urlparse(current)
@@ -876,7 +876,7 @@ def room_state_key(payload):
         payload.get('client_url') or '',
         tuple((d.get('name') or '', d.get('ip') or '',
                d.get('dev') or d.get('cid') or '',
-               d.get('channel') or '', bool(d.get('joined', True)))
+               d.get('channel') or '')
               for d in devs),
         tuple(sorted((payload.get('nums') or {}).items())),
     )
@@ -1588,10 +1588,6 @@ class Handler(BaseHTTPRequestHandler):
                             'peers': 0, 'p2p': 0, 'devices': [],
                             'client_url': _read_client_url(), 'closed': True}
             self._json(resp)
-
-        elif path == '/p2p-client':
-            # 兼容旧的「下载页面」入口，内容与在线版逐字一致
-            self._send_html(build_static_page())
 
         elif path == '/download':
             if not has_room():
@@ -2316,37 +2312,9 @@ def _step_end(result):
     print(result, flush=True)
 
 
-# 防火墙状态缓存：查一次 netsh 要 0.8～1 秒，占启动耗时的三分之一。
-# 命中缓存就跳过这次查询，后台再核一次，规则真没了就作废缓存。
-FW_STATE_FILE = os.path.join(BASE_DIR, ".fw_state.json")
-FW_STATE_TTL = 6 * 3600
-
-
-def _fw_state_fresh():
-    try:
-        with open(FW_STATE_FILE, "r", encoding="utf-8") as f:
-            d = json.load(f)
-        return bool(d.get("ok")) and (time.time() - float(d.get("at", 0))) < FW_STATE_TTL
-    except Exception:
-        return False
-
-
-def _fw_state_write(ok):
-    try:
-        with open(FW_STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump({"ok": bool(ok), "at": time.time(), "rule": FIREWALL_RULE}, f)
-    except Exception:
-        pass
-
-
-def _fw_verify_async():
-    """缓存命中时后台复核：规则被别的安全软件清掉了就把缓存写成 False"""
-    def run():
-        try:
-            _fw_state_write(firewall_rule_exists())
-        except Exception:
-            pass
-    threading.Thread(target=run, daemon=True).start()
+# 不再缓存防火墙状态：看门狗在主进程退出时会删掉规则，上一次的「已放行」
+# 到这次启动必然已经失效。缓存只会让人跳过补规则、也跳过拉起看门狗，
+# 结果是局域网连不上、退出还留一条没人回收的孤儿规则。
 
 
 def firewall_phase():
@@ -2356,17 +2324,10 @@ def firewall_phase():
     删除需要管理员权限，所以回收规则这件事交给提权起来的看门狗，
     本进程只管启动服务。所有提示统一交给 main() 打印，这里不输出任何日志。
 
-    提速：查一次规则要跑 netsh，约 0.8～1 秒，占掉启动耗时的三分之一。
-    查过一次成功就落一个带时间戳的状态文件（`.fw_state.json`），6 小时内
-    直接当「已放行」用，同时在后台再核一次——真被清掉了就作废缓存，
-    下次启动走完整流程，功能不受影响。
+    每次启动都真查一次规则：看门狗在上次退出时已经把规则删了，
+    所谓「6 小时内免查」的缓存与这个生命周期冲突，见上面的说明。
     """
-    if _fw_state_fresh():
-        _fw_verify_async()
-        return True
-    ok = _firewall_phase()
-    _fw_state_write(ok)
-    return ok
+    return _firewall_phase()
 
 
 def _firewall_phase():

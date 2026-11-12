@@ -23,7 +23,6 @@ VSVersionInfo(
             StringStruct('FileDescription', '数据传输 - 局域网/外网文件与文字互传'),
             StringStruct('FileVersion', '1.0.0.0'),
             StringStruct('InternalName', 'DataTransmission'),
-            StringStruct('LegalCopyright', 'MIT License'),
             StringStruct('OriginalFilename', '数据传输.exe'),
             StringStruct('ProductName', '数据传输'),
             StringStruct('ProductVersion', '1.0.0.0'),

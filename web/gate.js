@@ -342,8 +342,7 @@ function forgetJoinRoom() {
 }
 // ===== 免责声明：内嵌在入口页下方，文本展示 + 复选框（默认勾选），不弹窗 =====
 // 复选框勾着 → 点创建/加入直接继续；没勾 → 展开声明区并提示先勾选。
-// 房间内的新建 / 销毁房间不涉及声明。
-let agreeAccepted = false;       // 本次页面内同意过至少一次（与复选框状态保持一致）
+// 房间内的销毁房间不涉及声明。
 // 复选框当前是否勾着（页面刷新后恢复默认勾选）
 function agreeChecked() {
   const chk = document.getElementById('agreeCheck');
@@ -369,7 +368,7 @@ function closeDiscPage(e) {
 }
 // 统一入口：勾选了直接继续，没勾选就提示
 function agreeThen(fn) {
-  if (agreeChecked()) { agreeAccepted = true; fn(); return; }
+  if (agreeChecked()) { fn(); return; }
   agreeHintFlash();
 }
 function gateShowJoin() {
@@ -678,7 +677,7 @@ if (MODE === 'host') {
     // 邀请链接：按访客身份连过去。复选框默认勾选 = 已同意，直接进；
     // 被手动取消勾选过就停在入口页提示
     const goInvite = () => { hideGate(); initGuest(invited); };
-    if (agreeChecked()) { agreeAccepted = true; goInvite(); }
+    if (agreeChecked()) { goInvite(); }
     else agreeHintFlash();
   } else if (q.get('host') === '1') {
     // 在线页房主刷新：先确认房间还在，别一刷新就偷偷开个新房间

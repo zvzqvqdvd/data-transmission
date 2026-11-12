@@ -171,9 +171,7 @@ body {
   content: ''; width: 5px; height: 5px; border-radius: 50%;
   background: var(--t4); flex-shrink: 0;
 }
-.chan-count.on::before { background: var(--brand); box-shadow: 0 0 0 3px rgba(7, 193, 96, .12); }
 #lanBanner .chan-count::before { background: #BFD3EE; }
-#lanBanner .chan-count.on::before { background: var(--info); box-shadow: 0 0 0 3px rgba(31, 111, 235, .12); }
 .chan-list { display: none; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
 .chan-list.show { display: flex; }
 
@@ -453,7 +451,6 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   font-size: 11px; color: var(--t3);
 }
 .sc-end-bar span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sc-dot { width: 7px; height: 7px; border-radius: 50%; background: #FF4D4F; animation: blink 1.4s infinite; flex: none; }
 .sc-lanhint {
   position: absolute; inset: 0; z-index: 3;
   display: flex; align-items: center; justify-content: center;

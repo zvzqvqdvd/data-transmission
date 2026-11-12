@@ -350,6 +350,10 @@ function stopPolling() {
 function startPolling() {
   stopPolling();
   pollBackoff = 0;
+  // 每次重新起 polling 都重新探一次后端是否支持长轮询：降级是「新网页配旧
+  // 程序」的临时兜底，不能在换房/重连后还一直沿用。
+  LONGPOLL_OK = true;
+  _fastUnchanged = 0;
   pollLoop(pollGen);
 }
 async function pollLoop(gen) {
@@ -390,6 +394,8 @@ async function loadMessages(wait, gen) {
     // no-store：房间状态必须每次都问后端，绝不能让浏览器缓存一份「房间还在」。
     // 带上上次的内容指纹：没变化时后端只回状态字段，不重复发整包聊天记录
     const r = await fetch(url, { cache: 'no-store', signal: ctl ? ctl.signal : undefined });
+    // 响应到达时可能已经换过房间：这一代的结果一律作废，别写进新房间状态
+    if (myGen !== pollGen) return false;
     // 房主换了房间码或解散了房间：这台设备的凭证失效，回入口页重新输码
     if (r.status === 403) {
       let d0 = {};
@@ -454,10 +460,11 @@ async function loadMessages(wait, gen) {
       }
     }
     updateNums();
-    // 连续三次「秒回且没变化」= 后端根本没挂起（老版本程序不认 wait）。
-    // 单次不判：刚好有人加入时状态变化也会秒回，那一次不算。
+    // 连续五次「秒回且没变化」= 后端根本没挂起（老版本程序不认 wait）。
+    // 阈值给宽一点：状态变化也会让长轮询提前返回 unchanged=true，那是正常的，
+    // 不该把新程序误判成旧程序。真降级了，下次 startPolling 会重新探测。
     if (wait && d.unchanged && Date.now() - t0 < 500) {
-      if (++_fastUnchanged >= 3) LONGPOLL_OK = false;
+      if (++_fastUnchanged >= 5) LONGPOLL_OK = false;
     } else {
       _fastUnchanged = 0;
     }
@@ -626,7 +633,6 @@ function handleData(data, ctx) {
     if (data.startsWith('PEERS:')) {
       try {
         const p = JSON.parse(data.slice(6));
-        guestNames = (p && p.names) || [];
         // 人数由右侧外网卡片 / 局域网卡片各自显示，这里不报合并总数
         renderAll();
       } catch (e) {}
@@ -2232,7 +2238,6 @@ function startHostUI(fromWeb, lanUrl, lanClient) {
   localMsgs = [];
   myName = isLanClient ? myNick() : '房主';
   seenIds = new Set();
-  guestNames = [];
   hostConns.clear();
   recvBuf.clear();
   pushedIds = new Set();
@@ -2306,7 +2311,6 @@ function initGuest(room, existing) {
   peerBye = false;
   guestAutoTry = 0;
   myName = '';                 // 房间里的名字等房主分配回来
-  guestNames = [];
   seenIds = new Set();
   localMsgs = [];
   setStatus('正在连接房间…');
@@ -2439,7 +2443,6 @@ function resetToGate() {
   pullInFlight.clear(); pullQueue.length = 0; pullStartAt.clear();   // 清掉没完成的下载任务
   serverMsgs = []; localMsgs = [];
   seenIds = new Set();
-  guestNames = [];
   myName = '';
   showRoomCard('');
   document.getElementById('guestGate').style.display = 'none';

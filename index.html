@@ -195,9 +195,7 @@ body {
   content: ''; width: 5px; height: 5px; border-radius: 50%;
   background: var(--t4); flex-shrink: 0;
 }
-.chan-count.on::before { background: var(--brand); box-shadow: 0 0 0 3px rgba(7, 193, 96, .12); }
 #lanBanner .chan-count::before { background: #BFD3EE; }
-#lanBanner .chan-count.on::before { background: var(--info); box-shadow: 0 0 0 3px rgba(31, 111, 235, .12); }
 .chan-list { display: none; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
 .chan-list.show { display: flex; }
 
@@ -477,7 +475,6 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   font-size: 11px; color: var(--t3);
 }
 .sc-end-bar span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sc-dot { width: 7px; height: 7px; border-radius: 50%; background: #FF4D4F; animation: blink 1.4s infinite; flex: none; }
 .sc-lanhint {
   position: absolute; inset: 0; z-index: 3;
   display: flex; align-items: center; justify-content: center;
@@ -1409,7 +1406,7 @@ body.fs-locked { overflow: hidden; }
       </details>
       <details>
         <summary>房间码是对的，却说找不到房间？</summary>
-        <p>房主点过「新建房间」或「销毁房间」，旧码就作废了；也可能是房主那边的程序或页面已经关掉。找房主重新要房间码，或者直接扫二维码/点邀请链接。</p>
+        <p>房主销毁过房间、或关掉程序重新开过，旧码就作废了；也可能是房主那边的程序或页面已经关掉。找房主重新要房间码，或者直接扫二维码/点邀请链接。</p>
       </details>
       <details>
         <summary>一直卡在「正在连接对方设备」？</summary>
@@ -1446,7 +1443,7 @@ body.fs-locked { overflow: hidden; }
       · 房主点「销毁房间」<br>
       销毁时房间码作废，本机的聊天记录与接收文件也一并删除，不做保留。</p>
     <div class="modal-btns"><button class="btn-plain" onclick="hideTtl()">知道了</button></div>
-    <p style="text-align:center;font-size:11px;color:#b0b3b8;margin:10px 0 0;">页面版本 3a23b2c824（反馈问题时请带上这一行）</p>
+    <p style="text-align:center;font-size:11px;color:#b0b3b8;margin:10px 0 0;">页面版本 b469435e07（反馈问题时请带上这一行）</p>
   </div>
 </div>
 
@@ -1557,7 +1554,7 @@ let CLIENT_URL = 'https://zvzqvqdvd.github.io/data-transmission/';
 // 页面源文件指纹（由程序按 web/ 源文件现算，在线页 = 导出那一刻的值）。
 // 邀请链接 / 二维码 / 复制的访问地址都带 ?v=<指纹>：手机浏览器对页面缓存
 // 非常顽固，URL 不变就拿旧缓存页连新程序，轻则变慢、重则连不上。
-const PAGE_BUILD = '3a23b2c824';
+const PAGE_BUILD = 'b469435e07';
 let lastRev = null;
 let pollGen = 0;             // 轮询代际：换代 / 停止时让在途请求的结果作废
 let pollAbort = null;        // 在途长轮询的 AbortController
@@ -1582,7 +1579,6 @@ let recvBuf = new Map();
 let chunkChain = Promise.resolve();
 let guestPeer = null, guestConn = null;
 let myName = '';             // 本机在房间里的名字（房主为「房主」，访客由房主分配）
-let guestNames = [];         // 房间成员名单（房主广播过来的）
 let pushedIds = new Set();   // 房主端：已经转发给外网设备的消息 id
 let relaySeeded = false;     // 首次拉 /messages 只记 id 不转发（历史由 HISTORY 单独推）
 // 分片大小必须小于 PeerJS 内部的 chunkedMTU(16300)：一旦超过，PeerJS 会把每片
@@ -2438,6 +2434,10 @@ function stopPolling() {
 function startPolling() {
   stopPolling();
   pollBackoff = 0;
+  // 每次重新起 polling 都重新探一次后端是否支持长轮询：降级是「新网页配旧
+  // 程序」的临时兜底，不能在换房/重连后还一直沿用。
+  LONGPOLL_OK = true;
+  _fastUnchanged = 0;
   pollLoop(pollGen);
 }
 async function pollLoop(gen) {
@@ -2478,6 +2478,8 @@ async function loadMessages(wait, gen) {
     // no-store：房间状态必须每次都问后端，绝不能让浏览器缓存一份「房间还在」。
     // 带上上次的内容指纹：没变化时后端只回状态字段，不重复发整包聊天记录
     const r = await fetch(url, { cache: 'no-store', signal: ctl ? ctl.signal : undefined });
+    // 响应到达时可能已经换过房间：这一代的结果一律作废，别写进新房间状态
+    if (myGen !== pollGen) return false;
     // 房主换了房间码或解散了房间：这台设备的凭证失效，回入口页重新输码
     if (r.status === 403) {
       let d0 = {};
@@ -2542,10 +2544,11 @@ async function loadMessages(wait, gen) {
       }
     }
     updateNums();
-    // 连续三次「秒回且没变化」= 后端根本没挂起（老版本程序不认 wait）。
-    // 单次不判：刚好有人加入时状态变化也会秒回，那一次不算。
+    // 连续五次「秒回且没变化」= 后端根本没挂起（老版本程序不认 wait）。
+    // 阈值给宽一点：状态变化也会让长轮询提前返回 unchanged=true，那是正常的，
+    // 不该把新程序误判成旧程序。真降级了，下次 startPolling 会重新探测。
     if (wait && d.unchanged && Date.now() - t0 < 500) {
-      if (++_fastUnchanged >= 3) LONGPOLL_OK = false;
+      if (++_fastUnchanged >= 5) LONGPOLL_OK = false;
     } else {
       _fastUnchanged = 0;
     }
@@ -2714,7 +2717,6 @@ function handleData(data, ctx) {
     if (data.startsWith('PEERS:')) {
       try {
         const p = JSON.parse(data.slice(6));
-        guestNames = (p && p.names) || [];
         // 人数由右侧外网卡片 / 局域网卡片各自显示，这里不报合并总数
         renderAll();
       } catch (e) {}
@@ -4320,7 +4322,6 @@ function startHostUI(fromWeb, lanUrl, lanClient) {
   localMsgs = [];
   myName = isLanClient ? myNick() : '房主';
   seenIds = new Set();
-  guestNames = [];
   hostConns.clear();
   recvBuf.clear();
   pushedIds = new Set();
@@ -4394,7 +4395,6 @@ function initGuest(room, existing) {
   peerBye = false;
   guestAutoTry = 0;
   myName = '';                 // 房间里的名字等房主分配回来
-  guestNames = [];
   seenIds = new Set();
   localMsgs = [];
   setStatus('正在连接房间…');
@@ -4527,7 +4527,6 @@ function resetToGate() {
   pullInFlight.clear(); pullQueue.length = 0; pullStartAt.clear();   // 清掉没完成的下载任务
   serverMsgs = []; localMsgs = [];
   seenIds = new Set();
-  guestNames = [];
   myName = '';
   showRoomCard('');
   document.getElementById('guestGate').style.display = 'none';
@@ -5342,8 +5341,7 @@ function forgetJoinRoom() {
 }
 // ===== 免责声明：内嵌在入口页下方，文本展示 + 复选框（默认勾选），不弹窗 =====
 // 复选框勾着 → 点创建/加入直接继续；没勾 → 展开声明区并提示先勾选。
-// 房间内的新建 / 销毁房间不涉及声明。
-let agreeAccepted = false;       // 本次页面内同意过至少一次（与复选框状态保持一致）
+// 房间内的销毁房间不涉及声明。
 // 复选框当前是否勾着（页面刷新后恢复默认勾选）
 function agreeChecked() {
   const chk = document.getElementById('agreeCheck');
@@ -5369,7 +5367,7 @@ function closeDiscPage(e) {
 }
 // 统一入口：勾选了直接继续，没勾选就提示
 function agreeThen(fn) {
-  if (agreeChecked()) { agreeAccepted = true; fn(); return; }
+  if (agreeChecked()) { fn(); return; }
   agreeHintFlash();
 }
 function gateShowJoin() {
@@ -5678,7 +5676,7 @@ if (MODE === 'host') {
     // 邀请链接：按访客身份连过去。复选框默认勾选 = 已同意，直接进；
     // 被手动取消勾选过就停在入口页提示
     const goInvite = () => { hideGate(); initGuest(invited); };
-    if (agreeChecked()) { agreeAccepted = true; goInvite(); }
+    if (agreeChecked()) { goInvite(); }
     else agreeHintFlash();
   } else if (q.get('host') === '1') {
     // 在线页房主刷新：先确认房间还在，别一刷新就偷偷开个新房间
