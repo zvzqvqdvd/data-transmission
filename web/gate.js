@@ -538,14 +538,8 @@ function restoreLanSwitch() {
   if (cb) cb.checked = LAN_SWITCH === 'on';
   onLanSwitchChange();
 }
-// 下载视图里的退路：装不上 / 不想装，就用纯网页房间
-function fallbackCloud() {
-  const cb = document.getElementById('lanSwitch');
-  if (cb) cb.checked = false;
-  onLanSwitchChange();
-  gateShowChoices();
-  gateMsg('已切回纯网页房间：创建房间不需要下载任何软件。', 'info');
-}
+// 下载视图没有第二条出口：屏幕上的「返回」已经能回到选择页，
+// 多一条「不装软件直接创建」只是把同一个动作说了两遍（已按反馈删除）。
 async function cloudGateCreate() {
   if (!agreeChecked()) { agreeHintFlash(); return; }
   const btn = document.getElementById('gateCreateBtn');

@@ -72,8 +72,6 @@
         <button class="gate-back" onclick="gateShowChoices()">返回</button>
         <button class="gate-back" onclick="dlmRetry()">重新创建</button>
       </div>
-      <!-- 装不上或不想装：退回纯网页房间，不把人卡在下载屏 -->
-      <div class="gdl-alt"><a onclick="fallbackCloud()">不装软件，直接用纯网页创建</a></div>
     </div>
 
     </div><!-- /gate-views -->
@@ -139,6 +137,19 @@
     <button class="pill ghost" onclick="copyRoomCode()">复制房间码</button>
     <button class="pill danger" id="dissolveBtn" onclick="askDissolve()">销毁房间</button>
   </div>
+</div>
+
+<!-- 纯网页房间的状态卡（U-06）：容量 / 单文件上限 / 空闲倒计时。
+     只有云房主看得到，由 renderRoomStat() 按 CHANNEL+MODE 控制显隐并每秒刷新 -->
+<div id="roomStat" data-channel="cloud" style="display:none;">
+  <div class="st-h">房间状态</div>
+  <div class="st-grid">
+    <span>文件 <b id="stFiles">0 / 500 MB</b></span>
+    <span>单文件上限 <b>100 MB</b></span>
+    <span>空闲剩余 <b id="stIdle">--:--</b></span>
+  </div>
+  <div class="mini-bar"><i id="stBar"></i></div>
+  <div class="st-foot">刷新页面可恢复历史与文件 · 30 分钟无通信自动销毁</div>
 </div>
 
 <div id="lanBanner" style="display:none;">

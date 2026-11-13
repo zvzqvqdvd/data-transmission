@@ -181,6 +181,7 @@ function renderAll() {
   mountScreenVideo(all);      // 共享画面挂到聊天卡上
   autoWatchLiveCards(all);    // 共享进行中：没流的一端自动请求补推
   ensureScDurTimer(all);      // 直播时长走秒（没有直播卡时会顺带收掉全屏层）
+  refreshDownloadBars();      // 重建 DOM 后把下载按钮的图标与进度条对回来
 
   if (stick || newOwn) {
     chatScroll.scrollTop = chatScroll.scrollHeight;
@@ -282,14 +283,21 @@ function renderMsg(msg) {
     const dlSvg = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"' +
       ' stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
       '<path d="M12 3.6v10.2"/><path d="M7.7 10 12 14.3 16.3 10"/><path d="M4.6 18.6h14.8"/></svg>';
+    // 暂停 / 继续两个图标跟下载图标同尺寸叠在一起，靠 data-dl 切显示：
+    // 下载中显示「暂停」，暂停后显示「继续」，三者不会同时出现。
+    const pauseSvg = '<svg class="dl-ico-pause" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">' +
+      '<rect x="7" y="5.5" width="3.6" height="13" rx="1.2"/><rect x="13.4" y="5.5" width="3.6" height="13" rx="1.2"/></svg>';
+    const playSvg = '<svg class="dl-ico-play" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">' +
+      '<path d="M8.5 5.6c0-.8.9-1.3 1.6-.9l9 6.4c.6.4.6 1.4 0 1.8l-9 6.4c-.7.4-1.6-.1-1.6-.9z"/></svg>';
     if (MODE === 'guest' && msg.id) {
       bubble = '<div class="file-card">' + inner +
         '<button type="button" class="file-dl" title="下载" aria-label="下载"' +
         ' onclick="pullFile(\'' + esc(msg.id) + '\')">' + dlSvg + '</button></div>';
     } else {
-      bubble = '<div class="file-card" data-name="' + esc(msg.name) + '">' + inner +
+      bubble = '<div class="file-card" data-name="' + esc(msg.name) + '" data-id="' + esc(msg.id || msg.name) + '">' + inner +
         '<button type="button" class="file-dl" title="下载" aria-label="下载"' +
-        ' onclick="downloadLocal(this.parentNode)">' + dlSvg + '</button></div>';
+        ' onclick="downloadLocal(this.parentNode)">' + dlSvg + pauseSvg + playSvg + '</button>' +
+        '<div class="dl-bar"><i></i></div></div>';
     }
   }
   // 访客文件卡片正下方的下载进度条（平时隐藏，下载中由 txRender 填充）
@@ -309,17 +317,155 @@ function renderMsg(msg) {
   return '<div class="msg-row'+(self?' self':'')+'">'+ avatar + side +'</div>';
 }
 
-// 房主 / 局域网端：文件在本机后端，点卡片触发浏览器下载
-function downloadLocal(btn) {
-  const name = btn.getAttribute('data-name') || '';
+// 房主 / 局域网端：文件在本机后端，点卡片开始下载
+// 云房间没有后端：/download 必须走 apiFetch 把 Blob 取出来再存盘。
+// 直接给 <a> 一个 /download 地址会打到**页面所在的域名**（GitHub Pages），
+// 那里没有这个接口，必然 404 —— 表现就是浏览器下载栏里的「无法下载 · 没有文件」。
+//
+// 后端模式改成自己读流：<a download> 一旦交给浏览器就收不回来，暂停 / 续传
+// 都做不到。流在手上就可以随时停，继续时用 Range: bytes=N- 从断点接着要。
+const DL_JOBS = new Map();   // 消息 id -> {name, received, total, chunks, ctl, running, paused, done}
+
+function dlJobFor(id, name) {
+  let j = DL_JOBS.get(id);
+  if (!j) {
+    j = { id: id, name: name, received: 0, total: 0, chunks: [],
+          ctl: null, running: false, paused: false, done: false };
+    DL_JOBS.set(id, j);
+  }
+  return j;
+}
+
+// 按 job 状态刷新所有文件卡的按钮图标与进度条（重新渲染后也能靠它对回来）
+function refreshDownloadBars() {
+  const cards = document.querySelectorAll('.file-card[data-id]');
+  for (let i = 0; i < cards.length; i++) {
+    const card = cards[i];
+    const job = DL_JOBS.get(card.getAttribute('data-id') || '');
+    const bar = card.querySelector('.dl-bar i');
+    const btn = card.querySelector('.file-dl');
+    if (!job) { card.removeAttribute('data-dl'); if (bar) bar.style.width = '0%'; continue; }
+    const pct = job.total ? Math.min(100, job.received / job.total * 100) : 0;
+    if (bar) bar.style.width = pct.toFixed(1) + '%';
+    const st = job.done ? 'done' : (job.running ? 'running' : (job.paused ? 'paused' : 'idle'));
+    card.setAttribute('data-dl', st);
+    if (btn) {
+      btn.title = job.done ? '已下载' : (job.running ? '暂停下载' : (job.paused ? '继续下载' : '下载'));
+      btn.setAttribute('aria-label', btn.title);
+    }
+  }
+}
+
+async function downloadLocal(card) {
+  const name = card.getAttribute('data-name') || '';
   if (!name) return;
-  const a = document.createElement('a');
-  a.href = fileUrl({ name: name });
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  // 开始下载不弹提示：浏览器自己就有下载条，再弹一次是多余的
+  const id = card.getAttribute('data-id') || name;
+
+  // 云房间：文件本来就在房主浏览器里，取出来直接存，不存在「暂停」这回事
+  if (CHANNEL === 'cloud') {
+    try {
+      const res = await apiFetch('/download?name=' + encodeURIComponent(name));
+      if (!res || !res.ok) { notify('「' + name + '」已不存在，无法下载'); return; }
+      const blob = await res.blob();
+      const u = URL.createObjectURL(blob);
+      saveBlob(u, name);
+      // 大文件读盘要一会儿，留足时间再回收，别把正在下载的 blob 抽走
+      setTimeout(() => { try { URL.revokeObjectURL(u); } catch (e) {} }, 60000);
+    } catch (e) {
+      notify('下载失败：' + String((e && e.message) || e));
+    }
+    return;
+  }
+
+  const job = dlJobFor(id, name);
+  if (job.running) { pauseDownload(job); return; }    // 下载中再点 = 暂停
+  if (job.done) { notify('这个文件已经下载过了'); return; }
+  resumeDownload(job);
+}
+
+function pauseDownload(job) {
+  job.paused = true;
+  job.running = false;
+  try { if (job.ctl) job.ctl.abort(); } catch (e) {}
+  refreshDownloadBars();
+}
+
+function resumeDownload(job) {
+  job.paused = false;
+  job.running = true;
+  refreshDownloadBars();
+  dlPump(job);
+}
+
+async function dlPump(job) {
+  const ctl = new AbortController();
+  job.ctl = ctl;
+  const headers = {};
+  // 已经收过的部分不再要：后端 _serve_file 认 Range，会从断点回 206
+  if (job.received > 0) headers['Range'] = 'bytes=' + job.received + '-';
+  let res;
+  try {
+    res = await apiFetch(fileUrl({ name: job.name }),
+                         { headers: headers, signal: ctl.signal, cache: 'no-store' });
+  } catch (e) {
+    if (job.paused) return;                        // 是自己按的暂停，不算失败
+    job.running = false;
+    notify('下载失败：' + String((e && e.message) || e));
+    refreshDownloadBars();
+    return;
+  }
+  if (res.status === 416) { dlFinish(job); return; }   // 断点已在末尾：其实已经收全
+  if (!res.ok && res.status !== 206) {
+    job.running = false;
+    notify('下载失败（HTTP ' + res.status + '）');
+    refreshDownloadBars();
+    return;
+  }
+  const len = Number(res.headers.get('Content-Length') || 0);
+  if (len) job.total = job.received + len;
+  if (!res.body || !res.body.getReader) {          // 老浏览器：退化成整包收
+    const blob = await res.blob();
+    job.chunks = [blob];
+    job.received = blob.size;
+    dlFinish(job);
+    return;
+  }
+  const reader = res.body.getReader();
+  let shown = -1;
+  try {
+    while (true) {
+      const step = await reader.read();
+      if (step.done) break;
+      job.chunks.push(step.value);
+      job.received += step.value.length;
+      // 进度按 1% 一档刷新，不然每 64KB 就改一次 DOM，白费力气
+      const pct = job.total ? Math.floor(job.received / job.total * 100) : 0;
+      if (pct !== shown) { shown = pct; refreshDownloadBars(); }
+    }
+  } catch (e) {
+    if (job.paused) return;                        // abort 掉了：保留已收分片，等继续
+    job.running = false;
+    notify('下载中断：' + String((e && e.message) || e));
+    refreshDownloadBars();
+    return;
+  }
+  if (job.paused) return;
+  dlFinish(job);
+}
+
+function dlFinish(job) {
+  job.running = false;
+  job.done = true;
+  try {
+    const blob = new Blob(job.chunks);
+    const u = URL.createObjectURL(blob);
+    saveBlob(u, job.name);
+    setTimeout(() => { try { URL.revokeObjectURL(u); } catch (e) {} }, 60000);
+  } catch (e) {
+    notify('保存失败：' + String((e && e.message) || e));
+  }
+  job.chunks = [];                                 // 分片交给 Blob 之后就别攥着了
+  refreshDownloadBars();
 }
 
 // 换了（重）连接：上一条通道上的拉取全都作废，队列跟着清空，
@@ -1708,6 +1854,7 @@ function onRoomClosed(tip) {
   if (CHANNEL === 'cloud') { try { Cloud.dissolve(); } catch (e) {} }
   applyDevicePrivacy();
   stopPolling();
+  stopRoomStat();                    // U-06：房间没了就别再每秒算倒计时
   peerBye = true;
   stopScreenShare();                 // 必须先做：里面要用 hostConns 广播 SCREEN_END
   // 先通知每一台外网设备再断开，否则对方会当成掉线而自动重连。
@@ -2168,15 +2315,50 @@ function renderMembers() {
   };
   fill('memberList', wan);
   fill('lanMembers', lan);
-  // 房间卡副标题：总人数（房主 + 外网 + 局域网），云房间额外标注生命周期
+  // 房间卡副标题只写人数：生命周期信息已经在下面的状态卡里（免得同一句话说两遍）
   const total = 1 + hostList().length +
     (roomDevices || []).filter(d => d && d.channel !== 'p2p').length;
   const sub = document.getElementById('roomSub');
-  if (sub) {
-    sub.textContent = CHANNEL === 'cloud'
-      ? ('纯网页房间 · ' + total + '/6 人 · 30 分钟无通信自动销毁')
-      : (total + '/6 人');
-  }
+  if (sub) sub.textContent = total + ' / 6 人';
+  renderRoomStat();
+}
+
+// ===== U-06：纯网页房间状态卡 =====
+// 容量与倒计时的数据源都在 cloud.js：Cloud.totalBytes() 是各文件 Blob 之和，
+// CLOUD_IDLE_MS 与后端 ROOM_IDLE_MAX 都是 30 分钟，lastActive 会持久化进
+// IndexedDB——刷新页面后倒计时接着走，不会被重置成满格。
+let statTimer = null;
+function mmss(ms) {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  return String(Math.floor(s / 60)).padStart(2, '0') + ':' +
+         String(s % 60).padStart(2, '0');
+}
+function renderRoomStat() {
+  const box = document.getElementById('roomStat');
+  if (!box) return;
+  if (CHANNEL !== 'cloud' || MODE !== 'host') { box.style.display = 'none'; return; }
+  box.style.display = '';
+  const used = Cloud.totalBytes();
+  const mb = used / 1048576;
+  const files = document.getElementById('stFiles');
+  if (files) files.textContent = (mb >= 100 ? mb.toFixed(0) : mb.toFixed(1).replace(/\.0$/, '')) +
+                                  ' / 500 MB';
+  const idle = document.getElementById('stIdle');
+  if (idle) idle.textContent = mmss(CLOUD_IDLE_MS - (Date.now() - (Cloud.lastActive || Date.now())));
+  const bar = document.getElementById('stBar');
+  if (bar) bar.style.width = Math.min(100, used / CLOUD_TOTAL_MAX * 100).toFixed(2) + '%';
+}
+function startRoomStat() {
+  stopRoomStat();
+  if (CHANNEL !== 'cloud' || MODE !== 'host') return;
+  renderRoomStat();
+  // 一秒一格：倒计时必须看得见在走，否则「30 分钟自动销毁」只是一句静态文案
+  statTimer = setInterval(renderRoomStat, 1000);
+}
+function stopRoomStat() {
+  if (statTimer) { clearInterval(statTimer); statTimer = null; }
+  const box = document.getElementById('roomStat');
+  if (box) box.style.display = 'none';
 }
 // 只断开某一条连接；byPeer=true 表示是对方主动发 BYE 过来的
 function dropHostConnById(id, byPeer) {
@@ -2277,6 +2459,7 @@ function startHostUI(fromWeb, lanUrl, lanClient) {
   lastDevicesSig = '';
   reportedDevices = '';
   renderMembers();
+  startRoomStat();   // U-06：只有云房主会真的开始每秒 tick，其它情况内部直接返回
   // 在线页主动「创建房间」也算合法房主；局域网设备打开本机服务则不算
   const canHostP2P = P2P_ENABLED || !!fromWeb;
   document.getElementById('guestGate').style.display = 'none';

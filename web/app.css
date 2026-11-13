@@ -692,7 +692,11 @@ body.fs-locked { overflow: hidden; }
 
 /* ===== 入口页 ===== */
 #gateView {
-  position: fixed; inset: 0; z-index: 200; display: none;
+  position: fixed; inset: 0; z-index: 200; display: flex;
+  /* 进出房间都要有过渡，所以不能再用 display 切换（display 无法过渡）。
+     改成常驻 flex + visibility/opacity：隐藏时不接收任何指针事件。 */
+  visibility: hidden; opacity: 0; pointer-events: none;
+  transition: opacity .24s ease, visibility 0s linear .24s;
   background:
     radial-gradient(820px 420px at 50% -8%, #DBF6E7 0%, rgba(219, 246, 231, 0) 68%),
     radial-gradient(680px 360px at 92% 104%, #E6EEFC 0%, rgba(230, 238, 252, 0) 62%),
@@ -700,7 +704,16 @@ body.fs-locked { overflow: hidden; }
   padding: 24px; overflow-y: auto;
   align-items: center; justify-content: center;
 }
-#gateView.show { display: flex; }
+#gateView.show {
+  visibility: visible; opacity: 1; pointer-events: auto;
+  transition: opacity .24s ease, visibility 0s;
+}
+/* 进房间：从入口页整块淡出后，房间界面淡入 */
+#hostView { animation: hostIn .3s ease both; }
+@keyframes hostIn { from { opacity: 0; transform: scale(.995); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  #gateView, #gateView.show, #hostView { transition: none; animation: none; }
+}
 .gate-card {
   width: 100%; max-width: 400px; background: var(--surface);
   border-radius: var(--r-xl); padding: 24px 26px 16px;
@@ -1075,7 +1088,7 @@ body.fs-locked { overflow: hidden; }
   .pq-ico { width: 32px; height: 32px; font-size: 9.5px; }
   .pq-name { font-size: 12.5px; }
   .side-info > * { width: 100% !important; }
-  #roomCard, #p2pBanner, #lanBanner, #guestGate { padding: 10px 11px; }
+  #roomCard, #p2pBanner, #lanBanner, #guestGate, #roomStat { padding: 10px 11px; }
   #waitBar { padding: 10px 11px; }
 
   /* 「房间」两个字在这里是废话：10 位房间号摆在那儿，谁都认得 */
@@ -1157,10 +1170,6 @@ body.fs-locked { overflow: hidden; }
 .lan-switch input:checked + .ls-ui::after { transform: translateX(16px); }
 .lan-switch input:focus-visible + .ls-ui { outline: 2px solid #07C160; outline-offset: 2px; }
 
-/* 下载视图的退路：不装软件也能建房 */
-.gdl-alt { margin-top: 8px; text-align: center; font-size: 12px; }
-.gdl-alt a { color: #0a8f4a; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
-
 /* ===== v2：房间卡 ===== */
 .room-badge {
   display: inline-block; margin-left: 6px; padding: 1px 7px;
@@ -1169,6 +1178,85 @@ body.fs-locked { overflow: hidden; }
 }
 .room-sub { margin-top: 4px; font-size: 11px; color: var(--t4, #8a9099); line-height: 1.5; }
 
+/* ===== v2：纯网页房间状态卡（U-06）=====
+   容量、单文件上限、空闲倒计时。只在云房主侧栏出现，
+   倒计时由 renderRoomStat() 每秒重算，进度条宽度 = 已用 / 500 MB。 */
+#roomStat {
+  flex-shrink: 0;
+  margin: 10px 20px 0;
+  padding: 12px 14px;
+  background: #f5fcf8;
+  border: 1px solid #cfeadd;
+  border-radius: var(--r-lg);
+}
+.st-h {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; font-weight: 600; letter-spacing: .05em;
+  text-transform: uppercase; color: #0a8f4a;
+}
+.st-h::before {
+  content: ''; width: 6px; height: 6px; border-radius: 2px;
+  background: #07C160; flex-shrink: 0;
+}
+.st-grid {
+  display: flex; flex-wrap: wrap; gap: 4px 10px;
+  margin-top: 8px; font-size: 11.5px; color: var(--t2);
+}
+.st-grid b { color: var(--t1); font-weight: 600; }
+.mini-bar {
+  height: 4px; margin-top: 9px; border-radius: 999px;
+  background: #dcefe4; overflow: hidden;
+}
+.mini-bar i {
+  display: block; height: 100%; width: 0; border-radius: 999px;
+  background: #07C160; transition: width .3s ease;
+}
+.st-foot { margin-top: 8px; font-size: 10.5px; color: var(--t3); line-height: 1.5; }
+
+/* ===== v2：入口页视图切换的过渡 =====
+   三块视图本来就同格叠放、靠 visibility 切换，卡片长宽不变（D-04）。
+   这里只叠加位移与透明度：切出时先淡出 0.22s 再隐藏，切入时立即可见。 */
+.gate-view {
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity .22s ease, transform .22s ease, visibility 0s linear .22s;
+}
+.gate-view.on {
+  opacity: 1;
+  transform: none;
+  transition: opacity .22s ease, transform .22s ease, visibility 0s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .gate-view, .gate-view.on { transition: none; transform: none; }
+}
+
 /* ===== v2：按通道整块显隐，不逐句藏文案 ===== */
 body[data-channel="cloud"] [data-channel="lan"] { display: none !important; }
 body[data-channel="lan"] [data-channel="cloud"] { display: none !important; }
+
+/* ===== v2：文件卡下载的暂停 / 继续 =====
+   三个图标叠在同一个按钮里，靠卡片上的 data-dl 决定显示哪一个：
+   空闲与完成显示下载箭头，下载中显示暂停，暂停后显示继续。 */
+.file-dl svg { display: none; }
+.file-card:not([data-dl]) .file-dl svg:first-child,
+.file-card[data-dl="idle"] .file-dl svg:first-child,
+.file-card[data-dl="done"] .file-dl svg:first-child { display: block; }
+.file-card[data-dl="running"] .file-dl .dl-ico-pause { display: block; }
+.file-card[data-dl="paused"] .file-dl .dl-ico-play { display: block; }
+.file-card[data-dl="done"] .file-dl { color: var(--t3); border-color: var(--line); background: var(--surface-2); }
+
+/* 进度条贴在卡片底边，绝对定位 —— 高度不占布局，卡片尺寸一点不变 */
+.dl-bar {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 3px;
+  display: none; overflow: hidden;
+  background: rgba(7, 193, 96, .16);
+  border-radius: 0 0 var(--r-md) var(--r-md);
+}
+.file-card[data-dl="running"] .dl-bar,
+.file-card[data-dl="paused"] .dl-bar { display: block; }
+.dl-bar i {
+  display: block; height: 100%; width: 0;
+  background: var(--brand);
+  transition: width .22s linear;
+}
+.file-card[data-dl="paused"] .dl-bar i { background: var(--t4); }
