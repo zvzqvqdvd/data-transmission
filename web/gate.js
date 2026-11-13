@@ -42,7 +42,13 @@ function probeRoom(room, timeoutMs) {
           return;
         }
         if (d.startsWith('WELCOME:')) {
-          try { guestName = (JSON.parse(d.slice(8)) || {}).name || ''; } catch (e) {}
+          try {
+            const w = JSON.parse(d.slice(8)) || {};
+            guestName = w.name || '';
+            // 探活阶段的 WELCOME 由这里先吃掉（还没交给 handleData），
+            // 所以房主的「支持文件回执」能力必须在这里也读一次
+            if (w.ack) peerAck = true;
+          } catch (e) {}
           finish(true);
           return;
         }

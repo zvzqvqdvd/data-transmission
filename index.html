@@ -1820,7 +1820,7 @@ body[data-channel="lan"] [data-channel="cloud"] { display: none !important; }
       · 房主点「销毁房间」（立即生效）<br>
       销毁时房间码作废；<b>聊天记录一律不落盘</b>，局域网房间的接收文件随房间一起删除，不做保留。</p>
     <div class="modal-btns"><button class="btn-plain" onclick="hideTtl()">知道了</button></div>
-    <p style="text-align:center;font-size:11px;color:#b0b3b8;margin:10px 0 0;">页面版本 69491258d0（反馈问题时请带上这一行）</p>
+    <p style="text-align:center;font-size:11px;color:#b0b3b8;margin:10px 0 0;">页面版本 4ff7a4095f（反馈问题时请带上这一行）</p>
   </div>
 </div>
 
@@ -1934,7 +1934,7 @@ let CLIENT_URL = 'https://zvzqvqdvd.github.io/data-transmission/';
 // 页面源文件指纹（由程序按 web/ 源文件现算，在线页 = 导出那一刻的值）。
 // 邀请链接 / 二维码 / 复制的访问地址都带 ?v=<指纹>：手机浏览器对页面缓存
 // 非常顽固，URL 不变就拿旧缓存页连新程序，轻则变慢、重则连不上。
-const PAGE_BUILD = '69491258d0';
+const PAGE_BUILD = '4ff7a4095f';
 let lastRev = null;
 let pollGen = 0;             // 轮询代际：换代 / 停止时让在途请求的结果作废
 let pollAbort = null;        // 在途长轮询的 AbortController
@@ -3749,9 +3749,13 @@ function relayNew(msgs) {
 // ===== WebRTC P2P via PeerJS：分片 + 背压 + 完整性校验 =====
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function buffered(c) {
-  if (typeof c.bufferedAmount === 'number') return c.bufferedAmount;
-  if (typeof c.bufferSize === 'number') return c.bufferSize;
-  if (c.dataChannel && typeof c.dataChannel.bufferedAmount === 'number') return c.dataChannel.bufferedAmount;
+  // 必须读真正的「待发字节数」。PeerJS 的 c.bufferSize 是内部排队的消息**条数**
+  // （_buffer.length），拿它跟 512*1024 字节比，条件永远不成立——背压形同虚设，
+  // 连发多个文件时所有分片一次性灌爆 SCTP 缓冲，接着就是丢片、重组变慢、串包。
+  if (c && c.dataChannel && typeof c.dataChannel.bufferedAmount === 'number') {
+    return c.dataChannel.bufferedAmount;
+  }
+  if (c && typeof c.bufferedAmount === 'number') return c.bufferedAmount;
   return 0;
 }
 function toArrayBuffer(data) {
@@ -3759,8 +3763,32 @@ function toArrayBuffer(data) {
   if (ArrayBuffer.isView(data)) return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
   return null;
 }
+// 房主是否支持「收全并落盘后回执」。旧版房主不回，就退回不等回执的行为，
+// 免得新访客连旧房主时每个文件都干等一轮超时。
+let peerAck = false;
+const fileAckWaiters = new Map();   // 文件传输 id -> { resolve, timer }
+const FILE_ACK_TIMEOUT = 20000;    // 房主收片 + 落盘的宽限
+
+function waitFileAck(id, ms) {
+  return new Promise(resolve => {
+    const timer = setTimeout(() => {
+      fileAckWaiters.delete(id);
+      resolve('timeout');
+    }, ms);
+    fileAckWaiters.set(id, {
+      resolve: v => { clearTimeout(timer); fileAckWaiters.delete(id); resolve(v); }
+    });
+  });
+}
+function settleFileAck(id, ok) {
+  const w = fileAckWaiters.get(id);
+  if (w) w.resolve(ok ? 'ok' : 'nak');
+}
+
 // 发给指定的一条连接。mid 是房间里的消息 id，接收端据此去重；
-// from 是发送者名字，转发时告诉下游是谁发的
+// from 是发送者名字，转发时告诉下游是谁发的。
+// 访客上传必须等房主回执才算成功：只把字节塞进 DataChannel 就报「已发送」，
+// 房主可能还在慢慢收、甚至已经丢片，用户看到的就是「10 个发成功、只到 4 个」。
 async function sendFileTo(c, file, name, onProgress, mid, from) {
   if (!c || !c.open) throw new Error('连接已断开');
   const id = 'f' + Date.now() + Math.random().toString(36).slice(2, 8);
@@ -3768,19 +3796,29 @@ async function sendFileTo(c, file, name, onProgress, mid, from) {
   if (mid) meta.mid = mid;
   if (from) meta.f = from;
   c.send('FILE_META:' + JSON.stringify(meta));
-  let offset = 0, guard = 0;
+  let offset = 0, stall = 0;
   while (offset < file.size) {
     while (buffered(c) > MAX_BUFFERED) {
       if (!c.open) throw new Error('连接已断开');
       await sleep(12);
-      if (++guard > 3000) throw new Error('发送超时');
+      // 只统计「连续等不到缓冲回落」的时间；大文件本来就要发很久，
+      // 旧写法把整个文件的等待次数累加，长传会被误判成超时
+      if (++stall > 2500) throw new Error('发送超时');
     }
+    stall = 0;
     const slice = file.slice(offset, Math.min(offset + CHUNK_SIZE, file.size));
     c.send(await slice.arrayBuffer());
     offset += slice.size;
     if (onProgress) onProgress(offset / file.size);
   }
   c.send('FILE_END:' + id);
+  // 只有「访客 → 房主」需要确认：房主把历史文件发给访客时走的是下载队列，
+  // 有自己的进度与失败处理，别让它反过来等访客回执。
+  if (MODE === 'guest' && peerAck) {
+    const r = await waitFileAck(id, FILE_ACK_TIMEOUT);
+    if (r === 'nak') throw new Error('房主没能完整收到，请点 ↻ 重试');
+    if (r === 'timeout') throw new Error('房主还没确认收到，请点 ↻ 重试');
+  }
 }
 // 同一条连接上，文件必须一个一个发：对端一个连接只有一个接收缓冲（分片不带文件 id），
 // 两次 sendFileTo 并行会让分片互相穿插，对端拼出来两边都不完整——
@@ -3817,9 +3855,13 @@ function handleData(data, ctx) {
       if (MODE === 'host' && ctx) registerGuest(ctx, tail, dev);
       return;
     }
+    // 房主收全并落盘后回执：等回执的那一侧才把文件标成「发送成功」
+    if (data.startsWith('FILE_ACK:')) { settleFileAck(data.slice(9), true); return; }
+    if (data.startsWith('FILE_NAK:')) { settleFileAck(data.slice(9), false); return; }
     if (data.startsWith('WELCOME:')) {
       try {
         const w = JSON.parse(data.slice(8));
+        if (w && w.ack) peerAck = true;
         if (w && w.name) {
           myName = w.name;
           // 连接状态行保持「已连接」，不再写「已进入房间」这类重复提示
@@ -4085,7 +4127,8 @@ function handleData(data, ctx) {
           id: meta.id, name: meta.name, size: meta.size,
           chunks: [], received: 0,
           mid: meta.mid || '',
-          from: meta.f || (ctx && ctx.name) || '外网设备'
+          from: meta.f || (ctx && ctx.name) || '外网设备',
+          conn: (ctx && ctx.conn) || null   // 收完往这条连接回执
         });
         // 收文件只留进度（访客是卡片下方的进度条），不再往状态行/提示行推文字
         if (MODE === 'guest') txStart(meta.name, meta.size, meta.mid || '');
@@ -4129,23 +4172,38 @@ function appendChunk(key, ab) {
   }
   // 房主端不报「正在接收 x%」：收文件是后台动作，进度看聊天里的卡片就行
 }
-// 收全了：拼成 Blob 交给上层（房主落盘 / 访客存下载）
-function finishRecv(key, buf) {
+// 收全了：拼成 Blob 交给上层（房主落盘 / 访客存下载），落盘成功后才回执。
+// 回执是「房主真的存好了」的唯一凭证，发送端据此判断能不能标「已完成」。
+async function finishRecv(key, buf) {
   recvBuf.delete(key);
   const blob = new Blob(buf.chunks, { type: mimeOf(buf.name) });
-  onFileReceived(blob, buf.name, buf.mid, buf.from);
+  let ok = true;
+  try {
+    const r = await onFileReceived(blob, buf.name, buf.mid, buf.from);
+    if (r === false) ok = false;
+  } catch (e) { ok = false; }
+  // 只给「访客上传 → 房主接收」回执；房主把文件发给访客属于下载，不等回执
+  if (MODE === 'host' && buf.conn && buf.conn.open) {
+    try { buf.conn.send((ok ? 'FILE_ACK:' : 'FILE_NAK:') + buf.id); } catch (e) {}
+  }
 }
-// 收到 FILE_END 但字节数还差一点：再等 2.5 秒（PeerJS 的异步重组可能慢半拍）
+// 收到 FILE_END 但字节数还差一点：再等一会儿（PeerJS 的异步重组可能慢半拍）。
+// 发送端现在会等回执才发下一个文件，这段等待期间不会有新的 FILE_META 顶掉缓冲，
+// 所以宽限可以从 2.5s 放宽到 6s，慢网络下也不会误判成丢片。
 function waitRecvComplete(key, buf, t0) {
   if (recvBuf.get(key) !== buf) return;          // 已经收完 / 已被新传输顶掉
   if (buf.received >= buf.size) { finishRecv(key, buf); return; }
-  if (Date.now() - t0 > 2500) { dropRecv(key, buf); return; }
-  setTimeout(() => waitRecvComplete(key, buf, t0), 150);
+  if (Date.now() - t0 > 6000) { dropRecv(key, buf); return; }
+  setTimeout(() => waitRecvComplete(key, buf, t0), 100);
 }
 // 真的缺片了：丢弃这条传输，并且把下载队列的状态清干净，
 // 否则 pullInFlight 占着位，后面排队等着的下载全被堵死
 function dropRecv(key, buf) {
   if (recvBuf.get(key) === buf) recvBuf.delete(key);
+  // 明确告诉上传方「这次没收到」，别让它干等 20 秒超时才报失败
+  if (MODE === 'host' && buf.conn && buf.conn.open) {
+    try { buf.conn.send('FILE_NAK:' + buf.id); } catch (e) {}
+  }
   if (MODE === 'guest' && buf.mid) {
     pullInFlight.delete(buf.mid);
     pullStartAt.delete(buf.mid);
@@ -4578,7 +4636,7 @@ async function onFileReceived(blob, name, mid, from) {
     saveBlob(url, name);
     if (mid) { pullInFlight.delete(mid); pullStartAt.delete(mid); }
     pumpPullQueue();
-    return;
+    return true;
   }
   // 房主：把收到的文件落盘（记录进聊天后由 relayNew 给其他设备发卡片，谁需要谁拉）
   const fd = new FormData();
@@ -4591,8 +4649,13 @@ async function onFileReceived(blob, name, mid, from) {
     if (!d.ok) throw new Error(d.msg || '保存失败');
     // 收到文件不弹提示：消息列表里会出现这张卡，落盘位置固定是「接收文件」
     loadMessages();
-  } catch (e) { toast('保存失败: ' + e.message); }
+  } catch (e) {
+    toast('保存失败: ' + e.message);
+    updateHostRoomHint();
+    return false;      // 回 NAK，让上传方明确失败、可重试，而不是假成功
+  }
   updateHostRoomHint();
+  return true;         // 回 ACK：房主确实收全并存好了
 }
 
 // ===== 房主模式：生成房间码、等待外网设备、生成邀请链接 =====
@@ -5346,7 +5409,9 @@ function registerGuest(ctx, nick, dev) {
   while (used.has(name)) { name = base + '·' + i; i++; }
   e.name = name;
   ctx.name = name;
-  try { e.conn.send('WELCOME:' + JSON.stringify({ name: name, proto: PROTOCOL })); } catch (err) {}
+  // ack=1 告诉访客「我会等文件收全落盘后回执」，旧版房主不带这个字段，
+  // 新访客连旧房主时就不等回执，避免每个文件都白等一轮超时
+  try { e.conn.send('WELCOME:' + JSON.stringify({ name: name, proto: PROTOCOL, ack: 1 })); } catch (err) {}
   pushHistoryTo(e.conn);
   updateNums();   // 新设备入房：编号表跟着变（重连设备沿用原号）
   sendPeers();
@@ -6399,7 +6464,13 @@ function probeRoom(room, timeoutMs) {
           return;
         }
         if (d.startsWith('WELCOME:')) {
-          try { guestName = (JSON.parse(d.slice(8)) || {}).name || ''; } catch (e) {}
+          try {
+            const w = JSON.parse(d.slice(8)) || {};
+            guestName = w.name || '';
+            // 探活阶段的 WELCOME 由这里先吃掉（还没交给 handleData），
+            // 所以房主的「支持文件回执」能力必须在这里也读一次
+            if (w.ack) peerAck = true;
+          } catch (e) {}
           finish(true);
           return;
         }
