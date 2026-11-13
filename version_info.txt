@@ -4,8 +4,8 @@
 # 更容易把文件当成来历不明的打包程序。
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(2, 0, 14, 0),
-    prodvers=(2, 0, 14, 0),
+    filevers=(2, 0, 15, 0),
+    prodvers=(2, 0, 15, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -21,11 +21,11 @@ VSVersionInfo(
           [
             StringStruct('CompanyName', 'DataTransmission'),
             StringStruct('FileDescription', '数据传输 - 局域网/外网文件与文字互传'),
-            StringStruct('FileVersion', '2.0.14.0'),
+            StringStruct('FileVersion', '2.0.15.0'),
             StringStruct('InternalName', 'DataTransmission'),
             StringStruct('OriginalFilename', '数据传输.exe'),
             StringStruct('ProductName', '数据传输'),
-            StringStruct('ProductVersion', '2.0.14.0'),
+            StringStruct('ProductVersion', '2.0.15.0'),
             StringStruct('Comments', 'Open source: https://github.com/zvzqvqdvd/data-transmission')
           ]
         )

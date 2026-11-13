@@ -1815,7 +1815,7 @@ body[data-channel="lan"] [data-channel="cloud"] { display: none !important; }
       · 房主点「销毁房间」（立即生效）<br>
       销毁时房间码作废；<b>聊天记录一律不落盘</b>，局域网房间的接收文件随房间一起删除，不做保留。</p>
     <div class="modal-btns"><button class="btn-plain" onclick="hideTtl()">知道了</button></div>
-    <p style="text-align:center;font-size:11px;color:#b0b3b8;margin:10px 0 0;">页面版本 cb38b61d68（反馈问题时请带上这一行）</p>
+    <p style="text-align:center;font-size:11px;color:#b0b3b8;margin:10px 0 0;">页面版本 0d190b7dfd（反馈问题时请带上这一行）</p>
   </div>
 </div>
 
@@ -1895,10 +1895,11 @@ const HOME_API = 'http://127.0.0.1:' + HOST_PORT;
 // 本机页面（8000）直接走同源，免得用局域网 IP 打开时被当成跨域；
 // 在线页只能访问 127.0.0.1 上的本机程序
 const HOST_API = (SEED_MODE === 'host') ? '' : HOME_API;
-// 是否能当 P2P 房主：只有本机（回环）打开、或在线页主动「创建房间」才行。
-// 别人从局域网 IP 打开本机服务时不给，否则会和本机抢同一个 Peer ID（pc-<房间码>），
-// 双方都报 unavailable-id，还会把房间码换掉。
-const P2P_ENABLED = false;
+// 是否能当 P2P 房主：本机（回环）页和在线页都是 true —— 在线页照样能开
+// 云房间、也能通过本机程序开局域网房间，外网开关得给它。
+// 只有「别人从局域网 IP 打开本机服务」那份页面是 false：它跟房主抢同一个
+// Peer ID（pc-<房间码>），双方都报 unavailable-id，还会把房间码换掉。
+const P2P_ENABLED = true;
 // 本机程序里那个房间开不开外网直连（创建时选的）；刷新后靠它恢复同样的形态
 const ROOM_P2P = true;
 // 局域网设备还没输入房间码：先停在入口页，输对了才进房间
@@ -1928,7 +1929,7 @@ let CLIENT_URL = 'https://zvzqvqdvd.github.io/data-transmission/';
 // 页面源文件指纹（由程序按 web/ 源文件现算，在线页 = 导出那一刻的值）。
 // 邀请链接 / 二维码 / 复制的访问地址都带 ?v=<指纹>：手机浏览器对页面缓存
 // 非常顽固，URL 不变就拿旧缓存页连新程序，轻则变慢、重则连不上。
-const PAGE_BUILD = 'cb38b61d68';
+const PAGE_BUILD = '0d190b7dfd';
 let lastRev = null;
 let pollGen = 0;             // 轮询代际：换代 / 停止时让在途请求的结果作废
 let pollAbort = null;        // 在途长轮询的 AbortController
@@ -5710,8 +5711,8 @@ function startHostUI(fromWeb, lanUrl, lanClient) {
   // 在线页主动「创建房间」也算合法房主；局域网设备打开本机服务则不算。
   // 外网通道开不开，看房间里的开关（P2P_ON），不再由创建时的选项一次性决定。
   const isHostPage = MODE === 'host' && !isLanClient;
-  const p2pCapable = P2P_ENABLED || !!fromWeb;
-  const canHostP2P = isHostPage && p2pCapable && P2P_ON;
+  // 本机页与在线页都能当外网房主（在线页通过本机程序开房），只有局域网设备页不行
+  const canHostP2P = isHostPage && P2P_ENABLED && P2P_ON;
   document.getElementById('guestGate').style.display = 'none';
 
   if (isHostPage) {

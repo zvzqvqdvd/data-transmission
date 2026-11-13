@@ -743,7 +743,10 @@ def build_page(mode='host', p2p=True, join_required=False):
         '__ROOM__': (ROOM or '') if mode == 'host' else '',
         '__HAS_ROOM__': 'true' if (mode == 'host' and has_room()) else 'false',
         '__CLIENT_URL__': _js_literal(_read_client_url()),
-        '__P2P_ENABLED__': 'true' if (mode == 'host' and p2p) else 'false',
+        # 在线页（guest 模板）也可能当房主：它在自己浏览器里开云房间，或者
+        # 通过本机程序开局域网房间。只有「别人从局域网 IP 打开本机服务」这一种
+        # host 页真的没有外网能力（会和房主抢同一个 Peer ID），才写 false。
+        '__P2P_ENABLED__': 'false' if (mode == 'host' and not p2p) else 'true',
         '__ROOM_P2P__': 'true' if ROOM_P2P else 'false',
         '__JOIN_REQUIRED__': 'true' if join_required else 'false',
         '__LAN_URL__': ('http://%s:%d' % (get_lan_ip(), PORT)) if mode == 'host' else '',

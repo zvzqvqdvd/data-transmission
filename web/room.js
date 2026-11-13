@@ -2656,8 +2656,8 @@ function startHostUI(fromWeb, lanUrl, lanClient) {
   // 在线页主动「创建房间」也算合法房主；局域网设备打开本机服务则不算。
   // 外网通道开不开，看房间里的开关（P2P_ON），不再由创建时的选项一次性决定。
   const isHostPage = MODE === 'host' && !isLanClient;
-  const p2pCapable = P2P_ENABLED || !!fromWeb;
-  const canHostP2P = isHostPage && p2pCapable && P2P_ON;
+  // 本机页与在线页都能当外网房主（在线页通过本机程序开房），只有局域网设备页不行
+  const canHostP2P = isHostPage && P2P_ENABLED && P2P_ON;
   document.getElementById('guestGate').style.display = 'none';
 
   if (isHostPage) {
