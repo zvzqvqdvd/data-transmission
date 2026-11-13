@@ -34,6 +34,13 @@ function probeRoom(room, timeoutMs) {
       conn.on('data', d => {
         if (done) return;                        // 进了房间之后由 wireGuestConn 接管
         if (typeof d !== 'string') return;      // 探活期间不会有文件过来
+        // 房主把「外网加入」关了：门还没开就被回绝，别再等 12 秒超时
+        if (d === 'P2P_OFF') {
+          finish(false, '房主已关闭外网加入',
+            '这个房间现在只能在同一 WiFi 内用局域网地址进入；' +
+            '需要外网访问的话，请房主在外网直连卡上打开「外网加入」。');
+          return;
+        }
         if (d.startsWith('WELCOME:')) {
           try { guestName = (JSON.parse(d.slice(8)) || {}).name || ''; } catch (e) {}
           finish(true);
@@ -51,7 +58,10 @@ function probeRoom(room, timeoutMs) {
         if (done) return;
         const t = (err && err.type) || 'unknown';
         if (t === 'peer-unavailable') {
-          finish(false, '房间不存在', '这个房间码没有对应的房间，请确认对方已经点「创建房间」并且页面保持打开。');
+          // 两种可能：房间码不对／房间已关，或者房主把「外网加入」关了（关着不注册 Peer）
+          finish(false, '找不到房间',
+            '房间码不对、房主已经关掉房间，或者房主把「外网加入」关着——' +
+            '关着的时候只有同一 WiFi 用局域网地址能进。');
         } else if (t === 'network' || t === 'server-error' || t === 'socket-error') {
           finish(false, '网络不通', '连不上信令服务器，换个网络或改用系统浏览器再试。');
         } else if (t === 'unavailable-id') {
@@ -704,8 +714,10 @@ async function gateCreateLan() {
   btn.classList.add('busy');
   if (label) label.textContent = '正在创建房间…';
   gateClearMsg();
-  // 程序构建时就没带外网能力（P2P_ENABLED=false）的话，开关不该出现，也别等它
-  const needP2P = P2P_ENABLED !== false;
+  // 局域网房间默认不开外网：建完就是一间隔离的房间，只有同一 WiFi 能进。
+  // 想让人从外网进来，房主在外网直连卡的「外网加入」开关上自己拨——拨的那一刻才注册
+  // 房主 Peer，链接和二维码也是拨开之后才出现。关着的时候一个字节都不碰信令服务器。
+  const needP2P = false;
   gateProgReset(needP2P
     ? ['检查程序', '创建房间', '直连通道']
     : ['检查程序', '创建房间']);

@@ -965,6 +965,15 @@ function handleData(data, ctx) {
             if (c) tuneScreenSender(c); } catch (e) {}
       return;
     }
+    // 房主关掉了「外网加入」：这不是掉线，是门被锁了，重连多少次都进不来。
+    // 直接退回起始页并说清原因，别让访客对着「正在重新连接」干等。
+    if (data === 'P2P_OFF') {
+      if (MODE === 'guest') {
+        guestReturnToGate('房主已关闭外网加入，这个房间暂时只能在同一 WiFi 内进入。' +
+                          '需要用外网的话，请让房主把「外网加入」重新打开。');
+      }
+      return;
+    }
     // 房主解散了房间：房间码已作废，访客直接回入口页，不要自动重连
     if (data === 'ROOM_CLOSED') {
       guestRoomGone('房主已销毁房间，房间码已作废。请联系房主获取新的房间码或邀请链接。');
@@ -1738,11 +1747,19 @@ async function applyRoomP2P(on) {
   if (!P2P_ON) {
     hostGraceful = false;
     hostRetry = 0;
-    // 关：断开已经连上的外网设备，但保留 Peer 注册。
-    // 注销 ID 再注册回来要等信令服务器释放，中间还有撞号换码的风险，
+    // 关：先告诉每一台已经连着的设备「这里关门外网了」，再把连接收掉。
+    // 只是静默断开的话，访客那边只会当成一次掉线，自动重连回来又被拒，
+    // 界面就一直挂在「正在重新连接」——人既没被踢回起始页，也不知道发生了什么。
+    for (const [, e] of hostConns) {
+      if (e && e.conn && e.conn.open) { try { e.conn.send('P2P_OFF'); } catch (err) {} }
+    }
+    // 留 220ms 让这帧真的发出去（立刻 close 会把它一起丢掉），再统一收连接。
+    // 保留 Peer 注册：注销 ID 再注册回来要等信令服务器释放，中间还有撞号换码的风险，
     // 对一个想随手拨动的开关来说代价太大；门锁在 connection 回调里关上就行。
-    for (const id of [...hostConns.keys()]) dropHostConnQuiet(id);
-    renderMembers();
+    setTimeout(() => {
+      for (const id of [...hostConns.keys()]) dropHostConnQuiet(id);
+      renderMembers();
+    }, 220);
     toast('外网已关闭，同一 WiFi 的设备不受影响');
   } else {
     setupInvite(ROOM);
@@ -2109,8 +2126,17 @@ function startHostPeer(roomCode) {
     // unavailable-id，重试到头甚至会把房间码换掉——那等于把全房间的人踢出去。
     // 保持注册、在这里拒客，既当场失效又随时能拨回来。
     if (!P2P_ON) {
-      try { c.send('NOTE:' + JSON.stringify({ t: '房主已关闭外网加入，请改用局域网地址进入' })); } catch (e) {}
-      setTimeout(() => { try { c.close(); } catch (e) {} }, 200);
+      // 先回一句「外网已关闭」再把门关上：不然对面只看到通道建好又断掉，
+      // 会当成掉线一直重连，界面上永远停在「正在连接对方设备」。
+      // P2P_OFF 是「别试了」的明确信号，访客端收到就退回起始页并说明原因。
+      // 必须等通道 open 再发：connection 事件里 dataChannel 还没开，send 会丢。
+      const turnAway = () => {
+        try { c.send('P2P_OFF'); } catch (e) {}
+        setTimeout(() => { try { c.close(); } catch (e) {} }, 300);
+      };
+      if (c.open) turnAway(); else c.on('open', turnAway);
+      // 兜底：对面一直握不上手（半路断网），4 秒后直接收掉，别留半开的连接
+      setTimeout(() => { try { if (!c.open) c.close(); } catch (e) {} }, 4000);
       return;
     }
     peerBye = false;
