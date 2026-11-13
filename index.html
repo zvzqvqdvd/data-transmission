@@ -753,6 +753,11 @@ body.fs-locked { overflow: hidden; }
 /* 进房间：从入口页整块淡出后，房间界面淡入 */
 #hostView { animation: hostIn .3s ease both; }
 @keyframes hostIn { from { opacity: 0; transform: scale(.995); } to { opacity: 1; transform: none; } }
+/* 刷新恢复（邀请链接 / 房主刷新 / 访客回连）：房间信息还没到手之前，
+   房间壳先别露出来——顶栏是空的、侧栏是空的、聊天区还写着「还没有消息」，
+   这些假空态比什么都不显示更容易让人误会。此时只留 body 底色。
+   JS 一旦确定「进房」或「回入口页」就摘掉这个 class，两条路都会解除。 */
+body.booting #hostView { visibility: hidden; animation: none; }
 @media (prefers-reduced-motion: reduce) {
   #gateView, #gateView.show, #hostView { transition: none; animation: none; }
 }
@@ -1815,7 +1820,7 @@ body[data-channel="lan"] [data-channel="cloud"] { display: none !important; }
       · 房主点「销毁房间」（立即生效）<br>
       销毁时房间码作废；<b>聊天记录一律不落盘</b>，局域网房间的接收文件随房间一起删除，不做保留。</p>
     <div class="modal-btns"><button class="btn-plain" onclick="hideTtl()">知道了</button></div>
-    <p style="text-align:center;font-size:11px;color:#b0b3b8;margin:10px 0 0;">页面版本 dcfddf6015（反馈问题时请带上这一行）</p>
+    <p style="text-align:center;font-size:11px;color:#b0b3b8;margin:10px 0 0;">页面版本 69491258d0（反馈问题时请带上这一行）</p>
   </div>
 </div>
 
@@ -1929,7 +1934,7 @@ let CLIENT_URL = 'https://zvzqvqdvd.github.io/data-transmission/';
 // 页面源文件指纹（由程序按 web/ 源文件现算，在线页 = 导出那一刻的值）。
 // 邀请链接 / 二维码 / 复制的访问地址都带 ?v=<指纹>：手机浏览器对页面缓存
 // 非常顽固，URL 不变就拿旧缓存页连新程序，轻则变慢、重则连不上。
-const PAGE_BUILD = 'dcfddf6015';
+const PAGE_BUILD = '69491258d0';
 let lastRev = null;
 let pollGen = 0;             // 轮询代际：换代 / 停止时让在途请求的结果作废
 let pollAbort = null;        // 在途长轮询的 AbortController
@@ -6772,11 +6777,19 @@ function downloadUrl() {
   if (!base) base = DL_FALLBACK_BASE;
   return base.replace(/\/*$/, '/') + encodeURIComponent(EXE_FILE);
 }
+// 刷新恢复期间先藏住房间壳（见 app.css 的 body.booting）：
+// 恢复路径不摆入口页，但也不能让人看见一个空房间。这两个函数是「进房 / 回入口页」
+// 的唯一两个出口，谁先被调用谁负责解除，所以失败分支不用各自记得清。
+function bootMask(on) {
+  try { document.body.classList.toggle('booting', !!on); } catch (e) {}
+}
 function showGate() {
+  bootMask(false);
   document.getElementById('gateView').classList.add('show');
   document.getElementById('hostView').style.display = 'none';
 }
 function hideGate() {
+  bootMask(false);
   document.getElementById('gateView').classList.remove('show');
   document.getElementById('hostView').style.display = 'flex';
 }
@@ -6921,6 +6934,7 @@ async function resumeHostFromWeb() {
     info = await fetchHostInfo();
   } catch (e) {
     try { history.replaceState(null, '', location.pathname); } catch (e2) {}
+    showGate();                     // 恢复不成了，这时才把入口页摆出来
     gateShowChoices();
     // 本机程序不在：卡片内切到下载视图（不弹窗）
     gateShowDl();
@@ -6929,6 +6943,7 @@ async function resumeHostFromWeb() {
   if (info.client_url) applyClientUrl(info.client_url);
   if (!info.has_room || !info.room) {
     try { history.replaceState(null, '', location.pathname); } catch (e2) {}
+    showGate();
     gateShowChoices();
     gateMsg('房间已经结束，点「创建房间」开一个新房间。', 'info');
     return;
@@ -6938,8 +6953,10 @@ async function resumeHostFromWeb() {
   ROOM = info.room;
   API = HOST_API;
   P2P_ON = info.p2p !== false;
-  gateMsg('正在恢复房间…', 'info');
-  if (P2P_ON) await prepareHostPeer(ROOM, 9000);
+  // 这里以前要 await prepareHostPeer(ROOM, 9000)：等信令把 pc-<房间码> 注册成功
+  // 才肯进房间。刷新时旧 Peer 还没被释放，还要撞 unavailable-id 重试，最坏干等 9 秒。
+  // 现在先进房，Peer 由 startHostUI → startHostPeer 在后台挂上：外网直连卡本来就有
+  // 「正在接入信令服务器…」这一态，没就绪时它自己会说，不需要拿整页去等。
   hideGate();
   startHostUI(true, info.ip ? ('http://' + info.ip + ':' + info.port) : '');
 }
@@ -7031,6 +7048,7 @@ async function resumeCloudHost() {
   const saved = cloudRoomCode();
   if (!saved) {
     try { history.replaceState(null, '', location.pathname); } catch (e) {}
+    showGate();
     gateShowChoices();
     return;
   }
@@ -7039,6 +7057,7 @@ async function resumeCloudHost() {
   if (!ok) {
     cloudForget();
     try { history.replaceState(null, '', location.pathname); } catch (e) {}
+    showGate();
     gateShowChoices();
     gateMsg('房间已经结束（超过 60 分钟没有通信或已被销毁），点「创建房间」开一个新房间。', 'info');
     return;
@@ -7046,8 +7065,8 @@ async function resumeCloudHost() {
   CHANNEL = 'cloud';
   ROOM = saved;
   API = '';
-  gateMsg('正在恢复房间…', 'info');
-  try { await prepareHostPeer(ROOM, 9000); } catch (e) {}
+  // 同 resumeHostFromWeb：不等信令就进房。云房间的历史在 IndexedDB 里，
+  // Cloud.resume 一返回就能渲染，没必要为了挂上 Peer 把整页按在入口页上等。
   hideGate();
   startHostUI(true, '');
   Cloud.startIdleWatch();
@@ -7211,7 +7230,6 @@ if (MODE === 'host') {
   // startHostUI 里已经 loadMessages + 起轮询，这里不再重复（否则每 2 秒发两次请求）
   else { P2P_ON = ROOM_P2P !== false; initHost(); }
 } else {
-  showGate();
   // 上一次会话关页留下的云房间：超过空闲上限就清掉，别把旧消息留在浏览器里
   try { Cloud.cleanupOrphans(); } catch (e) {}
   // 房间号不再缓存（16:43 定稿）：旧版本遗留的键一并清掉，省得老用户浏览器里留死数据
@@ -7222,29 +7240,39 @@ if (MODE === 'host') {
   const q = new URLSearchParams(location.search);
   const clean = s => String(s || '').toUpperCase().replace(/[^A-Z2-9]/g, '');
   const invited = clean(q.get('room'));
+  const saved = savedJoinRoom();
+  // 这三种情况本地都已经知道房间是什么，进来就是为了回到那个房间：
+  // 邀请链接 / 房主刷新 / 访客刷新回连。以前一律先 showGate()，于是刷新时
+  // 必然先看到一整屏起始页（上面还写着「正在恢复房间…」），再整块淡出——很跳。
+  // 现在只有「确实要让人挑」的入口页才 showGate，其余先用 bootMask 遮住，
+  // 进房或失败回入口页时由 hideGate / showGate 自动解除。
+  const resuming = !!(invited || q.get('host') === '1' || saved.length >= 4);
+  bootMask(resuming);
+  if (!resuming) showGate();
+  // 兜底：恢复路径万一在进房之前抛了没接住的错，就地退回入口页。
+  // 少了这一道，booting 遮罩会一直挂着，整页停在一片空白上。
+  const backToGate = () => {
+    showGate();
+    gateShowChoices();
+    gateMsg('没能回到原来的房间，可以输房间码重新加入，或点「创建房间」开一个新的。', 'info');
+  };
   if (invited) {
     // 邀请链接：按访客身份连过去。复选框默认勾选 = 已同意，直接进；
     // 被手动取消勾选过就停在入口页提示
-    const goInvite = () => { hideGate(); initGuest(invited); };
-    if (agreeChecked()) { goInvite(); }
-    else agreeHintFlash();
+    if (agreeChecked()) {
+      try { hideGate(); initGuest(invited); } catch (e) { backToGate(); }
+    } else { showGate(); agreeHintFlash(); }
   } else if (q.get('host') === '1') {
     // 在线页房主刷新：先确认房间还在，别一刷新就偷偷开个新房间
-    resumeHostFromWeb();
-  } else {
-    // 刷新回连：这个标签页之前加入过房间（sessionStorage 记着），自动重连，
-    // 不用重输房间码——和扫码进来一样无感。房间没了会停在输码页且码已填好。
-    const saved = savedJoinRoom();
-    if (saved.length >= 4) {
-      gateShowJoin();
-      document.getElementById('gateRoom').value = saved;
-      gateMsg('正在重新加入房间 ' + saved + '…', 'info');
-      setTimeout(() => { try { gateJoin(); } catch (e) {} }, 60);
-    }
-    // 没有记录就停在入口页等手动输码（用户 16:43 定稿：不在浏览器里留死数据，
-    // sessionStorage 随标签页关闭自动清空）；预热已经在上面建好了，
-    // 用户输码的这几秒正好用来握手（省 0.3～1.5 秒）。
+    Promise.resolve().then(resumeHostFromWeb).catch(backToGate);
+  } else if (saved.length >= 4) {
+    // 刷新回连：直接进房间，握手在房间界面里走（顶部状态行会写「正在连接房间…」），
+    // 连不上会自动重试，房间真没了才退回入口页说明原因——不再让人先看一遍起始页。
+    try { hideGate(); initGuest(saved); } catch (e) { backToGate(); }
   }
+  // 没有记录就停在入口页等手动输码（用户 16:43 定稿：不在浏览器里留死数据，
+  // sessionStorage 随标签页关闭自动清空）；预热已经在上面建好了，
+  // 用户输码的这几秒正好用来握手（省 0.3～1.5 秒）。
 }
 // 网络恢复 / 手机解锁回到前台：退避定时器还没走完也立刻再试一次，
 // 不用干等好几秒才恢复聊天。flushGuestRetry 自带房主/访客与连接状态守卫。

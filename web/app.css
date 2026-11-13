@@ -729,6 +729,11 @@ body.fs-locked { overflow: hidden; }
 /* 进房间：从入口页整块淡出后，房间界面淡入 */
 #hostView { animation: hostIn .3s ease both; }
 @keyframes hostIn { from { opacity: 0; transform: scale(.995); } to { opacity: 1; transform: none; } }
+/* 刷新恢复（邀请链接 / 房主刷新 / 访客回连）：房间信息还没到手之前，
+   房间壳先别露出来——顶栏是空的、侧栏是空的、聊天区还写着「还没有消息」，
+   这些假空态比什么都不显示更容易让人误会。此时只留 body 底色。
+   JS 一旦确定「进房」或「回入口页」就摘掉这个 class，两条路都会解除。 */
+body.booting #hostView { visibility: hidden; animation: none; }
 @media (prefers-reduced-motion: reduce) {
   #gateView, #gateView.show, #hostView { transition: none; animation: none; }
 }
