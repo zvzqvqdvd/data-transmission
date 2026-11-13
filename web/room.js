@@ -46,10 +46,19 @@ function canCompose() {
   if (MODE === 'host') return !roomClosed;
   return peerReady();
 }
+// 输入框的占位提示：宽屏把快捷键说全（Enter / Shift+Enter 是桌面习惯），
+// 手机屏宽只有 390，那句 28 个字符的提示会被截成半句，不如只说一句。
+// 窗口宽度变了要跟着换回来，否则从窄拉宽还停在短版上。
+const PH_WIDE = '输入消息，Enter 发送 / Shift+Enter 换行';
+const PH_NARROW = '输入消息…';
+function syncComposePlaceholder() {
+  textInput.placeholder = canCompose()
+    ? (window.innerWidth > 640 ? PH_WIDE : PH_NARROW)
+    : '正在连接房间…';
+}
 function refreshReady() {
   const ok = canCompose();
-  const ready = peerReady();
-  document.body.classList.toggle('no-peer', !ok);
+  const ready = peerReady();  document.body.classList.toggle('no-peer', !ok);
   // 等待条只给房主端：访客 / 局域网其他设备已经有自己的连接状态，
   // 再挂一条「正在连接房间…」既重复，也不该由它们看到房间里的等待提示
   const wb = document.getElementById('waitBar');
@@ -59,7 +68,7 @@ function refreshReady() {
   const sub = document.getElementById('waitSub');
   if (sub) sub.textContent = '你现在发的消息会存在房间里，别人加入后会自动补上';
   textInput.disabled = !ok;
-  textInput.placeholder = ok ? '输入消息…' : '正在连接房间…';
+  syncComposePlaceholder();
   const sb = document.querySelector('.send-btn');
   if (sb) sb.disabled = !ok;
   const fb = document.querySelector('.folder-btn');
@@ -94,8 +103,16 @@ function updateHostRoomHint() {
   const lanEl = document.getElementById('lanCount');
   const wan = isLanClient ? 0 : hostList().length;   // 外网：本地 P2P 连接数
   const lan = lanPeers;                              // 局域网：后端统计的在线设备数
-  if (wanEl) wanEl.textContent = '外网已连接 ' + wan + ' 台设备';
-  if (lanEl) lanEl.textContent = '局域网已连接 ' + lan + ' 台设备';
+  if (wanEl) {
+    // 房主自己的 Peer 还没在信令服务器上注册好时，说清「别人现在加不进来」，
+    // 别只写「已连接 0 台设备」——那看起来像「房间好了但没人来」。
+    // 卡片标题已经写着「外网直连」，这行不必再把通道名重复一遍。
+    const notReady = MODE === 'host' && !isLanClient && pcPeer && !pcPeer.open && !pcPeer.destroyed;
+    wanEl.textContent = notReady
+      ? '正在接入信令服务器…（别人现在还加不进来）'
+      : '已连接 ' + wan + ' 台设备';
+  }
+  if (lanEl) lanEl.textContent = '已连接 ' + lan + ' 台设备';
   renderMembers();
 }
 
@@ -779,6 +796,9 @@ function handleData(data, ctx) {
     if (data.startsWith('PEERS:')) {
       try {
         const p = JSON.parse(data.slice(6));
+        // nf=1：房主的浏览器探测不到配额，整个房间都不收文件（文件最终存在房主侧）
+        hostNoFile = !!(p && p.nf);
+        syncFileEntry();
         // 人数由右侧外网卡片 / 局域网卡片各自显示，这里不报合并总数
         renderAll();
       } catch (e) {}
@@ -1619,7 +1639,7 @@ function copyRoomCode() {
   copyText(code, ok => toast(ok ? '房间码已复制：' + code : '复制失败，请手动复制：' + code));
 }
 
-// Esc 关掉所有开着的小弹窗（设置/帮助/说明/登录/确认），不用非去点关闭按钮
+// Esc 关掉所有开着的小弹窗（中继设置 / 帮助 / 房间说明），不用非去点关闭按钮
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
   let closed = false;
@@ -1627,6 +1647,13 @@ document.addEventListener('keydown', e => {
     m.classList.remove('show'); closed = true;
   });
   if (closed) e.preventDefault();
+});
+// 点遮罩的空白处也能关：只有「销毁房间」例外 —— 那颗红色按钮必须显式点，
+// 免得手一滑点在旁边就当成了确认。
+['netModal', 'helpModal', 'ttlModal'].forEach(id => {
+  const m = document.getElementById(id);
+  if (!m) return;
+  m.addEventListener('click', e => { if (e.target === m) m.classList.remove('show'); });
 });
 
 // 局域网二维码：地址后面带上房间码，扫码进来房间码已经填好，不用手输
@@ -1649,6 +1676,89 @@ function toggleLanQR() {
   }
   box.style.display = show ? 'flex' : 'none';
 }
+// ===== 外网直连卡：开 / 关两态 =====
+// 网页直连房间没有开关——它本身就是外网通道，关掉等于把房间废了。
+// 局域网房间的开关是「真的」：关的时候注销房主 Peer、断开在线设备，
+// 老链接当场失效；开回来用同一个 Peer ID 重新注册，链接又自动能用。
+function renderP2PCard() {
+  const card = document.getElementById('p2pBanner');
+  if (!card) return;
+  const off = !P2P_ON;
+  card.classList.toggle('off', off);
+  const sw = document.getElementById('p2pSw');
+  if (sw) {
+    const show = MODE === 'host' && !isLanClient &&
+                 CHANNEL !== 'cloud' && P2P_ENABLED !== false;
+    sw.style.display = show ? 'inline-flex' : 'none';
+    sw.classList.toggle('on', !off);
+    sw.setAttribute('aria-checked', off ? 'false' : 'true');
+    if (show) sw.disabled = false;
+  }
+  const body = document.getElementById('p2pBody');
+  if (body) body.style.display = off ? 'none' : '';
+  const hint = document.getElementById('p2pOffHint');
+  if (hint) hint.style.display = off ? '' : 'none';
+}
+function hideP2POff() {
+  const m = document.getElementById('p2pOffModal');
+  if (m) m.classList.remove('show');
+}
+function confirmP2POff() {
+  hideP2POff();
+  applyRoomP2P(false);
+}
+function toggleRoomP2P() {
+  if (MODE !== 'host' || isLanClient || CHANNEL === 'cloud') return;
+  if (!P2P_ON) { applyRoomP2P(true); return; }
+  const live = hostList().length;
+  // 还挂着外网设备时不静默踢人：那可能是别人正在传的文件
+  if (live > 0) {
+    const tip = document.getElementById('p2pOffTip');
+    if (tip) tip.innerHTML = '关掉后外网链接与二维码立即失效，' +
+      '<b>正在连着的 ' + live + ' 台外网设备会被断开</b>；同一 WiFi 的设备不受影响。';
+    const m = document.getElementById('p2pOffModal');
+    if (m) m.classList.add('show');
+    return;
+  }
+  applyRoomP2P(false);
+}
+async function applyRoomP2P(on) {
+  const sw = document.getElementById('p2pSw');
+  if (sw) sw.disabled = true;          // 请求在飞的时候别再点第二下
+  try {
+    const r = await fetch(HOST_API + '/api/room/p2p?on=' + (on ? '1' : '0'), { method: 'POST' });
+    const d = await r.json();
+    if (!d || !d.ok) throw new Error((d && d.msg) || '切换失败');
+  } catch (e) {
+    if (sw) sw.disabled = false;
+    toast('外网开关没切成：' + ((e && e.message) || e));
+    return;
+  }
+  P2P_ON = !!on;
+  if (!P2P_ON) {
+    hostGraceful = false;
+    hostRetry = 0;
+    // 关：断开已经连上的外网设备，但保留 Peer 注册。
+    // 注销 ID 再注册回来要等信令服务器释放，中间还有撞号换码的风险，
+    // 对一个想随手拨动的开关来说代价太大；门锁在 connection 回调里关上就行。
+    for (const id of [...hostConns.keys()]) dropHostConnQuiet(id);
+    renderMembers();
+    toast('外网已关闭，同一 WiFi 的设备不受影响');
+  } else {
+    setupInvite(ROOM);
+    // 开着却没注册上（比如关的时候页面刚重载过）：补一次注册，正常情况这里什么都不做
+    if (!pcPeer || pcPeer.destroyed || !pcPeer.open) {
+      hostGraceful = true;
+      hostRetry = 0;
+      startHostPeer(ROOM);
+    }
+    toast('外网已打开，凭链接就能进');
+  }
+  renderP2PCard();
+  refreshReady();
+  renderAll();
+}
+
 function setupInvite(room) {
   const base = inviteBase();
   if (!base) {
@@ -1684,6 +1794,8 @@ async function fetchHostInfo() {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
     if (!d.ok) throw new Error(d.msg || '本机程序未响应');
+    // 人数上限以后端为准（云房间没有后端，仍用 app.js 里的默认值）
+    if (typeof d.max_members === 'number' && d.max_members > 0) ROOM_MAX = d.max_members;
     return d;
   } finally {
     clearTimeout(timer);
@@ -1756,7 +1868,7 @@ function resetIce() {
 // ===== 使用帮助 =====
 function showHelp() { document.getElementById('helpModal').classList.add('show'); }
 function hideHelp() { document.getElementById('helpModal').classList.remove('show'); }
-// ===== 房间生命周期（临时房间：页面关闭 / 12 小时无通信 / 手动销毁）=====
+// ===== 房间生命周期（临时房间：页面关闭 / 60 分钟无通信 / 手动销毁）=====
 function showTtl() { document.getElementById('ttlModal').classList.add('show'); }
 function hideTtl() { document.getElementById('ttlModal').classList.remove('show'); }
 let hostBeatTimer = null;
@@ -1766,9 +1878,15 @@ function startHostHeartbeat() {
   if (MODE !== 'host' || isLanClient || hostBeatTimer) return;
   // 云房间没有后端心跳：活跃时间由 Cloud 在每次收发时自己更新
   if (CHANNEL === 'cloud') return;
-  const beat = () => {
+  // 心跳回包顺带带回「还剩多少秒销毁」：页面每秒本地走，10 秒对一次表，
+  // 断网重连、电脑休眠回来都能自己纠回来，不用刷新页面
+  const beat = async () => {
     if (roomClosed || !ROOM) return;
-    try { apiFetch(API + '/api/room/heartbeat', { method: 'POST', body: '' }); } catch (e) {}
+    try {
+      const r = await apiFetch(API + '/api/room/heartbeat', { method: 'POST', body: '' });
+      const d = await r.json();
+      if (d && typeof d.idle_left === 'number') setIdleBase(d.idle_left);
+    } catch (e) {}
   };
   beat();
   hostBeatTimer = setInterval(beat, 10000);
@@ -1924,6 +2042,8 @@ function onNeedJoin() {
   gateMsg('房间码已经变了（房主新建或销毁了房间），请重新输入。', 'info');
 }
 let hostRetry = 0;
+// 「外网加入」从关拨回开的那条路：重试次数给足，且绝不换房间码
+let hostGraceful = false;
 // 创建房间时先在入口页把房主 Peer 注册好，PeerJS 报 open 才算「房间真的可用」，
 // 之后才切进主界面：不能让人已经进了房间，卡片上还挂着「正在连接信令服务器…」。
 let readyHostPeer = null;
@@ -1978,11 +2098,21 @@ function startHostPeer(roomCode) {
   pcPeer = reuse || new Peer('pc-' + roomCode, peerOpts());
   const onReady = () => {
     hostRetry = 0;
+    hostGraceful = false;
     refreshReady();
   };
   if (reuse) onReady();
   else pcPeer.on('open', onReady);
   pcPeer.on('connection', c => {
+    // 外网开关关着：门已经锁上，谁敲都不开。
+    // 这里不注销 Peer ID，是因为 PeerJS 释放 ID 要一两秒，反复开关会撞
+    // unavailable-id，重试到头甚至会把房间码换掉——那等于把全房间的人踢出去。
+    // 保持注册、在这里拒客，既当场失效又随时能拨回来。
+    if (!P2P_ON) {
+      try { c.send('NOTE:' + JSON.stringify({ t: '房主已关闭外网加入，请改用局域网地址进入' })); } catch (e) {}
+      setTimeout(() => { try { c.close(); } catch (e) {} }, 200);
+      return;
+    }
     peerBye = false;
     // 连接元数据里带着对面是谁（昵称 + 设备 ID）：
     // 昵称用来先分配名字，设备 ID 只是记下是哪一台（外网设备没有 lsdev cookie）
@@ -2036,13 +2166,20 @@ function startHostPeer(roomCode) {
     if (t === 'unavailable-id') {
       // 刷新页面时旧连接可能还没被信令服务器释放，先重试拿回同一个码，
       // 直接换码会让已经发出去的邀请链接全部失效
-      if (hostRetry < 3) {
+      // hostGraceful = 刚从「外网加入」的关拨回开：这条路上更等得起，
+      // 因为此刻房间里已经有人，换码会把他们全踢掉
+      const cap = hostGraceful ? 12 : 3;
+      if (hostRetry < cap) {
         hostRetry++;
         showHostHint('正在重新接入房间…（第 ' + hostRetry + ' 次）');
         setTimeout(() => {
           try { pcPeer.destroy(); } catch (e) {}
           startHostPeer(roomCode);
-        }, 1000 * hostRetry);
+        }, 1000 * Math.min(hostRetry, 3));
+      } else if (hostGraceful) {
+        hostGraceful = false;
+        hostRetry = 0;
+        showHostHint('外网通道暂时接不上信令服务器，局域网不受影响；稍后再拨一次开关试试');
       } else {
         hostRetry = 0;
         showHostHint('这个房间码被别的页面占着，正在换一个新码…');
@@ -2150,7 +2287,9 @@ async function pushHistoryTo(conn) {
 // 把房间成员名单广播给所有外网设备
 function sendPeers() {
   const names = ['房主'].concat(hostList().map(x => x.name).filter(Boolean));
-  broadcast('PEERS:' + JSON.stringify({ names: names }));
+  // nf：房主这边能不能收文件。文件都存在房主侧，房主收不了就别让访客白传一趟
+  const nf = (CHANNEL === 'cloud' && !Cloud.quotaOk) ? 1 : 0;
+  broadcast('PEERS:' + JSON.stringify({ names: names, nf: nf }));
   reportDevices();
   renderAll();
 }
@@ -2158,6 +2297,7 @@ function sendPeers() {
 // ===== 设备通道与 IP：外网走 PeerJS 直连，局域网走本机 HTTP =====
 let roomDevices = [];        // 后端给出的房间成员（外网由房主上报、局域网由后端记录）
 let reportedDevices = '';    // 上次上报的内容，没变就不重复发
+let hostNoFile = false;      // 房主探测不到浏览器配额时由 PEERS 广播过来：本房间禁止传文件
 
 // 判断一个候选地址是不是真地址（浏览器会把本地地址伪装成 xxxx.local）
 function looksLikeAddr(v) {
@@ -2315,50 +2455,102 @@ function renderMembers() {
   };
   fill('memberList', wan);
   fill('lanMembers', lan);
-  // 房间卡副标题只写人数：生命周期信息已经在下面的状态卡里（免得同一句话说两遍）
+  // 房间卡副标题只写人数（含房主自己）。通道卡上的「已连接 N 台设备」是
+  // 别人的台数、不含本机，所以这两处数字天然差 1 —— 用「人 / 设备」区分口径。
   const total = 1 + hostList().length +
     (roomDevices || []).filter(d => d && d.channel !== 'p2p').length;
   const sub = document.getElementById('roomSub');
-  if (sub) sub.textContent = total + ' / 6 人';
+  if (sub) {
+    sub.textContent = '在线 ' + total + ' / ' + ROOM_MAX + ' 人';
+    // 满员再加就进不来了，这行字换成告警色 —— 否则房主只会觉得「对方怎么连不上」
+    sub.classList.toggle('full', total >= ROOM_MAX);
+  }
   renderRoomStat();
 }
 
-// ===== U-06：纯网页房间状态卡 =====
-// 容量与倒计时的数据源都在 cloud.js：Cloud.totalBytes() 是各文件 Blob 之和，
-// CLOUD_IDLE_MS 与后端 ROOM_IDLE_MAX 都是 30 分钟，lastActive 会持久化进
-// IndexedDB——刷新页面后倒计时接着走，不会被重置成满格。
+// ===== 纯网页房间：房间卡里的倒计时 + 侧栏的存储卡 =====
+// 数据源都在 cloud.js：Cloud.totalBytes() 是各文件 Blob 之和，Cloud.totalMax
+// 是建房时按浏览器可用配额算出的总量（可用空间 × 80%），CLOUD_IDLE_MS 与后端
+// ROOM_IDLE_MAX 都是 60 分钟。lastActive 会持久化进 IndexedDB——刷新页面后
+// 倒计时接着走，不会被重置成满格。
 let statTimer = null;
 function mmss(ms) {
   const s = Math.max(0, Math.ceil(ms / 1000));
   return String(Math.floor(s / 60)).padStart(2, '0') + ':' +
          String(s % 60).padStart(2, '0');
 }
+// 局域网房间的倒计时基准：后端心跳回包里的剩余秒数 + 收到它的本地时间。
+// 云房间用不着——活跃时间就在本机 Cloud.lastActive 里，不用问任何人。
+// left 为 null 表示「还没对上表」，这时候显示 --:-- 而不是编一个数字出来。
+let idleBase = { left: null, at: 0 };
+function setIdleBase(sec) {
+  if (typeof sec === 'number' && isFinite(sec)) idleBase = { left: sec, at: Date.now() };
+}
+function resetIdleBase() { idleBase = { left: null, at: 0 }; }
+// 两种房间共用一个入口：云房间本地算，局域网房间靠心跳校准、本地逐秒走
+function idleLeftMs() {
+  if (CHANNEL === 'cloud') {
+    return CLOUD_IDLE_MS - (Date.now() - (Cloud.lastActive || Date.now()));
+  }
+  if (idleBase.left === null) return null;
+  return (idleBase.left - (Date.now() - idleBase.at) / 1000) * 1000;
+}
 function renderRoomStat() {
+  const host = MODE === 'host' && !isLanClient;     // 房间卡只挂在房主页面上
+  const idleRow = document.getElementById('roomIdle');
+  if (idleRow) idleRow.style.display = host ? '' : 'none';
+  // 存储卡只有云房主有：局域网房间的文件落本机磁盘，没有浏览器配额这回事
+  const cloudHost = CHANNEL === 'cloud' && host;
   const box = document.getElementById('roomStat');
-  if (!box) return;
-  if (CHANNEL !== 'cloud' || MODE !== 'host') { box.style.display = 'none'; return; }
-  box.style.display = '';
-  const used = Cloud.totalBytes();
-  const mb = used / 1048576;
-  const files = document.getElementById('stFiles');
-  if (files) files.textContent = (mb >= 100 ? mb.toFixed(0) : mb.toFixed(1).replace(/\.0$/, '')) +
-                                  ' / 500 MB';
+  if (box) box.style.display = cloudHost ? '' : 'none';
+  if (cloudHost) {
+    const used = Cloud.totalBytes();
+    const total = Cloud.totalMax || 0;
+    const ok = Cloud.quotaOk !== false && total > 0;
+    const files = document.getElementById('stFiles');
+    if (files) files.textContent = ok ? fmtSize(used) + ' / ' + fmtSize(total) : '—';
+    const fmax = document.getElementById('stFileMax');
+    if (fmax) fmax.textContent = ok ? fmtSize(Cloud.fileMax) : '禁止上传';
+    const bar = document.getElementById('stBar');
+    if (bar) bar.style.width = ok ? Math.min(100, used / total * 100).toFixed(2) + '%' : '0%';
+    // 探测失败时的红字说明：这张卡不能只显示「—」，得说清为什么
+    const warn = document.getElementById('stWarn');
+    if (warn) warn.style.display = ok ? 'none' : '';
+    if (box) box.classList.toggle('no-quota', !ok);
+    syncFileEntry();
+  }
+  if (!host) return;
+  // 倒计时：剩不到 5 分钟就把这一行标成告警色，别等房间没了才发现
+  const left = idleLeftMs();
   const idle = document.getElementById('stIdle');
-  if (idle) idle.textContent = mmss(CLOUD_IDLE_MS - (Date.now() - (Cloud.lastActive || Date.now())));
-  const bar = document.getElementById('stBar');
-  if (bar) bar.style.width = Math.min(100, used / CLOUD_TOTAL_MAX * 100).toFixed(2) + '%';
+  if (idle) idle.textContent = left === null ? '--:--' : mmss(left);
+  if (idleRow) idleRow.classList.toggle('warn', left !== null && left < 5 * 60 * 1000);
 }
 function startRoomStat() {
   stopRoomStat();
-  if (CHANNEL !== 'cloud' || MODE !== 'host') return;
+  // 两种房间都要：这是房间的生命周期，不是「云房间才有的信息」
+  if (MODE !== 'host' || isLanClient) return;
   renderRoomStat();
-  // 一秒一格：倒计时必须看得见在走，否则「30 分钟自动销毁」只是一句静态文案
+  // 一秒一格：倒计时必须看得见在走，否则「60 分钟自动销毁」只是一句静态文案
   statTimer = setInterval(renderRoomStat, 1000);
 }
 function stopRoomStat() {
   if (statTimer) { clearInterval(statTimer); statTimer = null; }
   const box = document.getElementById('roomStat');
   if (box) box.style.display = 'none';
+  const idleRow = document.getElementById('roomIdle');
+  if (idleRow) idleRow.style.display = 'none';
+  resetIdleBase();
+  syncFileEntry();          // 离开房间后把「禁止上传」的灰态还原，别带到下一个房间
+}
+// 文件入口的可用性：探测不到配额时按钮变灰并写明原因，点了也不会有反应。
+// 拦截点只有 addFiles()（选择框 / 拖拽 / 粘贴三条路都汇到那里），这里只管外观。
+function syncFileEntry() {
+  const btn = document.getElementById('fileBtn');
+  if (!btn) return;
+  const why = cloudFileBlockReason();
+  btn.classList.toggle('blocked', !!why);
+  btn.title = why || '发送文件';
 }
 // 只断开某一条连接；byPeer=true 表示是对方主动发 BYE 过来的
 function dropHostConnById(id, byPeer) {
@@ -2434,6 +2626,7 @@ function startHostUI(fromWeb, lanUrl, lanClient) {
   // 局域网里其他设备打开的页面：同样是 host 模式（共用一套收发逻辑），
   // 但它不是房主，名字要算自己的一台设备，不能也叫「房主」
   isLanClient = !!lanClient;
+  resetIdleBase();        // 进房先清掉上一个房间的剩余时间，等心跳首包对表
   startHostHeartbeat();   // 只有真房主页面会生效（局域网设备页面自动跳过）
   startConnScan();        // 同上：只有房主需要盯着「谁还在」
   // 重新开房：把上一次「已解散」的状态清干净，否则界面会立刻又退回入口页
@@ -2459,21 +2652,33 @@ function startHostUI(fromWeb, lanUrl, lanClient) {
   lastDevicesSig = '';
   reportedDevices = '';
   renderMembers();
-  startRoomStat();   // U-06：只有云房主会真的开始每秒 tick，其它情况内部直接返回
-  // 在线页主动「创建房间」也算合法房主；局域网设备打开本机服务则不算
-  const canHostP2P = P2P_ENABLED || !!fromWeb;
+  startRoomStat();   // 房主页面每秒 tick（云房主 + 局域网房主），其它情况内部直接返回
+  // 在线页主动「创建房间」也算合法房主；局域网设备打开本机服务则不算。
+  // 外网通道开不开，看房间里的开关（P2P_ON），不再由创建时的选项一次性决定。
+  const isHostPage = MODE === 'host' && !isLanClient;
+  const p2pCapable = P2P_ENABLED || !!fromWeb;
+  const canHostP2P = isHostPage && p2pCapable && P2P_ON;
   document.getElementById('guestGate').style.display = 'none';
-  // 在线页跨域拿不到管理员 cookie；局域网设备更不该有管理入口——
-  // 管理入口只属于「跑这个程序的那台电脑」，齿轮对它们都藏起来
-  if (fromWeb || isLanClient) document.getElementById('adminBtn').style.display = 'none';
 
-  if (canHostP2P) {
+  if (isHostPage) {
+    // 房主的房间卡：两种房间都有（房间码、倒计时、销毁按钮）
     showRoomCard(ROOM);
     const badge = document.getElementById('roomBadge');
-    if (badge) badge.style.display = CHANNEL === 'cloud' ? 'inline-block' : 'none';
+    if (badge) {
+      // 手机上房间卡只剩这一行：房主得一眼看出开的是哪种房间
+      badge.textContent = CHANNEL === 'cloud' ? '网页直连' : '局域网';
+      badge.style.display = 'inline-block';
+    }
+    // 外网卡两种房间都挂：网页直连房间恒开，局域网房间可以拨到「关」
     document.getElementById('p2pBanner').style.display = 'block';
-    setupInvite(ROOM);
-    startHostPeer(ROOM);
+    renderP2PCard();
+    if (canHostP2P) {
+      setupInvite(ROOM);
+      startHostPeer(ROOM);
+    } else {
+      // 外网关着（或这个页面本来就没有外网能力）：地址与二维码是失效的，不画
+      lanPeers = Math.max(lanPeers, 1);
+    }
   } else {
     // 别人从局域网 IP 打开本机服务：只走 HTTP，不当房主。
     // 它自己就是房间成员，可以直接发（后端会把它算进 peers）
@@ -2516,7 +2721,6 @@ function initGuest(room, existing) {
   rememberJoinRoom(room);     // 记住本标签页的房间：刷新后自动回连，不用重输码
   applyDevicePrivacy();       // 访客只看得到自己的连接状态，看不到设备数 / IP
   guestGoneHandled = false;   // 重新进房，允许下一次「房间已不存在」再触发收尾
-  document.getElementById('adminBtn').style.display = 'none';
   showOtherDeviceCard('外网直连', room || '');
   setGuestActions('connecting');   // 连接中先不给按钮
 
@@ -3062,68 +3266,5 @@ async function sendAll() {
   if (MODE === 'host') setTimeout(loadMessages, 300);
 }
 
-function onAdminClick() {
-  if (MODE !== 'host') return;
-  // 局域网里的设备只是房间成员，不是房主：不给管理面板（也不该在界面上看到齿轮）
-  if (isLanClient) { toast('管理入口只在房主那台电脑上'); return; }
-  if (__IS_ADMIN__) {
-    document.getElementById('adminModal').classList.add('show');
-    loadDevices();
-    startDevicePoll();
-  } else { document.getElementById('loginModal').classList.add('show'); document.getElementById('adminPwd').focus(); }
-}
-function hideAdmin() {
-  document.getElementById('adminModal').classList.remove('show');
-  stopDevicePoll();
-}
 
-// 管理面板的设备清单：外网直连（房主上报的昵称 + WebRTC 读到的 IP）+ 局域网（后端记录）
-let deviceTimer = null;
-function startDevicePoll() {
-  stopDevicePoll();
-  deviceTimer = setInterval(loadDevices, 4000);
-}
-function stopDevicePoll() {
-  if (deviceTimer) { clearInterval(deviceTimer); deviceTimer = null; }
-}
-async function loadDevices() {
-  const ul = document.querySelector('#adminModal .dev-list');
-  if (!ul) return;
-  try {
-    const r = await apiFetch(API + '/api/devices');
-    const d = await r.json();
-    if (!d.ok) return;
-    const items = [];
-    for (const x of (d.p2p || [])) {
-      items.push(
-        '<li><div class="dev-info">' +
-        '<div class="dev-name">设备' +
-        ' <span class="badge wan">外网</span><span class="badge online">在线</span></div>' +
-        '<div class="dev-ip">IP: ' + esc(x.ip || 'IP 未知（NAT 后拿不到）') + ' · 点对点直连</div>' +
-        '</div></li>'
-      );
-    }
-    for (const x of (d.lan || [])) {
-      let badge = '<span class="badge lan">局域网</span><span class="badge online">在线</span>';
-      if (x.self) badge += '<span class="badge self">本机</span>';
-      else if (!x.joined) badge += '<span class="badge idle">未进房间</span>';
-      items.push(
-        '<li><div class="dev-info">' +
-        '<div class="dev-name">设备 ' + badge + '</div>' +
-        '<div class="dev-ip">IP: ' + esc(x.ip) + ' · 最后活动: ' + esc(x.last || '') + '</div>' +
-        '</div></li>'
-      );
-    }
-    ul.innerHTML = items.length ? items.join('') :
-      '<li><span style="color:#999;font-size:14px;">暂无设备连接</span></li>';
-  } catch (e) {}
-}
-function hideLogin() { document.getElementById('loginModal').classList.remove('show'); }
-async function adminLogout() { await apiFetch(API + '/admin-logout', {method:'POST'}); location.reload(); }
-async function doLogin() {
-  const pwd = document.getElementById('adminPwd').value;
-  const r = await apiFetch(API + '/admin-login', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'password='+encodeURIComponent(pwd)});
-  const d = await r.json();
-  if (d.ok) { toast('登录成功'); setTimeout(()=>location.reload(),600); } else toast('密码错误');
-}
 

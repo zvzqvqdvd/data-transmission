@@ -3,15 +3,22 @@
 // 与局域网房主共用同一套 P2P 协议与消息结构，访客端拿到的仍是
 // TEXT / FILE_CARD / HISTORY 这些老消息——协议一个字节都没改。
 //
-// 生命周期：刷新不算离线（IndexedDB 恢复）；关页 / 离线 / 30 分钟无通信即销毁。
+// 生命周期：刷新不算离线（IndexedDB 恢复）；关页 / 离线 / 60 分钟无通信即销毁。
 // 浏览器没有后端进程，销毁只能在本页还活着时立即做，或下次打开时按时间戳清库。
 
 const CLOUD_DB_NAME = 'datatransmission_cloud';
 const CLOUD_DB_STORE = 'kv';
-const CLOUD_IDLE_MS = 30 * 60 * 1000;          // 与后端 ROOM_IDLE_MAX 对齐
+const CLOUD_IDLE_MS = 60 * 60 * 1000;          // 与后端 ROOM_IDLE_MAX 对齐
 const CLOUD_MAX_GUESTS = 5;                    // 房主 + 5 = 6 人
-const CLOUD_FILE_MAX = 100 * 1024 * 1024;      // 单文件 100 MB
-const CLOUD_TOTAL_MAX = 500 * 1024 * 1024;     // 房间总量 500 MB
+// 容量不写死：建房时问浏览器「这个站点还能用多少」，取 80% 当房间总量，
+// 单文件再取总量的 10%。固定 500 MB 在 Safari（约 1 GB）上浪费一半、
+// 在 Chrome（10 GiB）上只用了 5%，两头都不合适。
+const CLOUD_QUOTA_RATIO = 0.8;                 // 房间总量 = 可用配额 × 80%
+const CLOUD_FILE_RATIO = 0.1;                  // 单文件上限 = 房间总量 × 10%
+// 探测不到配额（隐私模式 / 老浏览器 / 存储被禁用）时不猜数字：直接禁用上传。
+// 猜一个 500 MB 出去，真存不下时会写到一半才报 QuotaExceededError，
+// 文件进不去、消息也是假的，比一开始就说「不能传」糟糕得多。
+const CLOUD_MIN_QUOTA = 32 * 1024 * 1024;      // 可用空间低于 32 MB 视为探测失败
 const CLOUD_ROOM_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 let _cloudDB = null;
@@ -154,6 +161,9 @@ const Cloud = {
   devices: [],
   createdAt: 0,
   lastActive: 0,
+  quotaOk: true,                    // 浏览器是否给出了可信的可用空间；false = 禁用上传
+  totalMax: 0,                      // 本房间的文件总量上限（建房时探测得出，0 = 不可用）
+  fileMax: 0,                       // 单文件上限 = 总量 × 10%
   waiters: [],
   _timer: null,
 
@@ -161,6 +171,27 @@ const Cloud = {
     let n = 0;
     for (const b of Cloud.files.values()) n += (b && b.size) || 0;
     return n;
+  },
+
+  // 问浏览器要「这个站点现在还能写多少」：quota 是硬上限，usage 是已经占掉的
+  // （上一个房间的残留、页面缓存都算在内）。可用配额 × 80% 就是房间总量，
+  // 留 20% 给消息记录、元数据与浏览器的自身开销。
+  // 拿不到可信数字时把 quotaOk 置 false、容量归零——上层据此禁用上传。
+  async probeQuota() {
+    let avail = 0;
+    try {
+      if (navigator.storage && navigator.storage.estimate) {
+        const est = await navigator.storage.estimate();
+        const q = Number(est && est.quota) || 0;
+        const u = Number(est && est.usage) || 0;
+        if (q > 0) avail = Math.max(0, q - u);
+      }
+    } catch (e) {}
+    // 隐私模式 / 老浏览器拿不到数字：不猜上限，直接判定「本房间不能收文件」
+    Cloud.quotaOk = avail >= CLOUD_MIN_QUOTA;
+    Cloud.totalMax = Cloud.quotaOk ? Math.floor(avail * CLOUD_QUOTA_RATIO) : 0;
+    Cloud.fileMax = Cloud.quotaOk ? Math.floor(Cloud.totalMax * CLOUD_FILE_RATIO) : 0;
+    return Cloud.quotaOk;
   },
 
   async createRoom() {
@@ -173,6 +204,8 @@ const Cloud = {
     Cloud.createdAt = Date.now();
     Cloud.lastActive = Cloud.createdAt;
     cloudRemember(Cloud.room);
+    // 清完库再探测：usage 此刻最干净，算出来的可用空间才是真的可用
+    await cloudGuard(Cloud.probeQuota(), 3000);
     await cloudGuard(cloudSet('meta', Cloud.meta()));
     await cloudGuard(cloudSet('msgs', []));
     Cloud.startIdleWatch();
@@ -185,7 +218,10 @@ const Cloud = {
       createdAt: Cloud.createdAt,
       lastActive: Cloud.lastActive,
       nums: Cloud.nums,
-      devices: Cloud.devices
+      devices: Cloud.devices,
+      totalMax: Cloud.totalMax,
+      fileMax: Cloud.fileMax,
+      quotaOk: Cloud.quotaOk
     };
   },
 
@@ -200,6 +236,13 @@ const Cloud = {
     Cloud.room = meta.room;
     Cloud.createdAt = meta.createdAt || 0;
     Cloud.lastActive = meta.lastActive || Date.now();
+    // 配额在建房那一刻就定了：刷新回来沿用同一份数字，
+    // 否则同一房间前后两次刷新看到的上限会跳来跳去
+    Cloud.quotaOk = meta.quotaOk !== false;
+    Cloud.totalMax = meta.totalMax || 0;
+    Cloud.fileMax = meta.fileMax || 0;
+    // 老版本写下的 meta 没有这两个字段：补探一次，别让老房间变成「永远不能传」
+    if (!meta.totalMax && Cloud.quotaOk) await cloudGuard(Cloud.probeQuota(), 3000);
     Cloud.msgs = (await cloudGuard(cloudGet('msgs'))) || [];
     Cloud.nums = meta.nums || {};
     Cloud.devices = meta.devices || [];
@@ -283,7 +326,7 @@ const Cloud = {
       if (CHANNEL !== 'cloud') return;
       if (Date.now() - Cloud.lastActive > CLOUD_IDLE_MS) {
         try { broadcast('ROOM_CLOSED'); } catch (e) {}
-        try { onRoomClosed('房间超过 30 分钟没有通信，已自动销毁。'); } catch (e) {}
+        try { onRoomClosed('房间超过 60 分钟没有通信，已自动销毁。'); } catch (e) {}
         Cloud.dissolve();
       }
     }, 15000);
@@ -322,6 +365,11 @@ const Cloud = {
   },
 
   async handleUpload(opts) {
+    if (!Cloud.quotaOk) {
+      // 探测失败时一个字都不收：写入再失败会留下半截记录，比直接拒绝更糟
+      return cloudJSON({ ok: false,
+        msg: '本浏览器无法确认可用存储空间（隐私模式或版本过旧），房间已禁止上传文件' }, 507);
+    }
     const fd = opts.body;
     if (!fd || typeof fd.getAll !== 'function') {
       return cloudJSON({ ok: false, msg: '格式错误' }, 400);
@@ -333,11 +381,13 @@ const Cloud = {
     const names = [];
     for (const f of files) {
       if (!f || typeof f.size !== 'number') continue;
-      if (f.size > CLOUD_FILE_MAX) {
-        return cloudJSON({ ok: false, msg: '单个文件不能超过 100 MB' }, 413);
+      if (f.size > Cloud.fileMax) {
+        return cloudJSON({ ok: false,
+          msg: '单个文件不能超过 ' + fmtSize(Cloud.fileMax) }, 413);
       }
-      if (Cloud.totalBytes() + f.size > CLOUD_TOTAL_MAX) {
-        return cloudJSON({ ok: false, msg: '房间文件总量已达 500 MB 上限' }, 413);
+      if (Cloud.totalBytes() + f.size > Cloud.totalMax) {
+        return cloudJSON({ ok: false,
+          msg: '房间存储空间不够了（上限 ' + fmtSize(Cloud.totalMax) + '）' }, 413);
       }
       const name = cloudUniqueName(f.name);
       Cloud.files.set(name, f);

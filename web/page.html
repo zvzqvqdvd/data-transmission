@@ -9,8 +9,13 @@
 </head>
 <body data-channel="lan">
 
-<div id="gateView">
+<div id="gateView" data-view="gateChoices">
   <div class="gate-card">
+    <!-- 子视图的返回：凡是不在第一屏（选择页）时都出现在卡片左上角，不占正文高度。
+         放在卡片这一层（而不是视图里）才不会跟着视图的高度上下漂 -->
+    <button class="gate-back-ico" onclick="gateShowChoices()" aria-label="返回" title="返回">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.6 5.4 8 12l6.6 6.6"/></svg>
+    </button>
     <div class="gate-logo"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5h13m-3.6-3.6 3.6 3.6-3.6 3.6"/><path d="M20.5 15.5h-13m3.6-3.6-3.6 3.6 3.6 3.6"/></svg></div>
     <div class="gate-title">数据传输</div>
     <div class="gate-sub">任意设备之间互发文字、文件与桌面</div>
@@ -21,11 +26,11 @@
     <div class="gate-views" id="gateViews">
 
     <div class="gate-view gate-list on" id="gateChoices">
-      <button class="gate-btn primary" id="gateCreateBtn" onclick="agreeThen(gateCreate)">
-        <span class="gate-ico">＋</span>
+      <button class="gate-btn primary" id="gateCreateBtn" onclick="agreeThen(gateShowCreatePick)">
+        <span class="gate-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 6.6v10.8"/><path d="M6.6 12h10.8"/></svg></span>
         <span class="gate-txt">
           <b>创建房间</b>
-          <i>在本机开一个房间</i>
+          <i>网页直连 / 局域网</i>
           <span class="gate-prog">
             <span class="gate-prog-line"><span id="gateProgText"></span><b id="gateProgPct">0%</b></span>
             <span class="gate-prog-bar" id="gateProgBar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="gate-prog-fill" id="gateProgFill"></span></span>
@@ -33,25 +38,27 @@
         </span>
       </button>
       <button class="gate-btn" id="gateJoinChoiceBtn" onclick="agreeThen(gateShowJoin)">
-        <span class="gate-ico">→</span>
+        <span class="gate-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5.4 12h13"/><path d="M13.4 6.8 18.6 12l-5.2 5.2"/></svg></span>
         <span class="gate-txt"><b>加入房间</b><i>输入对方的房间码</i></span>
       </button>
-      <!-- 唯一新增控件：默认关 = 纯网页房间（零下载）；打开 = 建房时探活本机程序。
-           切换本身不发请求、不提示，只在点「创建房间」时生效 -->
-      <label class="lan-switch" for="lanSwitch">
-        <span class="ls-txt">
-          <b>开启局域网访问</b>
-          <i id="lanSwitchSub">纯网页房间，无需下载软件</i>
-        </span>
-        <input type="checkbox" id="lanSwitch" onchange="onLanSwitchChange()">
-        <span class="ls-ui" aria-hidden="true"></span>
-      </label>
+    </div>
+
+    <!-- 创建房间前先选通道：三种房间的差别只有两点——文件存在哪、谁能进得来。
+         不在这里说清，用户建完才发现对方进不来（局域网房间没有房间码直连） -->
+    <div id="gateCreatePick" class="gate-view">
+      <button class="gate-btn" onclick="gateCreatePick('p2p')">
+        <span class="gate-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="8"/><path d="M4.2 12h15.6"/><path d="M12 4.2c3.2 3.4 3.2 12.2 0 15.6"/><path d="M12 4.2c-3.2 3.4-3.2 12.2 0 15.6"/></svg></span>
+        <span class="gate-txt"><b>网页直连</b><i>WebRTC P2P · 无需安装，有网就能进</i></span>
+      </button>
+      <button class="gate-btn" onclick="gateCreatePick('lan')">
+        <span class="gate-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M3.6 9.4a13 13 0 0 1 16.8 0"/><path d="M6.6 12.7a8.6 8.6 0 0 1 10.8 0"/><path d="M9.5 15.9a4.2 4.2 0 0 1 5 0"/><circle cx="12" cy="19" r="1.1" fill="currentColor" stroke="none"/></svg></span>
+        <span class="gate-txt"><b>局域网</b><i>需本机程序 · 同一 WiFi 直连 · 可开启网页直连</i></span>
+      </button>
     </div>
 
     <div id="gateJoin" class="gate-view">
-      <input id="gateRoom" placeholder="房间码" maxlength="16" autocomplete="off" spellcheck="false">
+      <input id="gateRoom" placeholder="房间码" maxlength="16" autocomplete="off" spellcheck="false" autocapitalize="characters" enterkeyhint="go">
       <div class="gate-row">
-        <button class="gate-back" onclick="gateShowChoices()">返回</button>
         <button class="gate-btn primary" id="gateJoinBtn" onclick="gateJoin()">
           <span class="gate-txt"><b>连接</b></span>
         </button>
@@ -66,13 +73,13 @@
           <svg class="gdl-ar" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10"/><path d="M7.6 9.6 12 14l4.4-4.4"/><path d="M4.6 19.4h14.8"/></svg>
           <svg class="gdl-ico-pause" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><rect x="7" y="5.5" width="3.6" height="13" rx="1.2"/><rect x="13.4" y="5.5" width="3.6" height="13" rx="1.2"/></svg>
           <svg class="gdl-ico-play" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M8.5 5.6c0-.8.9-1.3 1.6-.9l9 6.4c.6.4.6 1.4 0 1.8l-9 6.4c-.7.4-1.6-.1-1.6-.9z"/></svg>
+          <svg class="gdl-ico-save" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4.6h10.6L19 8v11.4H5z"/><path d="M9 4.6v4.6h5.6V4.6"/><path d="M8.6 19.4v-5.6h6.8v5.6"/></svg>
           <span id="dlmBtnText">下载 Windows 程序</span>
           <em id="dlmSize">…</em>
         </span>
       </button>
       <div class="gate-row">
-        <button class="gate-back" onclick="gateShowChoices()">返回</button>
-        <button class="gate-back" onclick="dlmRetry()">重新创建</button>
+        <button class="gate-alt" onclick="dlmRetry()">重新创建</button>
       </div>
     </div>
 
@@ -89,13 +96,11 @@
       </label>
     </div>
 
-    <!-- 底部一栏：两句引导挨在一起，仓库入口跟在第二句后面。
-         出错时整栏换成一条提示（同格叠放），高度一分不变 -->
+    <!-- 底部只留一条极小的仓库入口：房间之间的差别已经写在按钮副标题里，再说一遍就是重复。
+         这一格同时叠着 #gateMsg（出错时就地替换），行高固定，冒提示卡片不长高 -->
     <div class="gate-foot-wrap">
       <div class="gate-foot">
-        <span class="gf-a">创建房间不需要下载软件</span><br>
-        <span class="gf-b">加入房间任何设备都能加入</span>
-        <span class="gf-dot">·</span><a class="gf-gh" href="https://github.com/zvzqvqdvd/data-transmission" target="_blank" rel="noopener">GitHub</a>
+        <a class="gf-gh" href="https://github.com/zvzqvqdvd/data-transmission" target="_blank" rel="noopener">GitHub</a>
       </div>
       <div id="gateMsg"></div>
     </div>
@@ -109,7 +114,7 @@
     <span class="brand-icon"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.1" stroke-linecap="round"><path d="M4.5 12.5a7.5 7.5 0 0 1 7.5-7.5"/><path d="M4.5 17a12 12 0 0 1 12-12"/><circle cx="5.4" cy="18.6" r="1.7" fill="#fff" stroke="none"/></svg></span>
     <span class="brand-text">
       <span class="topbar-title">数据传输</span>
-      <span class="topbar-sub">任意设备之间互发文字与文件</span>
+      <span class="topbar-sub">任意设备之间互发文字、文件与桌面</span>
     </span>
   </div>
   <div class="topbar-right">
@@ -122,9 +127,6 @@
     <button class="icon-btn" id="helpBtn" onclick="showHelp()" title="使用帮助" aria-label="使用帮助">
       <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.4a2.5 2.5 0 1 1 3.2 2.4c-.6.2-.9.8-.9 1.4v.4"/><circle cx="12" cy="16.6" r=".9" fill="currentColor" stroke="none"/></svg>
     </button>
-    <button class="icon-btn" id="adminBtn" onclick="onAdminClick()" title="设备管理" aria-label="设备管理">
-      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2.1"/><circle cx="9" cy="17" r="2.1"/></svg>
-    </button>
   </div>
 </div>
 
@@ -132,26 +134,30 @@
 <aside class="side-info" id="sideInfo">
 <!-- 房间卡片：房间号与房间操作是房间级别的信息，不属于任何一条通道，置顶且只给房主看 -->
 <div id="roomCard" style="display:none;">
-  <div class="room-card-title">房间<span class="room-badge" id="roomBadge" style="display:none;">纯网页</span></div>
+  <div class="room-card-title"><span class="rct-t">房间</span><span class="room-badge" id="roomBadge" style="display:none;">纯网页</span></div>
   <b id="roomCode" title="点击复制房间码" onclick="copyRoomCode()"></b>
   <div class="room-sub" id="roomSub"></div>
+  <!-- 销毁倒计时跟着房间号走：它是房间的生命周期，不是存储信息 -->
+  <div class="room-idle" id="roomIdle" title="连续 60 分钟没有通信，房间就自动销毁" style="display:none;">空闲剩余 <b id="stIdle">--:--</b></div>
   <div class="room-actions">
     <button class="pill ghost" onclick="copyRoomCode()">复制房间码</button>
     <button class="pill danger" id="dissolveBtn" onclick="askDissolve()">销毁房间</button>
   </div>
 </div>
 
-<!-- 纯网页房间的状态卡（U-06）：容量 / 单文件上限 / 空闲倒计时。
-     只有云房主看得到，由 renderRoomStat() 按 CHANNEL+MODE 控制显隐并每秒刷新 -->
+<!-- 纯网页房间的存储卡：本房间能用多少、单文件多大、已用多少。
+     容量由建房时的浏览器配额算出（可用空间 × 80%，单文件取其中 10%），
+     只有云房主看得到，由 renderRoomStat() 按 CHANNEL+MODE 控制显隐 -->
 <div id="roomStat" data-channel="cloud" style="display:none;">
-  <div class="st-h">房间状态</div>
+  <div class="st-h">存储空间</div>
   <div class="st-grid">
-    <span>文件 <b id="stFiles">0 / 500 MB</b></span>
-    <span>单文件上限 <b>100 MB</b></span>
-    <span>空闲剩余 <b id="stIdle">--:--</b></span>
+    <span>已用 <b id="stFiles">—</b></span>
+    <span>单文件上限 <b id="stFileMax">—</b></span>
   </div>
   <div class="mini-bar"><i id="stBar"></i></div>
-  <div class="st-foot">刷新页面可恢复历史与文件 · 30 分钟无通信自动销毁</div>
+  <!-- 探测不到配额时的红字：不是「0 B」，是「这台浏览器给不出数字」 -->
+  <div class="st-warn" id="stWarn" style="display:none;">浏览器没给出可用存储空间，本房间已禁止上传。传输文件请使用任意最新版浏览器，并且不要开启无痕（隐私）访问。</div>
+  <div class="st-foot">刷新页面可恢复历史与文件</div>
 </div>
 
 <div id="lanBanner" style="display:none;">
@@ -164,7 +170,7 @@
     <button class="pill" onclick="toggleLanQR()">二维码</button>
   </div>
   <div class="chan-state" id="lanState">
-    <div class="chan-count" id="lanCount">局域网已连接 0 台设备</div>
+    <div class="chan-count" id="lanCount">已连接 0 台设备</div>
     <div class="chan-list" id="lanMembers"></div>
   </div>
   <!-- 二维码模式：浮层盖在卡片上（卡片自身尺寸不变），点「返回」关掉 -->
@@ -177,18 +183,29 @@
 <div id="p2pBanner" style="display:none;">
   <div class="p2p-line">
     <span class="p2p-label">外网直连</span>
+    <!-- 局域网房间才有这个开关：网页直连房间本身就是外网通道，关掉等于把房间废了 -->
+    <button class="p2p-sw" id="p2pSw" type="button" role="switch" aria-checked="true"
+            title="关闭后只有同一 WiFi 的设备能加入" onclick="toggleRoomP2P()" style="display:none;">
+      <span class="p2p-sw-t">外网加入</span>
+      <i class="p2p-sw-track"><i class="p2p-sw-knob"></i></i>
+    </button>
   </div>
-  <code id="p2pUrl" title="点击复制访问地址" style="display:none;"></code>
-  <div id="inviteActions" class="side-actions" style="display:none;">
-    <button class="pill" onclick="copyInviteUrl()">复制访问地址</button>
-    <button class="pill" onclick="toggleQR()">二维码</button>
+  <!-- 开着的时候的全部内容：关掉后整块收起，一张卡只剩下开关和一行说明 -->
+  <div id="p2pBody">
+    <code id="p2pUrl" title="点击复制访问地址" onclick="copyInviteUrl()" style="display:none;"></code>
+    <div id="inviteActions" class="side-actions" style="display:none;">
+      <button class="pill" onclick="copyInviteUrl()">复制访问地址</button>
+      <button class="pill" onclick="toggleQR()">二维码</button>
+    </div>
+    <div id="inviteHint"></div>
+    <div id="hostNotice" class="side-notice" style="display:none;"></div>
+    <div class="chan-state" id="p2pState">
+      <div class="chan-count" id="hostHint">已连接 0 台设备</div>
+      <div class="chan-list" id="memberList"></div>
+    </div>
   </div>
-  <div id="inviteHint"></div>
-  <div id="hostNotice" class="side-notice" style="display:none;"></div>
-  <div class="chan-state" id="p2pState">
-    <div class="chan-count" id="hostHint">外网已连接 0 台设备</div>
-    <div class="chan-list" id="memberList"></div>
-  </div>
+  <!-- 关掉外网后的替身：卡片不消失，只把失效的地址/二维码/清单换掉 -->
+  <div id="p2pOffHint" class="p2p-off" style="display:none;">已关闭 · 链接与二维码已失效，只有同一 WiFi 的设备能加入</div>
   <!-- 二维码模式：浮层盖在卡片上，卡片自身尺寸不变 -->
   <div id="qrBox" class="qr-float" style="display:none;">
     <div id="qrImg"></div>
@@ -225,7 +242,7 @@
     <div id="msgList">
       <div class="empty">
         <span class="e-icon"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="#98A0AC" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 11.6c0 4-3.8 7.2-8.5 7.2-1 0-2-.15-2.9-.42L4 20l1.3-3.6A6.9 6.9 0 0 1 3.5 11.6c0-4 3.8-7.2 8.5-7.2s8.5 3.2 8.5 7.2Z"/></svg></span>
-        暂无消息<span class="e-sub">各设备互发的文字与文件会显示在这里</span>
+        暂无消息<span class="e-sub">发的文字与文件会显示在这里，后加入的设备也能看到</span>
       </div>
     </div>
   </div>
@@ -236,7 +253,7 @@
 <div class="input-bar">
   <div class="input-inner">
     <div class="input-row">
-      <button class="folder-btn" onclick="document.getElementById('fileInput').click()" title="发送文件" aria-label="发送文件">
+      <button class="folder-btn" id="fileBtn" onclick="pickFiles()" title="发送文件" aria-label="发送文件">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.4 11.6 12.3 19.7a4.4 4.4 0 0 1-6.2-6.2l8.5-8.5a3 3 0 0 1 4.2 4.2l-8.4 8.4a1.6 1.6 0 0 1-2.2-2.2l7.7-7.7"/></svg>
       </button>
       <button class="folder-btn" id="screenBtn" onclick="toggleScreenShare()" title="共享桌面"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="width:18px;height:18px;"><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg></button>
@@ -309,7 +326,7 @@
       <details>
         <summary>大文件能传多大？</summary>
         <p data-channel="lan">上传到本机最大 4 GiB。外网设备下载文件走点对点直连，速度取决于双方网络；文件始终保存在房主设备上，其他设备按需下载。</p>
-        <p data-channel="cloud">纯网页房间单个文件最大 100 MB，整个房间合计 500 MB。文件走点对点直连，房主页面的内存和浏览器存储都有限，超大文件请改用局域网模式。</p>
+        <p data-channel="cloud">纯网页房间的容量按浏览器可用空间自动定：总量取可用空间的 80%，单文件上限是总量的 10%。房间侧栏的存储卡会显示本房间的实际数字。如果浏览器报不出可用空间（无痕模式或版本过旧），本房间直接禁止上传文件，不猜一个可能存不下的数字。传输文件请使用任意最新版浏览器，并且不要开启无痕（隐私）访问。文件走点对点直连，超大文件请改用局域网模式。</p>
       </details>
     </div>
     <div class="modal-btns"><button class="btn-plain" onclick="hideHelp()">知道了</button></div>
@@ -323,7 +340,7 @@
       房间是<b>临时</b>的，出现以下任一情况就自动销毁：<br>
       · 关闭房主页面（刷新不算，页面回来就继续用）<br>
       · 房主离线（60 秒宽限，弱网抖动不算）<br>
-      · 连续 30 分钟没有通信（发消息、传文件、新设备加入都算）<br>
+      · 连续 60 分钟没有通信（发消息、传文件、新设备加入都算）<br>
       · 房主点「销毁房间」（立即生效）<br>
       销毁时房间码作废；<b>聊天记录一律不落盘</b>，局域网房间的接收文件随房间一起删除，不做保留。</p>
     <div class="modal-btns"><button class="btn-plain" onclick="hideTtl()">知道了</button></div>
@@ -331,27 +348,6 @@
   </div>
 </div>
 
-<div class="modal-mask" id="adminModal">
-  <div class="modal">
-    <h3>房间里的设备</h3>
-    <p class="modal-tip" style="text-align:left;margin:-4px 0 10px;">外网设备走点对点直连，局域网设备走本机服务；列表只用于查看谁在房间里。</p>
-    <ul class="dev-list">__CLIENT_LIST__</ul>
-    <div class="modal-btns">
-      <button class="btn-plain" onclick="adminLogout()">退出管理</button>
-      <button class="btn-plain" onclick="hideAdmin()">关闭</button>
-    </div>
-  </div>
-</div>
-<div class="modal-mask" id="loginModal">
-  <div class="modal">
-    <h3>管理员登录</h3>
-    <input type="password" id="adminPwd" placeholder="密码">
-    <div class="modal-btns">
-      <button class="btn-plain" onclick="hideLogin()">取消</button>
-      <button class="btn-primary" onclick="doLogin()">登录</button>
-    </div>
-  </div>
-</div>
 <div class="modal-mask" id="dissolveModal">
   <div class="modal">
     <h3>销毁房间</h3>
@@ -360,6 +356,16 @@
     <div class="modal-btns">
       <button class="btn-plain" onclick="hideDissolve()">取消</button>
       <button class="btn-danger" onclick="dissolveRoom()">销毁</button>
+    </div>
+  </div>
+</div>
+<div class="modal-mask" id="p2pOffModal">
+  <div class="modal">
+    <h3>关闭外网加入</h3>
+    <p class="modal-tip" id="p2pOffTip">关掉后外网链接与二维码立即失效，正在连着的设备会被断开；同一 WiFi 的设备不受影响。</p>
+    <div class="modal-btns">
+      <button class="btn-plain" onclick="hideP2POff()">取消</button>
+      <button class="btn-danger" onclick="confirmP2POff()">关闭外网</button>
     </div>
   </div>
 </div>

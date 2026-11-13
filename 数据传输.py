@@ -5,7 +5,6 @@
 运行后用其他设备的浏览器打开终端里显示的地址即可。
 
 可选环境变量（前缀 DATATRANSMISSION_）：
-    DATATRANSMISSION_ADMIN_PASSWORD  管理员密码（未设置时为默认值 admin）
     DATATRANSMISSION_MAX_FILE_SIZE   单文件上传上限字节数（默认 4 GiB）
 """
 import os
@@ -13,7 +12,6 @@ import re
 import sys
 import html
 import json
-import hmac
 import time
 import uuid
 import socket
@@ -178,6 +176,10 @@ ROOM = None
 # 房间一换就清空，编号永远从 1 重新开始。
 ROOM_NUMS = {}
 
+# 本房间开不开外网直连：创建时由页面上的三选一决定（P2P / 局域网 / 两者）。
+# 只影响这个房间要不要注册 P2P 房主；局域网（HTTP）通道永远都在。
+ROOM_P2P = True
+
 def has_room():
     """已经点过「创建房间」就有房间，否则一切都是空的"""
     return bool(ROOM)
@@ -202,13 +204,37 @@ def renew_room():
     return ROOM
 
 
-def create_room():
-    """点「创建房间」：已经有房间就接着用，没有才新开一个"""
+def create_room(p2p=True):
+    """点「创建房间」：已经有房间就接着用，没有才新开一个
+
+    p2p 由页面的三选一决定：False = 只开局域网（不注册外网直连房主）。
+    已经有房间时不换码，只按这次的选择更新通道开关。
+    """
+    global ROOM_P2P
+    ROOM_P2P = bool(p2p)
     if ROOM:
         ensure_room()
         touch_activity()
         return ROOM
     return renew_room()
+
+
+def set_room_p2p(on):
+    """房间里实时开关外网通道：房间码不变，已经进房的人不受影响
+
+    关掉只是「外网这扇门不再开」：局域网照常走 HTTP，同一 WiFi 的设备毫无感觉。
+    外网设备当场从名单与计数里抹掉——它们已经进不来了，留着这两个数字
+    只会让房间看起来还有几个人在外网挂着。
+    """
+    global ROOM_P2P
+    ROOM_P2P = bool(on)
+    if not ROOM_P2P:
+        set_p2p_devices([])
+        with DATA_LOCK:
+            P2P_REPORT['n'] = 0
+            P2P_REPORT['ts'] = time.time()
+    touch_activity()
+    return ROOM_P2P
 
 
 def dissolve_room():
@@ -217,9 +243,10 @@ def dissolve_room():
     房间是临时的：内存里的房间清掉，磁盘上的 数据/房间/<房间码>/
     （聊天记录 + 接收文件）也一起删掉，不做任何保留。
     """
-    global ROOM
+    global ROOM, ROOM_P2P
     room = ROOM
     ROOM = None
+    ROOM_P2P = True
     reset_messages()             # 消息只在内存里，清掉即彻底消失
     with DATA_LOCK:
         ROOM_NUMS.clear()        # 编号跟着房间走：销毁即清空，新房间从 1 重新开始
@@ -245,7 +272,7 @@ def purge_room_dir(room):
 #   2. 连续 ROOM_IDLE_MAX 秒没有任何通信（发消息、传文件、新设备加入都算）
 #   3. 房主点「销毁房间」（立即，不走宽限期）
 #   4. 刷新页面不算销毁：页面重开后会重新上报心跳
-ROOM_IDLE_MAX = 30 * 60          # 秒：30 分钟无通信自动销毁
+ROOM_IDLE_MAX = 60 * 60          # 秒：60 分钟无通信自动销毁
 ROOM_HOST_GONE_MAX = 60          # 秒：房主页面说再见后，等这么久还没回来就销毁
 # 现在不再从磁盘恢复房间，这些值只在一次运行里有效
 _ACTIVITY = {'ts': time.time()}              # 房间最后一次「通信」的时间
@@ -256,6 +283,18 @@ _HOST_GONE = {'ts': 0.0}                     # 房主页面说再见的时间（
 def touch_activity():
     """记一笔「房间刚才还有人来过」：发消息、传文件、新设备加入都算通信"""
     _ACTIVITY['ts'] = time.time()
+
+
+def idle_left():
+    """距离「60 分钟无通信自动销毁」还剩多少秒（还没建房时为 0）
+
+    房主页面拿它画房间卡上那个倒计时。云房间的活跃时间存在浏览器里，
+    页面自己就能算；局域网房间的活跃时间只有后端知道，只能问这里。
+    倒数由页面每秒本地走，每 10 秒心跳回包时用这个值校准一次。
+    """
+    if not ROOM:
+        return 0
+    return max(0, int(ROOM_IDLE_MAX - (time.time() - _ACTIVITY['ts'])))
 
 
 def touch_host_page():
@@ -281,7 +320,7 @@ def destroy_if_expired():
             now - _HOST_GONE['ts'] > ROOM_HOST_GONE_MAX:
         reason = '房主页面已关闭'
     elif now - _ACTIVITY['ts'] > ROOM_IDLE_MAX:
-        reason = '超过 12 小时没有通信'
+        reason = '超过 60 分钟没有通信'
     if not reason:
         return ''
     room = ROOM
@@ -391,11 +430,7 @@ LONGPOLL_MAX_MS = 20000   # 单次最多挂 20 秒；到点返回「没变化」
 LONGPOLL_TICK = 0.15      # 挂起期间多久查一次变化：决定新增延迟的上限
 LONGPOLL_TOUCH = 5        # 挂起期间每 5 秒续一次「我还活着」，别被 PEER_TIMEOUT 误判离开
 
-# 管理员会话令牌只保存在服务端，cookie 无法伪造
-DEFAULT_ADMIN_PASSWORD = "admin"
-ADMIN_PASSWORD = (os.environ.get('DATATRANSMISSION_ADMIN_PASSWORD')
-                  or DEFAULT_ADMIN_PASSWORD)
-ADMIN_SESSIONS = set()
+# 单文件上传上限：超了直接 413，不写半个文件到磁盘
 try:
     MAX_FILE_SIZE = int(os.environ.get('DATATRANSMISSION_MAX_FILE_SIZE')
                         or 4 * 1024 ** 3)
@@ -692,8 +727,7 @@ def _page_build_fingerprint():
     return h.hexdigest()[:10]
 
 
-def build_page(mode='host', client_list='', is_admin=False, p2p=True,
-               join_required=False):
+def build_page(mode='host', p2p=True, join_required=False):
     """把 web/ 下的源文件内联成一份完整页面
 
     三个 JS 源文件按「公共核心 → 房间逻辑 → 入口页逻辑」拼成同一个 <script>，
@@ -704,14 +738,13 @@ def build_page(mode='host', client_list='', is_admin=False, p2p=True,
     join_required=True：局域网设备还没输入房间码，先停入口页。
     """
     values = {
-        '__CLIENT_LIST__': client_list,
-        '__IS_ADMIN__': 'true' if is_admin else 'false',
         '__SERVER_MODE__': mode,
         '__PORT__': str(PORT),
         '__ROOM__': (ROOM or '') if mode == 'host' else '',
         '__HAS_ROOM__': 'true' if (mode == 'host' and has_room()) else 'false',
         '__CLIENT_URL__': _js_literal(_read_client_url()),
         '__P2P_ENABLED__': 'true' if (mode == 'host' and p2p) else 'false',
+        '__ROOM_P2P__': 'true' if ROOM_P2P else 'false',
         '__JOIN_REQUIRED__': 'true' if join_required else 'false',
         '__LAN_URL__': ('http://%s:%d' % (get_lan_ip(), PORT)) if mode == 'host' else '',
         '__PAGE_BUILD__': _page_build_fingerprint(),
@@ -736,7 +769,7 @@ def build_page(mode='host', client_list='', is_admin=False, p2p=True,
 
 def build_static_page():
     """导出访客版：零后端请求、零外部依赖"""
-    return build_page(mode='guest', client_list='', is_admin=False)
+    return build_page(mode='guest')
 
 
 # 静态页文件名与落盘位置（相对 BASE_DIR）
@@ -954,57 +987,6 @@ def parse_multipart_stream(rfile, boundary, length):
     return saved, fields
 
 
-def build_client_list(current_cid):
-    """生成设备列表HTML：外网直连 + 局域网两条通道分开标注，各带真实 IP
-
-    外网设备走 PeerJS 直连本机页面，不经过 8000 端口，后端看不见它们，
-    名单由房主页面报上来（P2P_DEVICES）；局域网设备由后端自己记录。
-    """
-    with DATA_LOCK:
-        snapshot = [(cid, dict(info)) for cid, info in CLIENTS.items()]
-    p2p_list = p2p_devices()
-
-    items = []
-    # ---- 外网直连：昵称来自对方自己起的设备名，IP 由房主从 WebRTC 对端候选里读出来 ----
-    for dev in p2p_list:
-        ip = dev.get('ip') or ''
-        ip_text = ip if ip else 'IP 未知（NAT 后拿不到）'
-        name = dev['name']
-        items.append(
-            f'<li>'
-            f'<div class="dev-info">'
-            f'<div class="dev-name">设备 '
-            f'<span class="badge wan">外网</span>'
-            f'<span class="badge online">在线</span></div>'
-            f'<div class="dev-ip">IP: {html.escape(ip_text)} · 点对点直连</div>'
-            f'</div>'
-            f'</li>'
-        )
-
-    # ---- 局域网：后端自己记录 ----
-    for cid, info in snapshot:
-        ip = info["ip"]
-        badge = '<span class="badge lan">局域网</span>'
-        badge += '<span class="badge online">在线</span>'
-        if cid == current_cid:
-            badge += '<span class="badge self">本机</span>'
-        elif not info.get('joined'):
-            badge += '<span class="badge idle">未进房间</span>'
-        last = info.get('last_seen', info.get('first_seen', ''))
-        items.append(
-            f'<li>'
-            f'<div class="dev-info">'
-            f'<div class="dev-name">设备 {badge}</div>'
-            f'<div class="dev-ip">IP: {html.escape(ip)} · 最后活动: {html.escape(str(last))}</div>'
-            f'</div>'
-            f'</li>'
-        )
-
-    if not items:
-        return '<li><span style="color:#999;font-size:14px;">暂无设备连接</span></li>'
-    return '\n'.join(items)
-
-
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass  # 静默日志
@@ -1046,18 +1028,6 @@ class Handler(BaseHTTPRequestHandler):
     def _join_cookie_header(self):
         """Set-Cookie 的值：凭证就是房间码本身，换码即失效"""
         return '%s=%s; Path=/; SameSite=Lax; Max-Age=604800' % (JOIN_COOKIE, ROOM)
-
-    def _is_admin(self):
-        """本机（双击运行程序的那台电脑）天然就是管理员，不用输密码
-
-        其他设备必须先 POST /admin-login 用密码换一个服务端会话令牌（cookie sid），
-        只有令牌能伪造不了——局域网设备本来就不给管理入口（前端隐藏齿轮）。
-        """
-        if is_loopback(self.client_address[0]):
-            return True
-        sid = self._get_cookie('sid')
-        with DATA_LOCK:
-            return bool(sid and sid in ADMIN_SESSIONS)
 
     def end_headers(self):
         """统一补跨域头：只对白名单来源放行，其他源拿不到响应内容"""
@@ -1244,7 +1214,7 @@ class Handler(BaseHTTPRequestHandler):
             cur_rev, result = self._messages_snapshot()
         # devices 里带每个成员的 IP：其他设备只拿「几台设备」这类数字，
         # 不给清单（前端也只给房主端显示人数与 IP）。
-        owner_view = (not self._is_guest_client()) or self._is_admin()
+        owner_view = not self._is_guest_client()
         devices = (p2p_devices() + lan_devices()) if owner_view else []
         status = {'room': ROOM, 'peers': lan_peer_count(),
                   'p2p': p2p_report_count(), 'devices': devices,
@@ -1280,8 +1250,8 @@ class Handler(BaseHTTPRequestHandler):
             # 只有本机（回环）访问才当 P2P 房主；别人从局域网 IP 打开只做 HTTP 客户端，
             # 而且要先用房间码进门，不能打开网页就直接看到聊天内容
             loop = is_loopback(self.client_address[0])
-            self._send_html(build_page('host', build_client_list(cid), self._is_admin(),
-                                       p2p=loop, join_required=(not loop and not joined)))
+            self._send_html(build_page('host', p2p=loop,
+                                       join_required=(not loop and not joined)))
 
         elif path == '/api/host':
             # 在线页（github.io）靠这个接口判断「本机程序是否在跑」，并取同一个房间码
@@ -1291,39 +1261,17 @@ class Handler(BaseHTTPRequestHandler):
                 'online': True,
                 'room': ROOM or '',
                 'has_room': has_room(),
+                'p2p': ROOM_P2P,
                 'port': PORT,
                 'ip': get_lan_ip(),
                 'client_url': _read_client_url(),
                 'peers': lan_peer_count() if has_room() else 0,
                 'members': room_member_count() if has_room() else 0,
                 'max_members': ROOM_MAX_MEMBERS,
+                'idle_left': idle_left() if has_room() else 0,
                 'data_dir': room_dir() if has_room() else ROOM_ROOT,
                 'closed': not has_room(),
             })
-
-        elif path == '/api/devices':
-            # 设备清单：外网直连（房主报上来的）+ 局域网（后端自己记的），
-            # 管理面板打开时用它刷新，两条通道分开标注、各带 IP。
-            # 清单里有别的设备地址，只给房主这台电脑 / 登录过的管理员，
-            # 局域网里其他设备即使进了房间也不能顺手拿走一份。
-            if self._is_guest_client() and not self._is_admin():
-                self._json({'ok': False, 'msg': '无权查看设备清单'}, 403)
-                return
-            with DATA_LOCK:
-                snapshot = [(cid_, dict(info)) for cid_, info in CLIENTS.items()]
-            lan = []
-            for cid_, info in snapshot:
-                ip = info.get('ip', '')
-                lan.append({
-                    'cid': cid_,
-                    'name': info.get('name') or ip,
-                    'ip': ip,
-                    'channel': 'lan',
-                    'self': cid_ == cid,
-                    'joined': bool(info.get('joined')),
-                    'last': info.get('last_seen', info.get('first_seen', '')),
-                })
-            self._json({'ok': True, 'p2p': p2p_devices(), 'lan': lan})
 
         elif path == '/messages':
             # 房主还没点「创建房间」：没有房间可读，让页面退回入口页
@@ -1391,29 +1339,11 @@ class Handler(BaseHTTPRequestHandler):
             self._json({'ok': False, 'msg': '未知接口'}, 404)
 
     def do_POST(self):
-        path = urllib.parse.urlparse(self.path).path
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        qs_url = urllib.parse.parse_qs(parsed.query)
 
-        # 登录单独处理：不需要先输入房间码
-        if path == '/admin-login':
-            length = int(self.headers.get('Content-Length', 0))
-            body = self.rfile.read(min(length, 4096)).decode('utf-8', 'replace')
-            pwd = urllib.parse.parse_qs(body).get('password', [''])[0]
-            if hmac.compare_digest(pwd, ADMIN_PASSWORD):
-                token = secrets.token_urlsafe(24)
-                with DATA_LOCK:
-                    ADMIN_SESSIONS.add(token)
-                payload = b'{"ok":true}'
-                self.send_response(200)
-                self.send_header('Set-Cookie',
-                                 f'sid={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400')
-                self.send_header('Content-Type', 'application/json; charset=utf-8')
-                self.send_header('Content-Length', str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload)
-            else:
-                self._json({'ok': False, 'msg': '密码错误'}, 401)
-            return
-
+        # 管理面板已经整个去掉：不再有登录接口，也就不存在管理员会话
         joined = is_self_client(self.client_address[0]) or self._join_cookie_ok()
         cid = track_client(self, joined=joined)
         self._cid = cid
@@ -1513,21 +1443,34 @@ class Handler(BaseHTTPRequestHandler):
         # 房间的开关只能由本机（房主）操作，局域网里的设备不行
         if path in ('/api/room/create', '/api/room/renew',
                     '/api/room/dissolve', '/api/room/open',
-                    '/api/room/heartbeat', '/api/room/bye'):
+                    '/api/room/heartbeat', '/api/room/bye',
+                    '/api/room/p2p'):
             if not is_self_client(self.client_address[0]):
                 self._json({'ok': False, 'msg': '只有房主能管理房间'}, 403)
                 return
             if path == '/api/room/heartbeat':
                 # 房主页面每 10 秒报一次平安；页面关掉后心跳停了，看门狗就会收房
+                # 回包顺带校准倒计时：页面每秒本地走，这 10 秒一次的对表防跑偏
                 touch_host_page()
-                self._json({'ok': True})
+                self._json({'ok': True, 'idle_left': idle_left()})
             elif path == '/api/room/bye':
                 # 房主页面关闭/跳走时用 sendBeacon 发的告别（无 body，等不回执）
                 mark_host_gone()
                 self._json({'ok': True})
             elif path == '/api/room/create':
-                # 「创建房间」：没有房间才新开，已经有了就接着用同一个码
-                self._json({'ok': True, 'room': create_room()})
+                # 「创建房间」：没有房间才新开，已经有了就接着用同一个码。
+                # ?p2p=0 表示这次只开局域网，不注册外网直连房主。
+                want_p2p = qs_url.get('p2p', ['1'])[0] != '0'
+                self._json({'ok': True, 'room': create_room(p2p=want_p2p),
+                            'p2p': ROOM_P2P})
+            elif path == '/api/room/p2p':
+                # 房间里的「外网加入」开关：只决定这扇门开不开，不换房间码。
+                # ?on=0 关掉外网（纯局域网，没网也能用），?on=1 再打开。
+                if not has_room():
+                    self._json({'ok': False, 'msg': '房间还没创建'}, 409)
+                    return
+                want_on = (qs_url.get('on', ['1'])[0] or '1') != '0'
+                self._json({'ok': True, 'p2p': set_room_p2p(want_on)})
             elif path == '/api/room/renew':
                 self._json({'ok': True, 'room': renew_room()})
             elif path == '/api/room/dissolve':
@@ -1542,44 +1485,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json({'ok': False, 'code': 'NO_ROOM', 'msg': '房间还没创建'}, 409)
             return
 
-        if path == '/admin-logout':
-            sid = self._get_cookie('sid')
-            with DATA_LOCK:
-                ADMIN_SESSIONS.discard(sid)
-            payload = b'{"ok":true}'
-            self.send_response(200)
-            self.send_header('Set-Cookie', 'sid=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0')
-            self.send_header('Content-Type', 'application/json; charset=utf-8')
-            self.send_header('Content-Length', str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
-            return
-
-        # 删除聊天记录里的文件：要求管理员会话，且一律走 POST
-        if path == '/delete':
-            if not self._is_admin():
-                self._json({'ok': False, 'msg': '需要管理员权限'}, 403)
-                return
-            length = int(self.headers.get('Content-Length', 0))
-            body = self.rfile.read(min(length, 4096)).decode('utf-8', 'replace')
-            params = urllib.parse.parse_qs(body)
-
-            name = params.get('name', [''])[0]
-            safe = os.path.basename(name.replace('\\', '/'))
-            fpath = os.path.join(upload_dir(), safe)
-            if not safe or not os.path.isfile(fpath):
-                self._json({'ok': False, 'msg': '文件不存在'}, 404)
-                return
-            try:
-                os.remove(fpath)
-                with DATA_LOCK:
-                    MESSAGES[:] = [m for m in MESSAGES
-                                   if not (m.get('type') == 'file' and m.get('name') == safe)]
-                bump_messages()
-                self._json({'ok': True})
-            except OSError as e:
-                self._json({'ok': False, 'msg': str(e)}, 500)
-            return
+        # 管理面板整个下线：/admin-logout、/delete 这两个只服务于它的接口一并删除
 
         if path == '/upload':
             ctype = self.headers.get('Content-Type', '')

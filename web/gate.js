@@ -113,21 +113,30 @@ function gateClearMsg() {
   el.textContent = '';
   if (foot) foot.classList.remove('hide');
 }
-// 只换底部两行的字，不动结构 —— 仓库链接挂在第二行末尾，整块 innerHTML 重写会把它冲掉
-function setFoot(a, b) {
-  const fa = document.querySelector('.gate-foot .gf-a');
-  const fb = document.querySelector('.gate-foot .gf-b');
-  if (fa && a != null) fa.textContent = a;
-  if (fb && b != null) fb.textContent = b;
-}
+// 底部只剩仓库入口这一条链接，不再有会变的两行说明，也就没有「换字」这回事了。
 // ===== 卡片内视图切换 =====
 // 三块视图用 grid 叠在同一格里，只改 .on（= visibility），不改 display：
 // 隐藏的那块照样撑高度，所以换来换去卡片的长宽都不变。
-const GATE_VIEWS = ['gateChoices', 'gateJoin', 'gateDl'];
+const GATE_VIEWS = ['gateChoices', 'gateCreatePick', 'gateJoin', 'gateDl'];
+let PENDING_PICK = 'lan';   // 上一次选的通道：下载完点「重新创建」时沿用
+let GATE_VIEW_AT = 'gateChoices';   // 当前显示的是哪一块：用来判断这次是前进还是后退
 function gateView(id) {
+  // 序号大的在「后面」：0 选择 → 1 输入房号 / 2 下载程序 算前进，反向算后退。
+  // 方向只影响动画从哪一侧滑进来，写在容器上，CSS 里按 data-nav 取。
+  const box = document.getElementById('gateViews');
+  const from = GATE_VIEWS.indexOf(GATE_VIEW_AT);
+  const to = GATE_VIEWS.indexOf(id);
+  if (box) box.setAttribute('data-nav', (from >= 0 && to >= 0 && to < from) ? 'back' : 'fwd');
   for (let i = 0; i < GATE_VIEWS.length; i++) {
     const el = document.getElementById(GATE_VIEWS[i]);
     if (el) el.classList.toggle('on', GATE_VIEWS[i] === id);
+  }
+  GATE_VIEW_AT = id;
+  // 左上角返回图标：不在第一屏就显示；局域网设备只能加入房间，整屏不给退路
+  const host = document.getElementById('gateView');
+  if (host) {
+    host.setAttribute('data-view', id);
+    host.classList.toggle('no-back', !!JOIN_REQUIRED);
   }
 }
 // ===== 创建房间失败：卡片内切到「下载程序」视图 =====
@@ -170,40 +179,33 @@ async function dlmProbeSize() {
   } catch (e) {}
   if (dlmIdle()) dlmSizeText('');
 }
-// 进入下载视图前先记住卡片头部，返回时原样还回去（下载视图会换标题与页脚）
+// 进入下载视图前先记住卡片头部（标题 + 副标题），返回时原样还回去。
+// 底部那栏现在只有一条固定的仓库链接，不会变，不用记也不用还原。
 let GATE_HDR = null;
 function gateSaveHdr() {
   if (GATE_HDR) return;
   const t = document.querySelector('.gate-title');
   const s = document.querySelector('.gate-sub');
-  const f = document.querySelector('.gate-foot');
-  GATE_HDR = {
-    t: t ? t.textContent : '',
-    s: s ? s.textContent : '',
-    f: f ? f.innerHTML : '',
-    c: f ? f.className : ''
-  };
+  GATE_HDR = { t: t ? t.textContent : '', s: s ? s.textContent : '' };
 }
 function gateRestoreHdr() {
   if (!GATE_HDR) return;
-  const t = document.querySelector('.gate-title');
-  const s = document.querySelector('.gate-sub');
-  const f = document.querySelector('.gate-foot');
-  if (t) t.textContent = GATE_HDR.t;
-  if (s) s.textContent = GATE_HDR.s;
-  if (f) { f.innerHTML = GATE_HDR.f; f.className = GATE_HDR.c; }
+  gateSetHdr(GATE_HDR.t, GATE_HDR.s);
   GATE_HDR = null;
+}
+// 标题 / 副标题统一从这里写：入口页每一屏都该说自己这一屏在做什么，
+// 副标题一直挂着第一屏那句「任意设备之间互发…」，切到输码屏就成了废话。
+function gateSetHdr(t, s) {
+  const el = document.querySelector('.gate-title');
+  const sub = document.querySelector('.gate-sub');
+  if (el && t != null) el.textContent = t;
+  if (sub && s != null) sub.textContent = s;
 }
 // 切到「本机程序不在」这一屏：和 gateShowJoin() 同一个套路
 function gateShowDl() {
   if (JOIN_REQUIRED) { gateMsg('这个页面只能加入房间，创建房间请在本机双击运行「数据传输.exe」。', 'info'); return; }
   gateSaveHdr();
-  const t = document.querySelector('.gate-title');
-  const s = document.querySelector('.gate-sub');
-  if (t) t.textContent = '创建房间需要本机程序';
-  if (s) s.textContent = '在这台电脑上运行「数据传输.exe」';
-  // 底部第一行换成「装好回来点重新创建」：只换字、不删行
-  setFoot('程序装好后回来点「重新创建」', null);
+  gateSetHdr('创建房间需要本机程序', '在这台电脑上运行「数据传输.exe」');
   gateView('gateDl');
   gateClearMsg();
   dlmReset();
@@ -213,8 +215,8 @@ function gateShowDl() {
 // 大按钮本身就是进度条：下载中可点 → 暂停，暂停后可点 → 继续。
 // 已收到的分片留在 DLM.chunks 里，继续时带 `Range: bytes=N-` 从断点接着要，
 // 9 MB 在慢网上从头再下一遍差别很大。服务器不认 Range（回 200 全量）时自动从零重下。
-const DLM = { chunks: [], got: 0, total: 0, busy: false, paused: false, done: false,
-              ctl: null, blob: null, savedAt: 0 };
+const DLM = { chunks: [], got: 0, total: 0, busy: false, paused: false,
+              done: false, saved: false, ctl: null, blob: null, savedAt: 0 };
 
 // 离开下载视图 / 关闭页面时，把还在跑的缓存请求停掉
 function dlmAbort() {
@@ -223,18 +225,33 @@ function dlmAbort() {
 }
 function dlmHide() {
   dlmAbort();
-  gateRestoreHdr();
+  // 标题不在这里还原：返回哪一屏由 gateShowChoices 统一决定（它自己也用
+  // gateSaveHdr 记过原值），下载视图只负责停缓存、保住已下载的分片。
   // 下到一半先留着：回到这一屏点按钮能接着下，不白扔已收到的几 MB
   DLM.paused = DLM.got > 0 && !DLM.done;
-  dlmPaint(DLM.got, DLM.total);
-  dlmApplyState(DLM.done ? 'done' : (DLM.paused ? 'paused' : 'idle'));
+  dlmRestoreView();
 }
-// 按钮四态：idle / busy / paused / done。任何时候都可点，
-// 由 dlmStart 按当前状态决定这一下是「开始」「暂停」还是「继续」。
+// 按「当前手里有什么」把这一屏还原到对应状态，不碰下载数据本身。
+// done 之后还分两种：下好了没存（ready）和已经存过（saved）。
+function dlmRestoreView() {
+  if (DLM.done) {
+    const fill = dlmEl('dlmFill');
+    if (fill) fill.style.width = '100%';
+    dlmApplyState(DLM.saved ? 'saved' : 'ready');
+    return;
+  }
+  dlmPaint(DLM.got, DLM.total);
+  dlmApplyState(DLM.paused ? 'paused' : 'idle');
+  if (!DLM.got) dlmSizeText(DL_SIZE ? fmtMB(DL_SIZE) : '…');
+}
+// 按钮五态：idle / busy / paused / ready / saved。任何时候都可点，
+// 由 dlmStart 按当前状态决定这一下是「开始」「暂停」「继续」还是「保存」。
 function dlmApplyState(state) {
   const btn = dlmEl('dlmBtn'), txt = dlmEl('dlmBtnText');
   if (!btn) return;
-  btn.className = 'gdl-main' + (state === 'idle' ? '' : ' ' + state);
+  // saved 复用 done 的浅绿配色：都是「已经完事」的样子
+  const cls = state === 'saved' ? 'done' : state;
+  btn.className = 'gdl-main' + (state === 'idle' ? '' : ' ' + cls);
   btn.disabled = false;
   btn.setAttribute('data-dl', state);
   if (!txt) return;
@@ -245,9 +262,15 @@ function dlmApplyState(state) {
   } else if (state === 'paused') {
     txt.textContent = '继续 · ' + shown;
     btn.title = '点击继续下载';
-  } else if (state === 'done') {
+  } else if (state === 'ready') {
+    // 下完不自动写盘，等人点这一下 —— 存到哪、要不要存，交给用户决定
+    txt.textContent = '下载完成 · 点击保存';
+    btn.title = '点击保存到下载目录';
+    dlmSizeText(fmtMB(DLM.got));
+  } else if (state === 'saved') {
     txt.textContent = '已保存 ' + fmtMB(DLM.got);
-    btn.title = '已下载完成';
+    btn.title = '点击可再保存一份';
+    dlmSizeText('完成');
   } else {
     txt.textContent = DLM.got > 0 ? '继续下载' : '下载 Windows 程序';
     btn.title = '下载 Windows 程序';
@@ -264,21 +287,20 @@ function dlmPaint(got, total) {
 function dlmReset() {
   DLM.busy = false;
   DLM.paused = DLM.got > 0 && !DLM.done;
-  dlmPaint(DLM.got, DLM.total);
-  dlmApplyState(DLM.done ? 'done' : (DLM.paused ? 'paused' : 'idle'));
-  if (DLM.done) dlmSizeText('完成');
-  else if (!DLM.got) dlmSizeText(DL_SIZE ? fmtMB(DL_SIZE) : '…');
+  dlmRestoreView();
 }
-// 按钮被点：下完了就再存一份（不用再走网络）；正在下就暂停；其余情况开始 / 继续
+// 按钮被点：下完了就存盘（不用再走网络）；正在下就暂停；其余情况开始 / 继续
 function dlmStart() {
   if (DLM.done) {
-    // 已经缓存好了：再点一次是把手里这份 Blob 重新交给浏览器，
-    // 而不是重新下载 —— 重下 9 MB 只为再存一次毫无意义。
+    // 缓存已经完整躺在内存里：这一下只是把它交给浏览器存盘，
+    // 不再走网络 —— 重下 9 MB 只为存一次毫无意义。
     if (!DLM.blob) return;
     const now = Date.now();
     if (now - DLM.savedAt < 1200) return;    // 手抖连点只算一次，别存出一堆副本
     DLM.savedAt = now;
+    DLM.saved = true;
     dlmSave(DLM.blob, EXE_FILE);
+    dlmApplyState('saved');
     return;
   }
   if (DLM.busy) {
@@ -351,12 +373,12 @@ function dlmFinish() {
   DLM.busy = false;
   DLM.paused = false;
   DLM.done = true;
+  DLM.saved = false;                     // 下完不等于存过：写盘要用户自己点
+  DLM.savedAt = 0;
   try {
     const blob = new Blob(DLM.chunks, { type: 'application/octet-stream' });
     DLM.got = blob.size;
-    DLM.blob = blob;                       // 留着：下完再点按钮就是再存一次，不必重下
-    DLM.savedAt = Date.now();
-    dlmSave(blob, EXE_FILE);
+    DLM.blob = blob;                     // 留着：点一下就能存，不必重新下载
   } catch (e) {
     DLM.done = false;
     dlmReset();
@@ -365,15 +387,16 @@ function dlmFinish() {
   DLM.chunks = [];                       // 分片已交给 Blob，数组本身可以松手
   const fill = dlmEl('dlmFill');
   if (fill) fill.style.width = '100%';
-  dlmApplyState('done');
-  dlmSizeText('完成');
+  dlmApplyState('ready');
 }
-// 装好后直接在卡片里重新创建：不用回上一屏、不用重新输任何东西
+// 装好后直接在卡片里重新创建：不用回上一屏、不用重新输任何东西。
+// 用用户上次选的那种通道重试，别默认成别的（选了「局域网」就还是「局域网」）
 function dlmRetry() {
+  const which = PENDING_PICK;
   gateShowChoices();
   // 立刻回一句「在检查」，否则第二次仍然失败时这一屏长得一模一样，像点了没反应
   gateMsg('正在检查本机程序…', 'info');
-  setTimeout(() => { try { gateCreate(); } catch (e) {} }, 180);
+  setTimeout(() => { try { gateCreatePick(which); } catch (e) {} }, 180);
 }
 
 // ===== 程序下载地址 =====
@@ -442,6 +465,8 @@ function agreeThen(fn) {
   agreeHintFlash();
 }
 function gateShowJoin() {
+  gateSaveHdr();
+  gateSetHdr('加入房间', '输入对方给你的房间码就能加入');
   gateView('gateJoin');
   gateClearMsg();
   // 若上一条预热连接失败过，趁用户输码再补一条，别让「加入」时从零握手
@@ -449,9 +474,32 @@ function gateShowJoin() {
   const box = document.getElementById('gateRoom');
   setTimeout(() => box.focus(), 60);
 }
+// 创建房间的第一步：选通道。三种房间差别只有「文件存哪、谁能进」，
+// 所以放在创建动作之前一次问清，而不是建完再让用户去猜。
+function gateShowCreatePick() {
+  if (JOIN_REQUIRED) {
+    gateMsg('这个页面只能加入房间，创建房间请在本机运行「数据传输.exe」。', 'info');
+    return;
+  }
+  gateSaveHdr();
+  gateSetHdr('创建房间', '选择别人用什么方式进入这个房间');
+  gateView('gateCreatePick');
+  gateClearMsg();
+}
+// which: 'p2p' = 纯网页（浏览器存储 + 公网信令，别人有网就能进）
+//        'lan' = 本机程序开房（文件在本机磁盘，同 WiFi 直连，外网也可开）
+function gateCreatePick(which) {
+  if (!agreeChecked()) { agreeHintFlash(); return; }
+  PENDING_PICK = which;          // 下载屏的「重新创建」要沿用这次的选择
+  gateShowChoices();
+  if (which === 'p2p') { cloudGateCreate(); return; }
+  // 局域网：建房时把外网通道一起注册上，房里再用开关决定要不要留一扇给外面
+  gateCreateLan();
+}
 function gateShowChoices() {
   if (JOIN_REQUIRED) return;      // 局域网设备只能加入，没有「创建房间」可选
-  dlmHide();                      // 从「下载程序」视图返回：停掉缓存、还原标题与页脚
+  dlmHide();                      // 从「下载程序」视图返回：停掉缓存（标题由下面统一还原）
+  gateRestoreHdr();               // 三选一 / 输码屏改过标题，回到第一屏要还回去
   const joinBtn = document.getElementById('gateJoinChoiceBtn');
   if (joinBtn) joinBtn.style.display = '';
   gateView('gateChoices');
@@ -465,11 +513,7 @@ function showHostGate() {
   // 本机就是房主，「加入房间」没有意义，藏起来免得点进去连自己
   const joinBtn = document.getElementById('gateJoinChoiceBtn');
   if (joinBtn) joinBtn.style.display = 'none';
-  const title = document.querySelector('.gate-title');
-  if (title) title.textContent = '数据传输';
-  const sub = document.querySelector('.gate-sub');
-  if (sub) sub.textContent = '点「创建房间」开一个房间，别人用房间码加入';
-  setFoot('房间是临时的：关掉房主页面或 30 分钟无通信就会自动销毁', '聊天记录不落盘，接收文件随房间一起删除');
+  gateSetHdr('数据传输', '点「创建房间」开一个房间，别人用房间码加入');
   gateClearMsg();
 }
 // 局域网设备打开页面：只留「输入房间码」这一步
@@ -477,13 +521,7 @@ function showLanGate() {
   showGate();
   GATE_HDR = null;
   gateView('gateJoin');
-  const title = document.querySelector('.gate-title');
-  if (title) title.textContent = '加入房间';
-  const sub = document.querySelector('.gate-sub');
-  if (sub) sub.textContent = '输入房主给你的房间码，就能加入这个房间';
-  setFoot('房间码显示在房主那台设备的房间栏里', '同一个网络下输入房间码即可加入');
-  const back = document.querySelector('.gate-back');
-  if (back) back.style.display = 'none';
+  gateSetHdr('加入房间', '输入房主给你的房间码，就能加入这个房间');
   gateClearMsg();
   const box = document.getElementById('gateRoom');
   // 扫的是局域网二维码：链接里已经带着房间码，填好并自动加入，不用手输
@@ -534,16 +572,17 @@ async function resumeHostFromWeb() {
     return;
   }
   // 房间还在：用现有房间码直接回主界面，不重新 create（否则会换码）。
-  // 刷新同样先在入口页把房主 Peer 等就绪，避免恢复后卡片上又挂「正在连接信令服务器…」。
+  // 房间是「只局域网」时不再注册房主 Peer，保持创建时选的那一种形态。
   ROOM = info.room;
   API = HOST_API;
+  P2P_ON = info.p2p !== false;
   gateMsg('正在恢复房间…', 'info');
-  await prepareHostPeer(ROOM, 9000);
+  if (P2P_ON) await prepareHostPeer(ROOM, 9000);
   hideGate();
   startHostUI(true, info.ip ? ('http://' + info.ip + ':' + info.port) : '');
 }
 // ===== 创建房间进度：只画在「正在创建房间…」按钮里 =====
-// 阶段：检查本机程序 → 创建房间 → 注册外网直连（本机没开外网通道时只两步）。
+// 阶段：检查本机程序 → 创建房间 → 注册直连通道（选了「局域网」时只两步）。
 // 百分比是阶段进度而不是耗时估算：等 PeerJS open 期间慢慢爬到 92%，
 // open 一到立刻补到 100% 再进房；不再用 gateMsg 那条黄色横条写「等待连接就绪」。
 let gateSteps = [];
@@ -585,31 +624,8 @@ function gateProgCreep(to) {
 }
 
 // ===== 纯网页房主（CHANNEL = 'cloud'）=====
-// 开关关闭时点「创建房间」走这里：不探活、不下载，房间直接建在浏览器里。
-// 开关只影响「点创建房间」这一步：切换本身不发请求、不提示（D-14）。
-function onLanSwitchChange() {
-  const cb = document.getElementById('lanSwitch');
-  LAN_SWITCH = cb && cb.checked ? 'on' : 'off';
-  const sub = document.getElementById('lanSwitchSub');
-  if (LAN_SWITCH === 'on') {
-    if (sub) sub.textContent = '同一 WiFi 的设备也能加入';
-    setFoot('创建房间需要本机已运行程序', '加入房间仍然不需要');
-  } else {
-    if (sub) sub.textContent = '纯网页房间，无需下载软件';
-    setFoot('创建房间不需要下载软件', '加入房间任何设备都能用');
-  }
-  try { sessionStorage.setItem('lan_switch', LAN_SWITCH); } catch (e) {}
-}
-function restoreLanSwitch() {
-  try {
-    LAN_SWITCH = sessionStorage.getItem('lan_switch') === 'on' ? 'on' : 'off';
-  } catch (e) { LAN_SWITCH = 'off'; }
-  const cb = document.getElementById('lanSwitch');
-  if (cb) cb.checked = LAN_SWITCH === 'on';
-  onLanSwitchChange();
-}
-// 下载视图没有第二条出口：屏幕上的「返回」已经能回到选择页，
-// 多一条「不装软件直接创建」只是把同一个动作说了两遍（已按反馈删除）。
+// 选「WebRTC P2P」时走这里：不探活、不下载，房间直接建在浏览器里。
+// 通道选择已经挪到创建前的三选一视图（gateCreatePick），这里只负责开房本身。
 async function cloudGateCreate() {
   if (!agreeChecked()) { agreeHintFlash(); return; }
   const btn = document.getElementById('gateCreateBtn');
@@ -620,11 +636,12 @@ async function cloudGateCreate() {
   btn.classList.add('busy');
   if (label) label.textContent = '正在创建房间…';
   gateClearMsg();
-  gateProgReset(['准备房间', '外网通道']);
+  gateProgReset(['准备房间', '直连通道']);
   gateProgress(0, 10);
   try {
     CHANNEL = 'cloud';
     API = '';
+    P2P_ON = true;          // 网页直连房间本身就是外网通道，没有关掉这回事
     const room = await Cloud.createRoom();
     ROOM = room;
     gateProgress(1, 60);
@@ -644,7 +661,7 @@ async function cloudGateCreate() {
     btn.disabled = false;
     btn.classList.remove('busy');
     if (label) label.textContent = '创建房间';
-    if (sub) sub.textContent = '在本机开一个房间';
+    if (sub) sub.textContent = '网页直连 / 局域网';
   }
 }
 // 云房主刷新：房间码与历史都在 IndexedDB 里，刷新不算离线（D-06）
@@ -661,7 +678,7 @@ async function resumeCloudHost() {
     cloudForget();
     try { history.replaceState(null, '', location.pathname); } catch (e) {}
     gateShowChoices();
-    gateMsg('房间已经结束（超过 30 分钟没有通信或已被销毁），点「创建房间」开一个新房间。', 'info');
+    gateMsg('房间已经结束（超过 60 分钟没有通信或已被销毁），点「创建房间」开一个新房间。', 'info');
     return;
   }
   CHANNEL = 'cloud';
@@ -674,13 +691,11 @@ async function resumeCloudHost() {
   Cloud.startIdleWatch();
 }
 
-// 创建房间：确认本机程序在跑，再由它当场开一个房间（房间码在这一刻才生成）。
-// 不再人为拖时间：后端开好 + 外网直连房主 Peer 注册成功就立刻进主界面。
-async function gateCreate() {
+// 创建局域网房间：本机程序必须开着。
+// 外网通道默认跟着一起注册——房间里那张卡上的开关随时能把它关掉，
+// 关掉之后就是纯局域网：不碰信令服务器，没有网也能用。
+async function gateCreateLan() {
   if (!agreeChecked()) { agreeHintFlash(); return; }
-  // 入口页开关决定通道：off = 纯网页房间（零下载），on = 探活本机程序。
-  // 本机页面（SEED_MODE=host）没有开关，永远走原来的局域网路径。
-  if (SEED_MODE !== 'host' && LAN_SWITCH !== 'on') { return cloudGateCreate(); }
   const btn = document.getElementById('gateCreateBtn');
   if (!btn || btn.disabled) return;
   const label = btn.querySelector('.gate-txt b');
@@ -689,20 +704,23 @@ async function gateCreate() {
   btn.classList.add('busy');
   if (label) label.textContent = '正在创建房间…';
   gateClearMsg();
-  // 本机页面开了外网直连、或在线页要当房主，都要等房主 Peer 在信令注册成功
-  const needP2P = P2P_ENABLED || SEED_MODE !== 'host';
+  // 程序构建时就没带外网能力（P2P_ENABLED=false）的话，开关不该出现，也别等它
+  const needP2P = P2P_ENABLED !== false;
   gateProgReset(needP2P
-    ? ['检查程序', '创建房间', '外网通道']
+    ? ['检查程序', '创建房间', '直连通道']
     : ['检查程序', '创建房间']);
   gateProgress(0, 8);
   try {
+    CHANNEL = 'lan';
+    P2P_ON = needP2P;
     // 检查本机程序 + 开房间并行发出：两次都是本机请求，串行纯属白等；
     // 程序没开时两个请求一起失败，直接给出同一条提示
     let info, r;
     try {
       [info, r] = await Promise.all([
         fetchHostInfo(),
-        apiFetch(HOST_API + '/api/room/create', { method: 'POST' }),
+        apiFetch(HOST_API + '/api/room/create?p2p=' + (needP2P ? '1' : '0'),
+                 { method: 'POST' }),
       ]);
     } catch (e) {
       throw new Error('没有检测到本机程序');
@@ -747,7 +765,7 @@ async function gateCreate() {
     btn.disabled = false;
     btn.classList.remove('busy');
     if (label) label.textContent = '创建房间';
-    if (sub) sub.textContent = '在本机开一个房间';
+    if (sub) sub.textContent = '网页直连 / 局域网';
   }
 }
 // 加入房间：先真连一次，房间不存在或连不上就停在入口页。
@@ -822,18 +840,14 @@ document.getElementById('gateRoom').addEventListener('keydown', e => {
 });
 
 if (MODE === 'host') {
-  // 本机页面没有通道可选：开关只属于在线页的入口
-  const sw = document.querySelector('.lan-switch');
-  if (sw) sw.style.display = 'none';
-  // 局域网里其他设备打开：先输房间码，不能打开网页就直接看到聊天内容
+  // 本机页面同样是二选一：局域网设备只能加入的页面（JOIN_REQUIRED）先输房间码
   if (JOIN_REQUIRED) showLanGate();
   // 本机：程序刚开，还没有房间——停在入口页，点了「创建房间」才开房
   else if (!HAS_ROOM) showHostGate();
   // startHostUI 里已经 loadMessages + 起轮询，这里不再重复（否则每 2 秒发两次请求）
-  else initHost();
+  else { P2P_ON = ROOM_P2P !== false; initHost(); }
 } else {
   showGate();
-  restoreLanSwitch();
   // 上一次会话关页留下的云房间：超过空闲上限就清掉，别把旧消息留在浏览器里
   try { Cloud.cleanupOrphans(); } catch (e) {}
   // 房间号不再缓存（16:43 定稿）：旧版本遗留的键一并清掉，省得老用户浏览器里留死数据
@@ -882,8 +896,12 @@ document.addEventListener('visibilitychange', () => {
   // 回到前台补拉一次：后台时浏览器可能把页面冻住，挂着的请求不一定还活着
   try { if (MODE === 'host' && !roomClosed) loadMessages(); } catch (e) {}
 });
+// 窗口宽度跨过 640 时输入框提示要换长短版（手机上那句快捷键提示放不下）
+window.addEventListener('resize', () => {
+  try { syncComposePlaceholder(); } catch (e) {}
+});
 
 // 卡片尺寸不用再算：三块视图在 CSS 里用 grid 叠在同一格，
 // 格子高度天然等于最高那块，切屏时不会变。
 
-// 房间生命周期：临时房间（页面关闭 / 12 小时无通信 / 手动销毁），没有可设的选项了
+// 房间生命周期：临时房间（页面关闭 / 60 分钟无通信 / 手动销毁），没有可设的选项了

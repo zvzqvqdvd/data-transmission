@@ -18,6 +18,8 @@ const HOST_API = (SEED_MODE === 'host') ? '' : HOME_API;
 // 别人从局域网 IP 打开本机服务时不给，否则会和本机抢同一个 Peer ID（pc-<房间码>），
 // 双方都报 unavailable-id，还会把房间码换掉。
 const P2P_ENABLED = __P2P_ENABLED__;
+// 本机程序里那个房间开不开外网直连（创建时选的）；刷新后靠它恢复同样的形态
+const ROOM_P2P = __ROOM_P2P__;
 // 局域网设备还没输入房间码：先停在入口页，输对了才进房间
 const JOIN_REQUIRED = __JOIN_REQUIRED__;
 // 本机程序里是否已经有房间：没有就先停在入口页，点「创建房间」才开房
@@ -25,14 +27,18 @@ const HAS_ROOM = __HAS_ROOM__;
 // 本机的局域网访问地址（http://192.168.x.x:8000），guest 页为空
 const LAN_URL = '__LAN_URL__';
 let MODE = SEED_MODE;
-// 通道：lan = 有本机程序（局域网 + 外网同一房间）；cloud = 纯网页房主。
-// 与 MODE（房主 / 访客）正交，进房后只读，只有入口页的开关能改。
+// 通道：lan = 有本机程序（文件存本机硬盘）；cloud = 网页房间（文件存浏览器）。
+// 与 MODE（房主 / 访客）正交，进房后只读，只有创建房间时的二选一能改。
 let CHANNEL = 'lan';
-// 入口页「开启局域网访问」开关：off = 纯网页房间（零下载），on = 先探活本机程序。
-// 切换本身不发任何请求、不显示任何提示；只在点「创建房间」时决定走哪条路。
-let LAN_SWITCH = 'off';
+// 局域网房间的「外网加入」开关：默认开，房主可以在房间里随时拨。
+// 关掉 = 不注册 P2P 房主、外网链接与二维码失效，房间退化成纯局域网（没网也能用）。
+// 网页直连房间恒为 true——它本身就是外网通道，没有关掉这回事。
+let P2P_ON = true;
 let API = (SEED_MODE === 'host') ? '' : HOME_API;
 let ROOM = '__ROOM__';
+// 人数上限：与后端 ROOM_MAX_MEMBERS 对齐；有本机程序时用 /api/host 回传的真值覆盖，
+// 云房间没有后端，就用这个默认值。
+let ROOM_MAX = 6;
 const PROTOCOL = 4;          // v4：连接元数据带上昵称与设备 ID，房主分配名字时不用等 HELLO
 // 邀请链接用的域名：本机页面由程序每次请求时按 client_url.txt 现填；
 // 在线页（GitHub 上那份）写的是导出那一刻的值，只能靠运行时从本机接口拿最新值覆盖，
@@ -163,7 +169,7 @@ function takeWarmPeer() {
   return p;
 }
 // 房主端临时提示（连接中、正在接收文件、信令错误等）单独一行，
-// 不占用「外网已连接 N 台设备」这条通道状态；10 秒后自动收起，避免旧提示常驻
+// 不占用「已连接 N 台设备」这条通道状态；10 秒后自动收起，避免旧提示常驻
 let hostNoticeTimer = null;
 function showHostHint(m) {
   // 连接/收文件提示也只在房主端出现，别的设备连这块都不该有内容
@@ -389,10 +395,34 @@ function protoMismatch(v, ctx) {
 
 // 顶栏地址由 startHostUI 里按「本机 / 局域网设备」分别填充
 
+// 纯网页房间：文件最终存在房主的浏览器里，房主拿不到配额就整个房间都不收文件。
+// 房主自己看 Cloud.quotaOk，访客看房主经 PEERS 广播来的 nf 标记——两边都拦，
+// 免得访客把几十 MB 传完才在房主那边收到一句「存不下」。
+const CLOUD_FILE_HINT = '传输文件请使用任意最新版浏览器，并且不要开启无痕（隐私）访问。';
+function cloudFileBlockReason() {
+  if (CHANNEL !== 'cloud') return '';
+  if (MODE === 'host' && !(Cloud && Cloud.quotaOk)) {
+    return '浏览器没给出可用存储空间（无痕模式或版本过旧），本房间已禁止上传。' + CLOUD_FILE_HINT;
+  }
+  if (MODE === 'guest' && hostNoFile) {
+    return '房主的浏览器无法确认可用存储空间，本房间已禁止上传。' + CLOUD_FILE_HINT;
+  }
+  return '';
+}
+// 点「发送文件」：先判一次，不能传就当场把原因说清楚，别把选择框弹出来让人白挑一通
+function pickFiles() {
+  const why = cloudFileBlockReason();
+  if (why) { toast(why); return; }
+  const fi = document.getElementById('fileInput');
+  if (fi) fi.click();
+}
 // 发送队列：每个文件一条记录，带状态与进度（不再是一堆裸 File）
 //   status: wait / sending / done / fail
 let pendingSeq = 0;
 function addFiles(list) {
+  // 选择框、拖拽、Ctrl+V 三条路都汇到这里，拦一处就全拦住了
+  const why = cloudFileBlockReason();
+  if (why) { notify(why); return 0; }
   let n = 0;
   for (const f of Array.from(list || [])) {
     if (!f || typeof f.size !== 'number') continue;
@@ -549,12 +579,17 @@ function retryOne(uid) {
 function fmtSize(n) {
   if (n<1024) return n+' B';
   if (n<1048576) return (n/1024).toFixed(1)+' KB';
-  return (n/1048576).toFixed(1)+' MB';
+  if (n<1073741824) return (n/1048576).toFixed(1)+' MB';
+  return (n/1073741824).toFixed(1)+' GB';
 }
 function esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 function toast(m) {
-  const t=document.getElementById('toast'); t.textContent=m; t.classList.add('show');
-  setTimeout(()=>t.classList.remove('show'),1800);
+  const s = String(m == null ? '' : m);
+  const t=document.getElementById('toast'); t.textContent=s; t.classList.add('show');
+  // 长句（比如「为什么不能传文件」）1.8 秒读不完，按字数给时间，上限 6.5 秒
+  clearTimeout(toast._t);
+  toast._t = setTimeout(()=>t.classList.remove('show'),
+                        Math.max(1800, Math.min(6500, s.length * 110)));
 }
 
 // 窄屏：通道卡片默认收起，点标题行展开
