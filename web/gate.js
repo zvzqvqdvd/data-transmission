@@ -136,8 +136,6 @@ function gateView(id) {
 // 进度实时写在按钮上，缓存满 100% 再落盘（浏览器直接存进「下载」文件夹）。
 // 三行提示都压在 2 行内（每行 ≤20 字）：行数一变，卡片高度就会变
 // 缓存进度、完成、降级都写在按钮本身上，按钮下面不再挂说明行
-let DL_ABORT = null;
-let DL_STATE = '';              // '' 待下载 | 'busy' 缓存中 | 'done' 已落盘
 let DL_SIZE = 0;                // HEAD 探到的真实字节数；0 = 还不知道（绝不写死大小）
 
 function dlmEl(id) { return document.getElementById(id); }
@@ -155,17 +153,22 @@ function dlmSizeText(t) {
 }
 // 程序体积跟着文件走：打开这一屏先 HEAD 一次拿 Content-Length，换成真值。
 // 拿不到（跨域被拦 / 断网）就把徽标藏起来，宁可空着也不显示一个会过期的数字。
+//
+// 这是异步的，可能比下载本身还慢（跨域 HEAD 要绕一圈）。它回来时用户可能已经
+// 下完、按钮正写着「完成」——那时候绝不能拿旧大小把结果盖掉，否则看起来像
+// 又变回了未下载。所以只在真正闲着的状态下才写徽标。
+function dlmIdle() { return !DLM.busy && !DLM.done && !DLM.paused; }
 async function dlmProbeSize() {
   const em = dlmEl('dlmSize');
   if (!em) return;
-  if (DL_SIZE) { dlmSizeText(fmtMB(DL_SIZE)); return; }
-  dlmSizeText('…');
+  if (DL_SIZE) { if (dlmIdle()) dlmSizeText(fmtMB(DL_SIZE)); return; }
+  if (dlmIdle()) dlmSizeText('…');
   try {
     const r = await apiFetch(downloadUrl(), { method: 'HEAD', cache: 'no-store' });
     const n = parseInt(r.headers.get('content-length') || '0', 10) || 0;
-    if (n > 0) { DL_SIZE = n; dlmSizeText(fmtMB(n)); return; }
+    if (n > 0) { DL_SIZE = n; if (dlmIdle()) dlmSizeText(fmtMB(n)); return; }
   } catch (e) {}
-  dlmSizeText('');
+  if (dlmIdle()) dlmSizeText('');
 }
 // 进入下载视图前先记住卡片头部，返回时原样还回去（下载视图会换标题与页脚）
 let GATE_HDR = null;
@@ -206,78 +209,133 @@ function gateShowDl() {
   dlmReset();
   dlmProbeSize();
 }
+// ===== 这一屏的下载状态 =====
+// 大按钮本身就是进度条：下载中可点 → 暂停，暂停后可点 → 继续。
+// 已收到的分片留在 DLM.chunks 里，继续时带 `Range: bytes=N-` 从断点接着要，
+// 9 MB 在慢网上从头再下一遍差别很大。服务器不认 Range（回 200 全量）时自动从零重下。
+const DLM = { chunks: [], got: 0, total: 0, busy: false, paused: false, done: false,
+              ctl: null, blob: null, savedAt: 0 };
+
 // 离开下载视图 / 关闭页面时，把还在跑的缓存请求停掉
 function dlmAbort() {
-  if (DL_ABORT) { try { DL_ABORT.abort(); } catch (e) {} DL_ABORT = null; }
+  if (DLM.ctl) { try { DLM.ctl.abort(); } catch (e) {} DLM.ctl = null; }
+  DLM.busy = false;
 }
 function dlmHide() {
   dlmAbort();
   gateRestoreHdr();
+  // 下到一半先留着：回到这一屏点按钮能接着下，不白扔已收到的几 MB
+  DLM.paused = DLM.got > 0 && !DLM.done;
+  dlmPaint(DLM.got, DLM.total);
+  dlmApplyState(DLM.done ? 'done' : (DLM.paused ? 'paused' : 'idle'));
+}
+// 按钮四态：idle / busy / paused / done。任何时候都可点，
+// 由 dlmStart 按当前状态决定这一下是「开始」「暂停」还是「继续」。
+function dlmApplyState(state) {
+  const btn = dlmEl('dlmBtn'), txt = dlmEl('dlmBtnText');
+  if (!btn) return;
+  btn.className = 'gdl-main' + (state === 'idle' ? '' : ' ' + state);
+  btn.disabled = false;
+  btn.setAttribute('data-dl', state);
+  if (!txt) return;
+  const shown = DLM.total ? (fmtMB(DLM.got) + ' / ' + fmtMB(DLM.total)) : fmtMB(DLM.got);
+  if (state === 'busy') {
+    txt.textContent = '暂停 · ' + shown;
+    btn.title = '点击暂停';
+  } else if (state === 'paused') {
+    txt.textContent = '继续 · ' + shown;
+    btn.title = '点击继续下载';
+  } else if (state === 'done') {
+    txt.textContent = '已保存 ' + fmtMB(DLM.got);
+    btn.title = '已下载完成';
+  } else {
+    txt.textContent = DLM.got > 0 ? '继续下载' : '下载 Windows 程序';
+    btn.title = '下载 Windows 程序';
+  }
+}
+// 进度：只画填充条和百分比，文字归 dlmApplyState 管
+function dlmPaint(got, total) {
+  const fill = dlmEl('dlmFill');
+  const pct = total ? Math.min(100, Math.round(got / total * 100)) : 0;
+  if (fill) fill.style.width = (total ? pct : 0) + '%';
+  dlmSizeText(total ? (pct + '%') : '…');
 }
 // 回到「还没开始下载」的样子（进度、文案、按钮配色一起复位）
 function dlmReset() {
-  DL_STATE = '';
-  const btn = dlmEl('dlmBtn'), fill = dlmEl('dlmFill');
-  const txt = dlmEl('dlmBtnText');
-  if (btn) { btn.className = 'gdl-main'; btn.disabled = false; }
-  if (fill) fill.style.width = '0%';
-  if (txt) txt.textContent = '下载 Windows 程序';
-  dlmSizeText(DL_SIZE ? fmtMB(DL_SIZE) : '…');
+  DLM.busy = false;
+  DLM.paused = DLM.got > 0 && !DLM.done;
+  dlmPaint(DLM.got, DLM.total);
+  dlmApplyState(DLM.done ? 'done' : (DLM.paused ? 'paused' : 'idle'));
+  if (DLM.done) dlmSizeText('完成');
+  else if (!DLM.got) dlmSizeText(DL_SIZE ? fmtMB(DL_SIZE) : '…');
 }
-function dlmPaint(got, total, speed) {
-  const fill = dlmEl('dlmFill'), txt = dlmEl('dlmBtnText');
-  const pct = total ? Math.min(100, Math.round(got / total * 100)) : 0;
-  if (fill) fill.style.width = (total ? pct : 0) + '%';
-  if (txt) {
-    txt.textContent = total
-      ? (fmtMB(got) + ' / ' + fmtMB(total))
-      : ('正在缓存 ' + fmtMB(got));
+// 按钮被点：下完了就再存一份（不用再走网络）；正在下就暂停；其余情况开始 / 继续
+function dlmStart() {
+  if (DLM.done) {
+    // 已经缓存好了：再点一次是把手里这份 Blob 重新交给浏览器，
+    // 而不是重新下载 —— 重下 9 MB 只为再存一次毫无意义。
+    if (!DLM.blob) return;
+    const now = Date.now();
+    if (now - DLM.savedAt < 1200) return;    // 手抖连点只算一次，别存出一堆副本
+    DLM.savedAt = now;
+    dlmSave(DLM.blob, EXE_FILE);
+    return;
   }
-  dlmSizeText(total ? (pct + '%') : (speed ? fmtMB(speed) + '/s' : '…'));
+  if (DLM.busy) {
+    DLM.busy = false;
+    DLM.paused = true;
+    if (DLM.ctl) { try { DLM.ctl.abort(); } catch (e) {} DLM.ctl = null; }
+    dlmApplyState('paused');
+    return;
+  }
+  DLM.busy = true;
+  DLM.paused = false;
+  dlmApplyState('busy');
+  dlmPump();
 }
-async function dlmStart() {
-  if (DL_STATE === 'busy') return;
+async function dlmPump() {
   const url = downloadUrl();
-  const btn = dlmEl('dlmBtn');
-  DL_STATE = 'busy';
-  if (btn) { btn.className = 'gdl-main busy'; btn.disabled = true; }
-  dlmPaint(0, 0, 0);
-
-  DL_ABORT = new AbortController();
-  let fellBack = false;
+  const ctl = new AbortController();
+  DLM.ctl = ctl;
+  const headers = {};
+  // 断点续传：已经收过的不再要，后端与 Pages 都认 Range，会回 206
+  if (DLM.got > 0) headers['Range'] = 'bytes=' + DLM.got + '-';
   try {
-    const resp = await apiFetch(url, { signal: DL_ABORT.signal, cache: 'no-store' });
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const resp = await apiFetch(url, { signal: ctl.signal, headers: headers, cache: 'no-store' });
+    if (resp.status === 416) { dlmFinish(); return; }        // 断点已在末尾：其实收全了
+    if (!resp.ok && resp.status !== 206) throw new Error('HTTP ' + resp.status);
     if (!resp.body || !resp.body.getReader) throw new Error('no-stream');
-    const total = parseInt(resp.headers.get('content-length') || '0', 10) || 0;
-    if (total > 0) DL_SIZE = total;
+    // 服务器忽略了 Range（回 200 全量）：已收的分片作废，从头算
+    if (DLM.got > 0 && resp.status !== 206) { DLM.chunks = []; DLM.got = 0; }
+    const len = parseInt(resp.headers.get('content-length') || '0', 10) || 0;
+    if (len > 0) { DLM.total = DLM.got + len; DL_SIZE = DLM.total; }
     const reader = resp.body.getReader();
-    const chunks = [];
-    let got = 0, lastT = Date.now(), lastGot = 0, speed = 0;
+    let lastT = Date.now(), lastGot = DLM.got, speed = 0, lastPct = -1;
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      chunks.push(value);
-      got += value.length;
+      DLM.chunks.push(value);
+      DLM.got += value.length;
       const now = Date.now();
       if (now - lastT >= 300) {
-        speed = (got - lastGot) / ((now - lastT) / 1000);
-        lastT = now; lastGot = got;
+        speed = (DLM.got - lastGot) / ((now - lastT) / 1000);
+        lastT = now; lastGot = DLM.got;
       }
-      dlmPaint(got, total, speed);
+      // 1% 一档刷新：每 64 KB 就改一次 DOM 是白费力气
+      const pct = DLM.total ? Math.round(DLM.got / DLM.total * 100) : 0;
+      if (pct !== lastPct) { lastPct = pct; dlmPaint(DLM.got, DLM.total); dlmApplyState('busy'); }
     }
-    const blob = new Blob(chunks, { type: 'application/octet-stream' });
-    dlmSave(blob, EXE_FILE);
-    dlmDone(blob.size);
+    if (DLM.paused) return;
+    dlmFinish();
   } catch (e) {
-    if (e && e.name === 'AbortError') { dlmReset(); return; }
+    if (e && e.name === 'AbortError') return;              // 按了暂停 / 离开这一屏
+    if (DLM.paused) return;
     // CORS / 老浏览器 / 中途断网：退回普通直链，没有进度但一定能下
-    fellBack = true;
+    DLM.busy = false;
     dlmReset();
     try { window.location.href = url; } catch (e2) {}
   } finally {
-    DL_ABORT = null;
-    if (btn && !fellBack) btn.disabled = false;
+    if (DLM.ctl === ctl) DLM.ctl = null;
   }
 }
 // Blob 落盘：临时 <a download> 点一下就交给浏览器的下载管理器
@@ -289,13 +347,25 @@ function dlmSave(blob, name) {
   try { a.click(); } catch (e) {}
   setTimeout(() => { try { a.remove(); } catch (e) {} URL.revokeObjectURL(u); }, 4000);
 }
-function dlmDone(size) {
-  DL_STATE = 'done';
-  const btn = dlmEl('dlmBtn'), fill = dlmEl('dlmFill');
-  const txt = dlmEl('dlmBtnText');
-  if (btn) { btn.className = 'gdl-main done'; btn.disabled = false; }
+function dlmFinish() {
+  DLM.busy = false;
+  DLM.paused = false;
+  DLM.done = true;
+  try {
+    const blob = new Blob(DLM.chunks, { type: 'application/octet-stream' });
+    DLM.got = blob.size;
+    DLM.blob = blob;                       // 留着：下完再点按钮就是再存一次，不必重下
+    DLM.savedAt = Date.now();
+    dlmSave(blob, EXE_FILE);
+  } catch (e) {
+    DLM.done = false;
+    dlmReset();
+    return;
+  }
+  DLM.chunks = [];                       // 分片已交给 Blob，数组本身可以松手
+  const fill = dlmEl('dlmFill');
   if (fill) fill.style.width = '100%';
-  if (txt) txt.textContent = '已保存 ' + fmtMB(size);
+  dlmApplyState('done');
   dlmSizeText('完成');
 }
 // 装好后直接在卡片里重新创建：不用回上一屏、不用重新输任何东西

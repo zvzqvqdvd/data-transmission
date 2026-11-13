@@ -909,6 +909,8 @@ body.fs-locked { overflow: hidden; }
 .gdl-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: rgba(255, 255, 255, .24); }
 .gdl-fill::after { content: ''; position: absolute; left: 0; bottom: 0; width: 100%; height: 3px; background: #fff; }
 .gdl-label { position: relative; display: flex; align-items: center; gap: 9px; }
+/* 暂停 / 继续图标与下载箭头同一位置轮换，默认都不出场（由按钮状态切显示） */
+.gdl-ico-pause, .gdl-ico-play { display: none; flex-shrink: 0; }
 /* 体积徽标宽度写死：网络慢时先显示「…」，探到真值再换成「8.8 MB」，
    宽度不变 → 按钮里的文字永远不会被推着左右跳。（值本身由 HEAD 实时取，绝不写死） */
 .gdl-label em {
@@ -918,17 +920,26 @@ body.fs-locked { overflow: hidden; }
   font-variant-numeric: tabular-nums;
   transition: background .16s ease, color .16s ease, opacity .16s ease;
 }
-/* 缓存中：变浅绿，进度就是按钮本身（底色填充 + 底边 3px 实线） */
-.gdl-main.busy { background: var(--brand-soft); border-color: var(--brand-line); color: var(--brand-700); cursor: default; box-shadow: none; }
+/* 缓存中：变浅绿，进度就是按钮本身（底色填充 + 底边 3px 实线）
+   按钮不再是死的：点一下暂停，再点继续（图标占据原来箭头的位置，不撑宽度） */
+.gdl-main.busy { background: var(--brand-soft); border-color: var(--brand-line); color: var(--brand-700); cursor: pointer; box-shadow: none; }
 .gdl-main.busy:hover, .gdl-main.busy:active { background: var(--brand-soft); }
 .gdl-main.busy .gdl-fill { background: rgba(7, 193, 96, .13); }
 .gdl-main.busy .gdl-fill::after { background: var(--brand); }
-.gdl-main.busy .gdl-ar { visibility: hidden; }
+.gdl-main.busy .gdl-ar { display: none; }
+.gdl-main.busy .gdl-ico-pause { display: block; }
 .gdl-main.busy .gdl-label em { background: var(--brand); color: #fff; }
+/* 暂停：换回绿色主按钮，明确「点这里继续」，否则浅绿底看起来像在下载 */
+.gdl-main.paused { background: var(--brand); border-color: transparent; color: #fff; box-shadow: 0 10px 22px -12px rgba(7, 193, 96, .85); }
+.gdl-main.paused:hover { background: var(--brand-600); }
+.gdl-main.paused:active { background: var(--brand-700); }
+.gdl-main.paused .gdl-ar { display: none; }
+.gdl-main.paused .gdl-ico-play { display: block; }
+.gdl-main.paused .gdl-label em { background: rgba(255, 255, 255, .26); color: #fff; }
 /* 缓存完成：已落盘 */
 .gdl-main.done { background: var(--brand-soft); border-color: var(--brand-line); color: var(--brand-700); box-shadow: none; }
 .gdl-main.done:hover, .gdl-main.done:active { background: var(--brand-soft); }
-.gdl-main.done .gdl-ar { visibility: hidden; }
+.gdl-main.done .gdl-ar { display: none; }
 .gdl-main.done .gdl-label em { background: var(--brand); color: #fff; }
 
 /* 按钮下面不再挂说明行：状态全写在按钮本身，切到哪一态高度都一样 */
