@@ -711,6 +711,7 @@ body.fs-locked { overflow: hidden; }
 .btn-plain:hover { background: var(--line-2); }
 .btn-danger { background: var(--danger); color: #fff; }
 .btn-danger:hover { background: #C4292E; filter: none; }
+.btn-danger:disabled { background: var(--danger-line); color: #fff; cursor: not-allowed; }
 .modal-tip { font-size: 12.5px; line-height: 1.8; color: var(--t2); margin: -4px 0 4px; }
 
 .toast {
@@ -1290,9 +1291,10 @@ body.booting #hostView { visibility: hidden; animation: none; }
 .room-idle.warn::before { background: var(--warn); }
 .room-idle.warn b { color: var(--warn); }
 
-/* ===== 纯网页房间存储卡 =====
-   已用 / 总量、单文件上限、进度条。只在云房主侧栏出现，
-   总量由建房时的浏览器配额决定（可用空间 × 80%），进度条 = 已用 / 总量。 */
+/* ===== 存储 / 上传限制卡 =====
+   云房主：已用 / 总量、单文件上限、进度条（总量 = 可用空间 × 80%）；
+   加入者：同一份数字的只读版，由房主经 QUOTA 帧同步；
+   局域网房间：没有配额，只显示后端给的单文件上限。 */
 #roomStat {
   flex-shrink: 0;
   margin: 10px 20px 0;
@@ -1348,6 +1350,47 @@ body.booting #hostView { visibility: hidden; animation: none; }
   background: #07C160; transition: width .3s ease;
 }
 .st-foot { margin-top: 8px; font-size: 10.5px; color: var(--t3); line-height: 1.5; }
+/* 清理入口：只在房主页面上出现（加入者看不到，也没有权限） */
+.st-clean {
+  margin-top: 8px; padding: 0; border: 0; background: none;
+  font-size: 11px; color: var(--brand-700); cursor: pointer;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.st-clean:hover { color: var(--brand-600); }
+.st-clean:active { transform: translateY(.5px); }
+
+/* ===== 清理文件弹窗 =====
+   房主勾选聊天里的文件卡片，删掉后立即释放房间空间。
+   列表用固定最大高度 + 内部滚动：文件多时弹窗不会顶出屏幕。 */
+.clean-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-top: 12px; font-size: 12px; color: var(--t2);
+}
+.clean-all { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.clean-all input { width: 14px; height: 14px; accent-color: var(--brand); }
+.clean-sum { font-size: 11.5px; color: var(--t3); }
+.clean-list {
+  margin-top: 8px; max-height: 46vh; overflow-y: auto;
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--surface);
+}
+.clean-row {
+  display: flex; align-items: center; gap: 9px;
+  padding: 9px 11px; border-top: 1px solid var(--line);
+  font-size: 12px; color: var(--t1); cursor: pointer;
+}
+.clean-row:first-child { border-top: 0; }
+.clean-row:hover { background: var(--surface-2); }
+.clean-row input { width: 14px; height: 14px; accent-color: var(--brand); flex-shrink: 0; }
+.clean-row .cn {
+  flex: 1; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.clean-row .cs { flex-shrink: 0; font-size: 11px; color: var(--t3); }
+.clean-empty {
+  padding: 22px 12px; text-align: center;
+  font-size: 12px; color: var(--t3);
+}
 
 /* ===== v2：入口页视图切换的过渡 =====
    三块视图本来就同格叠放、靠 visibility 切换，卡片长宽不变（D-04）。
@@ -1624,19 +1667,22 @@ body[data-channel="lan"] [data-channel="cloud"] { display: none !important; }
   </div>
 </div>
 
-<!-- 纯网页房间的存储卡：本房间能用多少、单文件多大、已用多少。
-     容量由建房时的浏览器配额算出（可用空间 × 80%，单文件取其中 10%），
-     只有云房主看得到，由 renderRoomStat() 按 CHANNEL+MODE 控制显隐 -->
-<div id="roomStat" data-channel="cloud" style="display:none;">
-  <div class="st-h">存储空间</div>
+<!-- 存储 / 上传限制卡：本房间能用多少、单文件多大、已用多少。
+     云房主按自己的浏览器配额算（可用空间 × 80%，单文件取其中 10%）；
+     加入者看到的是房主经 QUOTA 帧同步过来的同一份数字（只读），
+     局域网房间没有配额概念，只显示后端给的单文件上限。
+     显隐由 renderRoomStat() 按「房间类型 + 身份」控制 -->
+<div id="roomStat" style="display:none;">
+  <div class="st-h" id="stTitle">存储空间</div>
   <div class="st-grid">
-    <span>已用 <b id="stFiles">—</b></span>
+    <span id="stUsedRow">已用 <b id="stFiles">—</b></span>
     <span>单文件上限 <b id="stFileMax">—</b></span>
   </div>
-  <div class="mini-bar"><i id="stBar"></i></div>
+  <div class="mini-bar" id="stBarWrap"><i id="stBar"></i></div>
   <!-- 探测不到配额时的红字：不是「0 B」，是「这台浏览器给不出数字」 -->
   <div class="st-warn" id="stWarn" style="display:none;">浏览器没给出可用存储空间，本房间已禁止上传。传输文件请使用任意最新版浏览器，并且不要开启无痕（隐私）访问。</div>
-  <div class="st-foot">刷新页面可恢复历史与文件</div>
+  <div class="st-foot" id="stFoot">刷新页面可恢复历史与文件</div>
+  <button class="st-clean" id="stClean" type="button" onclick="openClean()">清理文件，释放空间…</button>
 </div>
 
 <div id="lanBanner" style="display:none;">
@@ -1823,7 +1869,7 @@ body[data-channel="lan"] [data-channel="cloud"] { display: none !important; }
       · 房主点「销毁房间」（立即生效）<br>
       销毁时房间码作废；<b>聊天记录一律不落盘</b>，局域网房间的接收文件随房间一起删除，不做保留。</p>
     <div class="modal-btns"><button class="btn-plain" onclick="hideTtl()">知道了</button></div>
-    <p style="text-align:center;font-size:11px;color:#b0b3b8;margin:10px 0 0;">页面版本 3592c3d45b（反馈问题时请带上这一行）</p>
+    <p style="text-align:center;font-size:11px;color:#b0b3b8;margin:10px 0 0;">页面版本 00aab35d29（反馈问题时请带上这一行）</p>
   </div>
 </div>
 
@@ -1845,6 +1891,21 @@ body[data-channel="lan"] [data-channel="cloud"] { display: none !important; }
     <div class="modal-btns">
       <button class="btn-plain" onclick="hideP2POff()">取消</button>
       <button class="btn-danger" onclick="confirmP2POff()">关闭外网</button>
+    </div>
+  </div>
+</div>
+<div class="modal-mask" id="cleanModal">
+  <div class="modal wide">
+    <h3>清理文件释放空间</h3>
+    <p class="modal-tip" style="text-align:left;" id="cleanTip">删除后文件从房主这边移除，其他设备也下载不到，<b>不可恢复</b>。只想腾地方时清理大文件即可，房间不用重建。</p>
+    <div class="clean-head">
+      <label class="clean-all"><input type="checkbox" id="cleanAllBox" onchange="cleanToggleAll(this.checked)"> 全选</label>
+      <span class="clean-sum" id="cleanSum">未选择</span>
+    </div>
+    <div class="clean-list" id="cleanList"></div>
+    <div class="modal-btns">
+      <button class="btn-plain" onclick="hideClean()">取消</button>
+      <button class="btn-danger" id="cleanBtn" onclick="cleanConfirm()" disabled>删除所选</button>
     </div>
   </div>
 </div>
@@ -1929,6 +1990,12 @@ let ROOM = '';
 // 人数上限：与后端 ROOM_MAX_MEMBERS 对齐；有本机程序时用 /api/host 回传的真值覆盖，
 // 云房间没有后端，就用这个默认值。
 let ROOM_MAX = 6;
+// 房间的存储 / 上传限制。房主这边是本地真值，加入者这边靠房主推来的 QUOTA 帧。
+//   kind: cloud = 文件存房主浏览器（有总量、已用、单文件上限）
+//         lan   = 文件存房主磁盘（只有单文件上限）
+//   ok:   false 表示房主拿不到浏览器配额，全房禁传
+let hostLimits = null;       // 访客侧：房主广播的同一份数字（null = 还没收到）
+let lanFileMax = 0;          // 局域网房间单文件上限，由后端 max_file 下发
 const PROTOCOL = 4;          // v4：连接元数据带上昵称与设备 ID，房主分配名字时不用等 HELLO
 // 邀请链接用的域名：本机页面由程序每次请求时按 client_url.txt 现填；
 // 在线页（GitHub 上那份）写的是导出那一刻的值，只能靠运行时从本机接口拿最新值覆盖，
@@ -1937,7 +2004,7 @@ let CLIENT_URL = 'https://zvzqvqdvd.github.io/data-transmission/';
 // 页面源文件指纹（由程序按 web/ 源文件现算，在线页 = 导出那一刻的值）。
 // 邀请链接 / 二维码 / 复制的访问地址都带 ?v=<指纹>：手机浏览器对页面缓存
 // 非常顽固，URL 不变就拿旧缓存页连新程序，轻则变慢、重则连不上。
-const PAGE_BUILD = '3592c3d45b';
+const PAGE_BUILD = '00aab35d29';
 let lastRev = null;
 let pollGen = 0;             // 轮询代际：换代 / 停止时让在途请求的结果作废
 let pollAbort = null;        // 在途长轮询的 AbortController
@@ -2309,19 +2376,35 @@ function protoMismatch(v, ctx) {
 
 // 顶栏地址由 startHostUI 里按「本机 / 局域网设备」分别填充
 
-// 纯网页房间：文件最终存在房主的浏览器里，房主拿不到配额就整个房间都不收文件。
-// 房主自己看 Cloud.quotaOk，访客看房主经 PEERS 广播来的 nf 标记——两边都拦，
-// 免得访客把几十 MB 传完才在房主那边收到一句「存不下」。
+// 房间的存储 / 上传限制：房主这边取本地真值，加入者取房主推来的 QUOTA 帧。
+// 文件最终都存在房主侧（云房间是浏览器，局域网房间是磁盘），所以「能传多大、
+// 还剩多少」必须由房主说了算——加入者不该在传完几十 MB 之后才收到一句「存不下」。
+// 访客的 CHANNEL 恒为 'lan'（它没有后端可问），因此判断不了房间类型，
+// 只能看 hostLimits.kind：这就是 QUOTA 帧必须带 kind 的原因。
+function roomLimits() {
+  if (MODE === 'host') {
+    // 局域网设备：没有配额、也没有房主权限，只知道后端给的单文件上限
+    if (isLanClient) return { kind: 'lan', ok: true, total: 0, used: 0, max: lanFileMax || 0 };
+    if (CHANNEL === 'cloud') {
+      const total = (Cloud && Cloud.totalMax) || 0;
+      return { kind: 'cloud', ok: !!(Cloud && Cloud.quotaOk !== false && total > 0),
+               total: total, used: Cloud ? Cloud.totalBytes() : 0,
+               max: (Cloud && Cloud.fileMax) || 0 };
+    }
+    return { kind: 'lan', ok: true, total: 0, used: 0, max: lanFileMax || 0 };
+  }
+  return hostLimits;          // 访客：还没收到 QUOTA 就是 null（不拦，保持旧行为）
+}
+// 云房间：文件最终存在房主的浏览器里，房主拿不到配额就整个房间都不收文件。
+// 房主看 Cloud.quotaOk，访客看房主同步来的 ok 标记——两边都拦。
 const CLOUD_FILE_HINT = '传输文件请使用任意最新版浏览器，并且不要开启无痕（隐私）访问。';
 function cloudFileBlockReason() {
-  if (CHANNEL !== 'cloud') return '';
-  if (MODE === 'host' && !(Cloud && Cloud.quotaOk)) {
+  const lim = roomLimits();
+  if (!lim || lim.ok) return '';
+  if (MODE === 'host') {
     return '浏览器没给出可用存储空间（无痕模式或版本过旧），本房间已禁止上传。' + CLOUD_FILE_HINT;
   }
-  if (MODE === 'guest' && hostNoFile) {
-    return '房主的浏览器无法确认可用存储空间，本房间已禁止上传。' + CLOUD_FILE_HINT;
-  }
-  return '';
+  return '房主的浏览器无法确认可用存储空间，本房间已禁止上传。' + CLOUD_FILE_HINT;
 }
 // 点「发送文件」：先判一次，不能传就当场把原因说清楚，别把选择框弹出来让人白挑一通
 function pickFiles() {
@@ -2337,12 +2420,32 @@ function addFiles(list) {
   // 选择框、拖拽、Ctrl+V 三条路都汇到这里，拦一处就全拦住了
   const why = cloudFileBlockReason();
   if (why) { notify(why); return 0; }
-  let n = 0;
+  // 单文件上限 + 房间剩余空间：两者都由房主侧给出（局域网房间只有前者）
+  const lim = roomLimits();
+  const max = (lim && lim.max > 0) ? lim.max : 0;
+  let budget = null, avail0 = 0;
+  if (lim && lim.kind === 'cloud' && lim.total > 0) {
+    const queued = pendingFiles.reduce((s, x) => s + ((x.file && x.file.size) || 0), 0);
+    avail0 = Math.max(0, lim.total - lim.used - queued);
+    budget = avail0;
+  }
+  let n = 0, noRoom = 0;
+  const over = [];
   for (const f of Array.from(list || [])) {
     if (!f || typeof f.size !== 'number') continue;
+    if (max && f.size > max) { over.push(f); continue; }
+    if (budget !== null && f.size > budget) { noRoom++; continue; }
+    if (budget !== null) budget -= f.size;
     pendingFiles.push({ uid: 'q' + (++pendingSeq), file: f, status: 'wait',
                         pct: 0, speed: 0, err: '' });
     n++;
+  }
+  if (over.length) {
+    notify(over[0].name + ' 超过单文件上限 ' + fmtSize(max) +
+           (over.length > 1 ? '（另有 ' + (over.length - 1) + ' 个同样超限）' : ''));
+  }
+  if (noRoom) {
+    notify('房间剩余空间不足：还可上传 ' + fmtSize(avail0) + '。');
   }
   if (n) {
     // 不弹「已加入队列」：底部列表立刻出现在眼前，再顶一个黑条是打扰
@@ -3010,6 +3113,28 @@ const Cloud = {
     Cloud.persist();
     Cloud.emit();
     return cloudJSON({ ok: true, count: count, ids: ids, names: names });
+  },
+
+  // 房主清理文件：删掉 Blob 与对应消息，立刻把配额还回来。
+  // 不删消息只删 Blob 会留下「点了没反应」的死卡片；不删 Blob 只删消息
+  // 则成了看不见却仍占空间的孤儿——两者必须一起清。
+  async deleteFiles(names) {
+    const set = new Set((names || []).filter(n => typeof n === 'string' && n));
+    if (!set.size) return { freed: 0, removed: 0 };
+    let freed = 0;
+    for (const n of set) {
+      const b = Cloud.files.get(n);
+      if (b) freed += (b.size || 0);
+      Cloud.files.delete(n);
+      try { await cloudGuard(cloudDel('file:' + n)); } catch (e) {}
+    }
+    const before = Cloud.msgs.length;
+    Cloud.msgs = Cloud.msgs.filter(m => !(m && m.type === 'file' && set.has(m.name)));
+    const removed = before - Cloud.msgs.length;
+    Cloud.lastActive = Date.now();
+    try { await Cloud.persist(); } catch (e) {}
+    Cloud.emit();
+    return { freed: freed, removed: removed };
   },
 
   async handleDownload(query, opts) {
@@ -3821,6 +3946,12 @@ async function loadMessages(wait, gen) {
     if (!d.ok) return true;
     // 本机 client_url.txt 改了：这份页面（尤其是线上那份）跟着换成新地址
     if (d.client_url) applyClientUrl(d.client_url);
+    // 局域网单文件上限：以前只有后端知道，页面上完全看不到，加入者传大了才失败
+    if (typeof d.max_file === 'number' && d.max_file > 0 && d.max_file !== lanFileMax) {
+      lanFileMax = d.max_file;
+      renderRoomStat();
+      sendQuota();          // 房主拿到后立刻告诉房里的外网设备
+    }
     // 房间已被解散：本机页面和局域网设备都退回入口页
     if (d.closed) {
       if (!dissolving) {
@@ -4186,11 +4317,52 @@ function handleData(data, ctx) {
     if (data.startsWith('PEERS:')) {
       try {
         const p = JSON.parse(data.slice(6));
-        // nf=1：房主的浏览器探测不到配额，整个房间都不收文件（文件最终存在房主侧）
-        hostNoFile = !!(p && p.nf);
+        // nf=1：房主的浏览器探测不到配额，整个房间都不收文件（文件最终存在房主侧）。
+        // 新版房主会紧随其后单独发 QUOTA，这个分支只为兜住旧版房主。
+        if (p && p.nf) {
+          hostLimits = { kind: 'cloud', ok: false, total: 0, used: 0, max: 0 };
+          renderRoomStat();
+        }
         syncFileEntry();
         // 人数由右侧外网卡片 / 局域网卡片各自显示，这里不报合并总数
         renderAll();
+      } catch (e) {}
+      return;
+    }
+    // 房主同步的存储 / 上传限制：加入者靠它决定「能传多大、还剩多少」
+    if (data.startsWith('QUOTA:')) {
+      if (MODE !== 'guest') return;
+      try {
+        const q = JSON.parse(data.slice(6)) || {};
+        hostLimits = {
+          kind: q.kind === 'cloud' ? 'cloud' : 'lan',
+          ok: q.ok !== 0 && q.ok !== false,
+          total: Math.max(0, Number(q.total) || 0),
+          used: Math.max(0, Number(q.used) || 0),
+          max: Math.max(0, Number(q.max) || 0)
+        };
+        renderRoomStat();
+        syncFileEntry();
+      } catch (e) {}
+      return;
+    }
+    // 房主清理了文件：把对应卡片从本地列表里一并移除，别留一条点了 404 的僵尸
+    if (data.startsWith('FILE_DEL:')) {
+      if (MODE !== 'guest') return;
+      try {
+        const d = JSON.parse(data.slice(9)) || {};
+        const names = new Set(Array.isArray(d.names) ? d.names : []);
+        const ids = new Set(Array.isArray(d.ids) ? d.ids : []);
+        if (names.size || ids.size) {
+          const before = localMsgs.length;
+          localMsgs = localMsgs.filter(m => {
+            if (!m || m.type !== 'file') return true;
+            // 自己发的文件本地记的是原始名，房主存的可能是加了序号的名字，
+            // 所以 id 也要认：同一条传输在两边是同一个 mid
+            return !(m.id && ids.has(m.id)) && !names.has(m.name);
+          });
+          if (localMsgs.length !== before) renderAll();
+        }
       } catch (e) {}
       return;
     }
@@ -5142,6 +5314,8 @@ async function onFileReceived(blob, name, mid, from) {
     if (!d.ok) throw new Error(d.msg || '保存失败');
     // 收到文件不弹提示：消息列表里会出现这张卡，落盘位置固定是「接收文件」
     loadMessages();
+    // 云房间的已用空间变了：房主卡片与房里所有人的数字一起更新
+    if (CHANNEL === 'cloud') { renderRoomStat(); sendQuota(); }
   } catch (e) {
     toast('保存失败: ' + e.message);
     updateHostRoomHint();
@@ -5275,10 +5449,14 @@ document.addEventListener('keydown', e => {
 });
 // 点遮罩的空白处也能关：只有「销毁房间」例外 —— 那颗红色按钮必须显式点，
 // 免得手一滑点在旁边就当成了确认。
-['netModal', 'helpModal', 'ttlModal'].forEach(id => {
+['netModal', 'helpModal', 'ttlModal', 'cleanModal'].forEach(id => {
   const m = document.getElementById(id);
   if (!m) return;
-  m.addEventListener('click', e => { if (e.target === m) m.classList.remove('show'); });
+  m.addEventListener('click', e => {
+    if (e.target !== m) return;
+    m.classList.remove('show');
+    if (id === 'cleanModal') cleanSel.clear();
+  });
 });
 
 // 局域网二维码：地址后面带上房间码，扫码进来房间码已经填好，不用手输
@@ -5963,6 +6141,7 @@ function registerGuest(ctx, nick, dev) {
   pushHistoryTo(e.conn);
   updateNums();   // 新设备入房：编号表跟着变（重连设备沿用原号）
   sendPeers();
+  sendQuota();    // 同一份存储 / 单文件上限：让新进来的人立刻知道能传多大
   refreshReady();
   renderAll();
 }
@@ -5993,10 +6172,25 @@ function sendPeers() {
   renderAll();
 }
 
+// 把房间的存储 / 上传限制同步给所有外网设备。
+// 文件都存在房主侧，加入者不可能自己问出「还剩多少」——只能由房主推。
+// 与 PEERS 分开：这个帧会在每次落盘 / 清理后单独发，不必重算成员名单。
+function sendQuota() {
+  if (MODE !== 'host' || isLanClient) return;
+  const lim = roomLimits();
+  if (!lim) return;
+  broadcast('QUOTA:' + JSON.stringify({
+    kind: lim.kind,
+    ok: lim.ok ? 1 : 0,
+    total: lim.total,
+    used: lim.used,
+    max: lim.max
+  }));
+}
+
 // ===== 设备通道与 IP：外网走 PeerJS 直连，局域网走本机 HTTP =====
 let roomDevices = [];        // 后端给出的房间成员（外网由房主上报、局域网由后端记录）
 let reportedDevices = '';    // 上次上报的内容，没变就不重复发
-let hostNoFile = false;      // 房主探测不到浏览器配额时由 PEERS 广播过来：本房间禁止传文件
 
 // 判断一个候选地址是不是真地址（浏览器会把本地地址伪装成 xxxx.local）
 function looksLikeAddr(v) {
@@ -6198,26 +6392,54 @@ function renderRoomStat() {
   const host = MODE === 'host' && !isLanClient;     // 房间卡只挂在房主页面上
   const idleRow = document.getElementById('roomIdle');
   if (idleRow) idleRow.style.display = host ? '' : 'none';
-  // 存储卡只有云房主有：局域网房间的文件落本机磁盘，没有浏览器配额这回事
-  const cloudHost = CHANNEL === 'cloud' && host;
+  // 存储 / 上传限制卡：房主看自己的真值，加入者看房主同步过来的同一份数字。
+  // 云房间有「总量 + 已用 + 单文件」；局域网房间文件落磁盘，只有单文件上限。
+  const lim = roomLimits();
   const box = document.getElementById('roomStat');
-  if (box) box.style.display = cloudHost ? '' : 'none';
-  if (cloudHost) {
-    const used = Cloud.totalBytes();
-    const total = Cloud.totalMax || 0;
-    const ok = Cloud.quotaOk !== false && total > 0;
-    const files = document.getElementById('stFiles');
-    if (files) files.textContent = ok ? fmtSize(used) + ' / ' + fmtSize(total) : '—';
-    const fmax = document.getElementById('stFileMax');
-    if (fmax) fmax.textContent = ok ? fmtSize(Cloud.fileMax) : '禁止上传';
-    const bar = document.getElementById('stBar');
-    if (bar) bar.style.width = ok ? Math.min(100, used / total * 100).toFixed(2) + '%' : '0%';
-    // 探测失败时的红字说明：这张卡不能只显示「—」，得说清为什么
-    const warn = document.getElementById('stWarn');
-    if (warn) warn.style.display = ok ? 'none' : '';
-    if (box) box.classList.toggle('no-quota', !ok);
-    syncFileEntry();
+  // 访客的房号在 currentRoom 里（ROOM 是模板量，guest 页为空字符串），
+  // 两种身份都要判到，否则加入者的卡片永远不显示
+  const code = MODE === 'guest' ? currentRoom : ROOM;
+  const show = !!lim && !!code && !roomClosed;
+  if (box) box.style.display = show ? '' : 'none';
+  if (!show) return;
+  const cloud = lim.kind === 'cloud';
+  const ok = cloud ? (lim.ok && lim.total > 0) : true;
+  const title = document.getElementById('stTitle');
+  if (title) title.textContent = cloud ? (host ? '存储空间' : '房主的存储空间') : '上传限制';
+  // 局域网没有「已用 / 总量」这回事，把整行与进度条收起来，别摆两个破折号
+  const usedRow = document.getElementById('stUsedRow');
+  if (usedRow) usedRow.style.display = cloud ? '' : 'none';
+  const barWrap = document.getElementById('stBarWrap');
+  if (barWrap) barWrap.style.display = cloud ? '' : 'none';
+  const files = document.getElementById('stFiles');
+  if (files) files.textContent = (cloud && ok) ? fmtSize(lim.used) + ' / ' + fmtSize(lim.total) : '—';
+  const fmax = document.getElementById('stFileMax');
+  if (fmax) {
+    fmax.textContent = (cloud && !ok) ? '禁止上传' : (lim.max > 0 ? fmtSize(lim.max) : '—');
   }
+  const bar = document.getElementById('stBar');
+  if (bar) bar.style.width = (cloud && ok) ? Math.min(100, lim.used / lim.total * 100).toFixed(2) + '%' : '0%';
+  // 探测失败时的红字说明：这张卡不能只显示「—」，得说清为什么
+  const warn = document.getElementById('stWarn');
+  if (warn) {
+    warn.style.display = ok ? 'none' : '';
+    if (!ok) {
+      warn.textContent = (host ? '浏览器' : '房主的浏览器') +
+        '没给出可用存储空间，本房间已禁止上传。' + CLOUD_FILE_HINT;
+    }
+  }
+  if (box) box.classList.toggle('no-quota', !ok);
+  const foot = document.getElementById('stFoot');
+  if (foot) {
+    if (!cloud) foot.textContent = '文件直接存到房主电脑的接收文件夹';
+    else if (!ok) foot.textContent = '';
+    else if (host) foot.textContent = '还可上传 ' + fmtSize(Math.max(0, lim.total - lim.used)) + ' · 刷新页面可恢复历史';
+    else foot.textContent = '还可上传 ' + fmtSize(Math.max(0, lim.total - lim.used)) + ' · 文件存在房主浏览器';
+  }
+  // 清理只给房主：加入者删不了房主的东西
+  const clean = document.getElementById('stClean');
+  if (clean) clean.style.display = host ? '' : 'none';
+  syncFileEntry();
   if (!host) return;
   // 倒计时：剩不到 5 分钟就把这一行标成告警色，别等房间没了才发现
   const left = idleLeftMs();
@@ -6250,6 +6472,129 @@ function syncFileEntry() {
   const why = cloudFileBlockReason();
   btn.classList.toggle('blocked', !!why);
   btn.title = why || '发送文件';
+}
+
+// ===== 清理文件（仅房主）：空间不够时删掉旧文件，不必销毁重建房间 =====
+// 云房间删的是 IndexedDB 里的 Blob，局域网房间删的是磁盘上「接收文件」里的那份；
+// 两边都把对应消息一起删掉，否则会留下点了没反应的死卡片。
+let cleanSel = new Set();
+function cleanEntries() {
+  const out = [];
+  for (const m of serverMsgs) {
+    if (!m || m.type !== 'file' || !m.name) continue;
+    out.push({ name: m.name, size: m.size || '', id: m.id || '' });
+  }
+  return out;
+}
+// 云房间能精确算出释放多少字节；局域网的消息里只有格式化后的字符串，
+// 具体字节数由后端删除时回传。
+function cleanBytes(name) {
+  if (CHANNEL === 'cloud' && Cloud && Cloud.files) {
+    const b = Cloud.files.get(name);
+    if (b) return b.size || 0;
+  }
+  return 0;
+}
+function openClean() {
+  if (!isRoomOwner()) return;
+  cleanSel = new Set();
+  renderCleanList();
+  const box = document.getElementById('cleanModal');
+  if (box) box.classList.add('show');
+}
+function hideClean() {
+  const box = document.getElementById('cleanModal');
+  if (box) box.classList.remove('show');
+  cleanSel.clear();
+}
+function cleanToggle(name, on) {
+  if (on) cleanSel.add(name); else cleanSel.delete(name);
+  renderCleanSummary();
+}
+function cleanToggleAll(on) {
+  const all = cleanEntries();
+  cleanSel = on ? new Set(all.map(x => x.name)) : new Set();
+  renderCleanList();
+}
+function renderCleanSummary() {
+  const sum = document.getElementById('cleanSum');
+  const btn = document.getElementById('cleanBtn');
+  const all = cleanEntries();
+  let bytes = 0;
+  for (const n of cleanSel) bytes += cleanBytes(n);
+  if (sum) {
+    sum.textContent = cleanSel.size
+      ? '已选 ' + cleanSel.size + ' 个' + (bytes > 0 ? ' · 释放 ' + fmtSize(bytes) : '')
+      : '未选择';
+  }
+  if (btn) {
+    btn.disabled = !cleanSel.size;
+    btn.textContent = cleanSel.size ? '删除所选（' + cleanSel.size + '）' : '删除所选';
+  }
+  const allBox = document.getElementById('cleanAllBox');
+  if (allBox) {
+    allBox.checked = !!all.length && cleanSel.size === all.length;
+    allBox.indeterminate = cleanSel.size > 0 && cleanSel.size < all.length;
+  }
+}
+function renderCleanList() {
+  const box = document.getElementById('cleanList');
+  if (!box) return;
+  const all = cleanEntries();
+  if (!all.length) {
+    box.innerHTML = '<div class="clean-empty">房间里还没有文件，没有可清理的内容。</div>';
+    renderCleanSummary();
+    return;
+  }
+  box.innerHTML = all.map(x =>
+    '<label class="clean-row"><input type="checkbox" data-name="' + esc(x.name) + '"' +
+    (cleanSel.has(x.name) ? ' checked' : '') + '>' +
+    '<span class="cn" title="' + esc(x.name) + '">' + esc(x.name) + '</span>' +
+    '<span class="cs">' + esc(x.size || '') + '</span></label>'
+  ).join('');
+  // 事件委托到每个复选框：文件名可能带引号，不拼进 onclick 字符串
+  box.querySelectorAll('input[data-name]').forEach(el => {
+    el.onchange = () => cleanToggle(el.getAttribute('data-name'), el.checked);
+  });
+  renderCleanSummary();
+}
+async function cleanConfirm() {
+  const names = Array.from(cleanSel);
+  if (!names.length) return;
+  const btn = document.getElementById('cleanBtn');
+  if (btn) btn.disabled = true;
+  let freed = 0;
+  try {
+    if (CHANNEL === 'cloud') {
+      const r = await Cloud.deleteFiles(names);
+      freed = (r && r.freed) || 0;
+      // 让房里的外网设备同步删卡片：名字之外再带 id，
+      // 对方自己发的文件本地记的是原始名，只按名字会漏掉
+      const ids = cleanEntries().filter(x => cleanSel.has(x.name) && x.id).map(x => x.id);
+      broadcast('FILE_DEL:' + JSON.stringify({ names: names, ids: ids }));
+      await loadMessages();
+      renderRoomStat();
+      sendQuota();
+    } else {
+      for (const n of names) {
+        try {
+          const r = await apiFetch(API + '/file?name=' + encodeURIComponent(n),
+                                   { method: 'DELETE', cache: 'no-store' });
+          const d = await r.json();
+          if (d && d.ok && d.freed) freed += d.freed;
+        } catch (e) {}
+      }
+      await loadMessages();
+      renderRoomStat();
+    }
+    hideClean();
+    toast(freed > 0
+      ? '已清理 ' + names.length + ' 个文件，释放 ' + fmtSize(freed)
+      : '已清理 ' + names.length + ' 个文件');
+  } catch (e) {
+    notify('清理失败：' + ((e && e.message) || e));
+    if (btn) btn.disabled = false;
+  }
 }
 // 只断开某一条连接；byPeer=true 表示是对方主动发 BYE 过来的
 function dropHostConnById(id, byPeer) {
@@ -6487,6 +6832,7 @@ function initGuest(room, existing) {
   applyDevicePrivacy();       // 访客只看得到自己的连接状态，看不到设备数 / IP
   guestGoneHandled = false;   // 重新进房，允许下一次「房间已不存在」再触发收尾
   peerAck = false;            // 每次进房重新协商，绝不继承上一间房的能力
+  hostLimits = null;          // 上一间房的存储数字不能带进新房间，等房主重发 QUOTA
   showOtherDeviceCard('外网直连', room || '');
   setGuestActions('connecting');   // 连接中先不给按钮
 
@@ -6664,6 +7010,8 @@ function resetToGate() {
   pullRestarts = 0;
   failAllFileAcks();          // 等回执的传输立刻判失败，别把发送队列挂住
   peerAck = false;            // 下一间房的房主可能是旧版，能力要重新协商
+  hostLimits = null;          // 房间没了就别再显示上一间房的「还可上传多少」
+  stopRoomStat();             // 存储卡一起收掉，入口页不该留着上一个房间的数字
   recvBuf.clear();            // 残片不带进下一间房
   chunkChains.clear();
   // 房间结束：正在落盘的缓冲不许再补发旧 id 的回执
@@ -7173,6 +7521,8 @@ async function sendAllInner() {
           broadcast('FILE_CARD:' + JSON.stringify({
             id: mid, name: it.savedName, size: fmtSize(it.file.size), f: myName || '房主'
           }));
+          // 房主自己传完也占空间：同步给自己的卡片和房里的其他设备
+          if (CHANNEL === 'cloud') { renderRoomStat(); sendQuota(); }
         } else {
           if (!canP2P()) throw new Error('还没有连上房间');
           const mid = uid();
@@ -7803,6 +8153,8 @@ async function resumeHostFromWeb() {
     return;
   }
   if (info.client_url) applyClientUrl(info.client_url);
+  // 单文件上限：房主侧栏的「上传限制」卡要用它；拿不到就等 /messages 补
+  if (info && info.max_file) lanFileMax = info.max_file;
   if (!info.has_room || !info.room) {
     try { history.replaceState(null, '', location.pathname); } catch (e2) {}
     showGate();
@@ -7972,6 +8324,7 @@ async function gateCreateLan() {
     }
     // 邀请链接以本机程序当前的 client_url.txt 为准（在线页那份是导出时的旧值）
     applyClientUrl(info.client_url);
+    if (info && info.max_file) lanFileMax = info.max_file;
     const j = await r.json();
     if (!j || !j.ok || !j.room) throw new Error((j && j.msg) || '创建房间失败');
     ROOM = j.room;
