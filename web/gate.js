@@ -36,9 +36,7 @@ function probeRoom(room, timeoutMs) {
         if (typeof d !== 'string') return;      // 探活期间不会有文件过来
         // 房主把「外网加入」关了：门还没开就被回绝，别再等 12 秒超时
         if (d === 'P2P_OFF') {
-          finish(false, '房主已关闭外网加入',
-            '这个房间现在只能在同一 WiFi 内用局域网地址进入；' +
-            '需要外网访问的话，请房主在外网直连卡上打开「外网加入」。');
+          finish(false, '外网已关闭，请让房主打开「外网加入」。');
           return;
         }
         if (d.startsWith('WELCOME:')) {
@@ -54,9 +52,8 @@ function probeRoom(room, timeoutMs) {
         }
         if (pending.length < 300) pending.push(d);
       });
-      conn.on('close', () => finish(false, '房间那边没有回应',
-        '房主的页面可能已经关闭，请确认对方还在房间里再试一次。'));
-      conn.on('error', e => finish(false, '数据通道错误', String(e && e.message ? e.message : e)));
+      conn.on('close', () => finish(false, '房间没有回应，请确认房主页面还开着。'));
+      conn.on('error', e => finish(false, '连接出错：' + String(e && e.message ? e.message : e)));
     };
     const attach = pp => {
       peer = pp;
@@ -65,20 +62,18 @@ function probeRoom(room, timeoutMs) {
         const t = (err && err.type) || 'unknown';
         if (t === 'peer-unavailable') {
           // 两种可能：房间码不对／房间已关，或者房主把「外网加入」关了（关着不注册 Peer）
-          finish(false, '找不到房间',
-            '房间码不对、房主已经关掉房间，或者房主把「外网加入」关着——' +
-            '关着的时候只有同一 WiFi 用局域网地址能进。');
+          finish(false, '找不到房间：核对房间码，或让房主开启外网。');
         } else if (t === 'network' || t === 'server-error' || t === 'socket-error') {
-          finish(false, '网络不通', '连不上信令服务器，换个网络或改用系统浏览器再试。');
+          finish(false, '连不上信令服务器，换个网络再试。');
         } else if (t === 'unavailable-id') {
-          finish(false, '连接被占用', '请稍后重试。');
+          finish(false, '连接被占用，请稍后重试。');
         } else if (!freshTried && !pp.open) {
           // 预热的那条长连接已经废了（放太久、切了网络）：换一条新的，别直接判失败
           freshTried = true;
           try { pp.destroy(); } catch (e) {}
           fresh();
         } else {
-          finish(false, '连接失败', '错误类型：' + t + '，请确认房间码正确。');
+          finish(false, '连接失败（' + t + '），请核对房间码。');
         }
       });
       if (pp.open) call();
@@ -89,8 +84,7 @@ function probeRoom(room, timeoutMs) {
       try { attach(new Peer(guestPeerId(), peerOpts())); }
       catch (e) { finish(false, '无法发起连接：' + (e && e.message ? e.message : e)); }
     };
-    timer = setTimeout(() => finish(false, '连接超时',
-      '没有收到对方响应，可能是房间码不正确，或对方设备网络受限。'), timeoutMs || 12000);
+    timer = setTimeout(() => finish(false, '连接超时：请核对房间码和双方网络。'), timeoutMs || 12000);
     // 入口页预热好的信令连接能直接用：跳过 WebSocket 握手，少等 0.3～1.5 秒
     const warm = takeWarmPeer();
     if (warm) {
@@ -219,7 +213,7 @@ function gateSetHdr(t, s) {
 }
 // 切到「本机程序不在」这一屏：和 gateShowJoin() 同一个套路
 function gateShowDl() {
-  if (JOIN_REQUIRED) { gateMsg('这个页面只能加入房间，创建房间请在本机双击运行「数据传输.exe」。', 'info'); return; }
+  if (JOIN_REQUIRED) { gateMsg('此页面只能加入房间，创建请在本机运行程序。', 'warn'); return; }
   gateSaveHdr();
   gateSetHdr('创建房间需要本机程序', '在这台电脑上运行「数据传输.exe」');
   gateView('gateDl');
@@ -416,15 +410,19 @@ function dlmRetry() {
 }
 
 // ===== 程序下载地址 =====
-// 页面和 exe 都躺在同一个仓库（GitHub Pages）里，所以下载地址直接跟着
-// 在线页基地址走：换自定义域名时页面里的链接自动跟着换，不用改 HTML。
+// 页面和 exe 放在同一个站点根目录，所以下载地址跟着「在线页基地址」走：
+// 换域名 / 换托管时链接自动跟着换，不用改 HTML。
+// 兜底用当前页面所在目录（location），不再写死某个域名——写死的旧域名一旦废弃，
+// 下载按钮会直接 404，而且因为平时都是 CLIENT_URL 生效，很难被发现。
 const EXE_FILE = '数据传输.exe';
-const DL_FALLBACK_BASE = 'https://zvzqvqdvd.github.io/data-transmission/';
+function pageBase() {
+  try { return location.origin + location.pathname.replace(/[^/]*$/, ''); } catch (e) { return ''; }
+}
 function downloadUrl() {
   let base = '';
   try { base = inviteBase() || ''; } catch (e) {}
-  if (!base) base = DL_FALLBACK_BASE;
-  return base.replace(/\/*$/, '/') + encodeURIComponent(EXE_FILE);
+  if (!base) base = pageBase();
+  return base ? base.replace(/\/*$/, '/') + encodeURIComponent(EXE_FILE) : '';
 }
 // 刷新恢复期间先藏住房间壳（见 app.css 的 body.booting）：
 // 恢复路径不摆入口页，但也不能让人看见一个空房间。这两个函数是「进房 / 回入口页」
@@ -472,7 +470,7 @@ function agreeHintFlash() {
     try { sec.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
     catch (e) { try { sec.scrollIntoView(); } catch (e2) {} }
   }
-  toast('请先勾选「我已阅读并同意《免责声明》并同意继续使用」');
+  toast('请先同意《免责声明》');
 }
 // 点「《免责声明》」整页打开独立声明页
 function openDiscPage(e) {
@@ -502,7 +500,7 @@ function gateShowJoin() {
 // 所以放在创建动作之前一次问清，而不是建完再让用户去猜。
 function gateShowCreatePick() {
   if (JOIN_REQUIRED) {
-    gateMsg('这个页面只能加入房间，创建房间请在本机运行「数据传输.exe」。', 'info');
+    gateMsg('此页面只能加入房间，创建请在本机运行程序。', 'warn');
     return;
   }
   gateSaveHdr();
@@ -594,7 +592,7 @@ async function resumeHostFromWeb() {
     try { history.replaceState(null, '', location.pathname); } catch (e2) {}
     showGate();
     gateShowChoices();
-    gateMsg('房间已经结束，点「创建房间」开一个新房间。', 'info');
+    gateMsg('房间已结束，请重新创建或加入。', 'warn');
     return;
   }
   // 房间还在：用现有房间码直接回主界面，不重新 create（否则会换码）。
@@ -708,7 +706,7 @@ async function resumeCloudHost() {
     try { history.replaceState(null, '', location.pathname); } catch (e) {}
     showGate();
     gateShowChoices();
-    gateMsg('房间已经结束（超过 60 分钟没有通信或已被销毁），点「创建房间」开一个新房间。', 'info');
+    gateMsg('房间已结束（60 分钟无通信或已销毁）。', 'warn');
     return;
   }
   CHANNEL = 'cloud';
@@ -722,7 +720,7 @@ async function resumeCloudHost() {
 }
 
 // 创建局域网房间：本机程序必须开着。
-// 外网通道默认跟着一起注册——房间里那张卡上的开关随时能把它关掉，
+// 外网默认关闭，房主在房间里的「外网加入」开关上拨开才注册 Peer，
 // 关掉之后就是纯局域网：不碰信令服务器，没有网也能用。
 async function gateCreateLan() {
   if (!agreeChecked()) { agreeHintFlash(); return; }
@@ -808,7 +806,7 @@ async function gateJoin() {
   const btn = document.getElementById('gateJoinBtn');
   const label = btn.querySelector('b');
   const room = box.value.trim().toUpperCase().replace(/[^A-Z2-9]/g, '');
-  if (room.length < 4) { gateMsg('房间码不正确，请检查后重输。'); box.focus(); return; }
+  if (room.length < 4) { gateMsg('房间码不对，请重输。'); box.focus(); return; }
   if (btn.disabled) return;
   btn.disabled = true;
 
@@ -836,13 +834,13 @@ async function gateJoin() {
   }
 
   if (label) label.textContent = '连接中…';
-  gateMsg('正在连接房间 ' + room + '，请稍候…', 'info');
+  gateMsg('正在连接房间 ' + room + '…', 'info');
   const res = await probeRoom(room, 12000);
   btn.disabled = false;
   if (label) label.textContent = '连接';
   if (!res.ok) {
     // 不跳转：留在入口页，明确告诉用户失败原因
-    gateMsg(res.msg + (res.tip ? '：' + res.tip : ''), 'err');
+    gateMsg(res.msg, 'err');
     box.focus();
     try { box.select(); } catch (e) {}
     prewarmSignal();      // 这次的信令连接已经销毁了，先建好下一条，重试时不用再等
@@ -864,7 +862,7 @@ async function verifyRoomCode(room) {
     if (d && d.ok) return { ok: true };
     return { ok: false, msg: (d && d.msg) || '房间码不正确，请向房主确认' };
   } catch (e) {
-    return { ok: false, msg: '连不上这台电脑上的程序，请确认它还开着，并确认你们在同一个网络。' };
+    return { ok: false, msg: '连不上本机程序，请确认它开着且在同一网络。' };
   }
 }
 document.getElementById('gateRoom').addEventListener('keydown', e => {
@@ -903,7 +901,7 @@ if (MODE === 'host') {
   const backToGate = () => {
     showGate();
     gateShowChoices();
-    gateMsg('没能回到原来的房间，可以输房间码重新加入，或点「创建房间」开一个新的。', 'info');
+    gateMsg('没能恢复房间，请重新加入或创建。', 'warn');
   };
   if (invited) {
     // 邀请链接：按访客身份连过去。复选框默认勾选 = 已同意，直接进；

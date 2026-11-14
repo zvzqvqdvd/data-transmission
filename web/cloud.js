@@ -326,7 +326,7 @@ const Cloud = {
       if (CHANNEL !== 'cloud') return;
       if (Date.now() - Cloud.lastActive > CLOUD_IDLE_MS) {
         try { broadcast('ROOM_CLOSED'); } catch (e) {}
-        try { onRoomClosed('房间超过 60 分钟没有通信，已自动销毁。'); } catch (e) {}
+        try { onRoomClosed('房间 60 分钟无通信，已自动结束。'); } catch (e) {}
         Cloud.dissolve();
       }
     }, 15000);
@@ -368,7 +368,7 @@ const Cloud = {
     if (!Cloud.quotaOk) {
       // 探测失败时一个字都不收：写入再失败会留下半截记录，比直接拒绝更糟
       return cloudJSON({ ok: false,
-        msg: '本浏览器无法确认可用存储空间（隐私模式或版本过旧），房间已禁止上传文件' }, 507);
+        msg: '无法确认可用空间，已禁止上传文件' }, 507);
     }
     const fd = opts.body;
     if (!fd || typeof fd.getAll !== 'function') {

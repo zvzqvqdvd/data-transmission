@@ -75,17 +75,37 @@ let guestPeer = null, guestConn = null;
 let myName = '';             // 本机在房间里的名字（房主为「房主」，访客由房主分配）
 let pushedIds = new Set();   // 房主端：已经转发给外网设备的消息 id
 let relaySeeded = false;     // 首次拉 /messages 只记 id 不转发（历史由 HISTORY 单独推）
-// 分片大小必须小于 PeerJS 内部的 chunkedMTU(16300)：一旦超过，PeerJS 会把每片
-// 再拆成两条消息、并在接收端用 Blob 异步重组——最后一片可能晚一步才交上来，
-// 紧随其后的 FILE_END 就会判「不完整」把整张图丢掉（手机端几乎必踩，电脑端偶尔侥幸）。
-const CHUNK_SIZE = 15000;
-const MAX_BUFFERED = 512 * 1024;
+// 分片超过 PeerJS 内部的 chunkedMTU(16300) 后，PeerJS 会把每片再拆成多条消息、
+// 在接收端异步重组，最后一片可能晚一步才交上来。接收端对此有 9 秒宽限
+// （room.js 的 waitRecvComplete），所以这里可以放到 64 KB：
+// 每 1 MB 的 JS 调用从 67 次降到 16 次，是外网大文件吞吐提升最明显的一档。
+// 再往上收益递减，且 256 KB 会撞浏览器 sctp.maxMessageSize 上限。
+const CHUNK_SIZE = 65536;
+// 在途窗口：吞吐上限约等于「窗口 ÷ RTT」。512 KB 在 100ms RTT 下只能跑约 5 MB/s，
+// 2 MB 可以到约 20 MB/s——这是纯外网下载慢的主因，不是带宽。
+const MAX_BUFFERED = 2 * 1024 * 1024;
 const ICE_SERVERS = [
   { urls: 'stun:stun.miwifi.com:3478' },
   { urls: 'stun:stun.cloudflare.com:3478' },
   { urls: 'stun:global.stun.twilio.com:3478' },
-  { urls: 'stun:stun.l.google.com:19302' }
+  { urls: 'stun:stun.l.google.com:19302' },
+  // 兜底中继：双 NAT / 公司网 / 校园网下直连永远打不通，这时才走 TURN。
+  // ICE 会优先直连，正常情况不会增加延迟；免费公共 TURN 带宽有限，
+  // 用户可以在 localStorage 的 lanshare_ice 里用自定义列表整组覆盖。
+  { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' }
 ];
+// 自建信令服务器（可选）：对方项目的「加入/刷新秒回」本质是信令同源同进程，
+// 没有第三方 DNS + TLS + ID 注册这一圈。填了这一项就能拿到同样的速度。
+// 格式：{"host":"peer.example.com","port":443,"path":"/","secure":true,"key":"peerjs"}
+// 只存本机，不上传；房主和访客必须填同一台，否则互相找不到。
+function customSignal() {
+  try {
+    const v = JSON.parse(localStorage.getItem('lanshare_signal') || 'null');
+    if (v && v.host) return v;
+  } catch (e) {}
+  return null;
+}
 // 自定义 STUN/TURN：只存在这台设备的浏览器里，不写进房间、不上传。
 // 存的是「完整列表」（含用户删改后的默认项），没存过就用上面的默认值。
 function customIce() {
@@ -114,6 +134,15 @@ function peerOpts() {
       rtcpMuxPolicy: 'require'
     }
   };
+  // 可选的自建信令：只在本机存过配置时才生效，默认仍走 PeerJS 公共服务
+  const sig = customSignal();
+  if (sig) {
+    o.host = String(sig.host).slice(0, 200);
+    o.port = Number(sig.port) || 443;
+    o.path = String(sig.path || '/').slice(0, 100);
+    o.secure = sig.secure !== false;
+    o.key = String(sig.key || 'peerjs').slice(0, 40);
+  }
   return o;
 }
 // 每次都是一个全新的 Peer ID：不能用固定值，否则两台设备撞号
@@ -256,7 +285,7 @@ function leaveLanRoom() {
   document.getElementById('guestGate').style.display = 'none';
   document.getElementById('lanBanner').style.display = 'none';
   showLanGate();
-  gateMsg('已断开连接，可重新输入房间码加入。', 'info');
+  gateMsg('已断开连接，可重新加入。', 'warn');
 }
 
 // ===== 连接集合：房主端可能同时连着多台外网设备 =====
@@ -335,7 +364,13 @@ function txTick(done, total) {
     txState.lastD = done;
   }
   txState.done = done;
-  txRender();
+  // 一片 64 KB，1 GB 就是 1.6 万次回调。每次都改 DOM 会强制重排，
+  // 而重排和「发下一片」抢的是同一个主线程——吞吐就是这样被自己拖下来的。
+  // 进度条 10 Hz 刷新，肉眼完全看不出差别，主线程却能空出来跑分片。
+  if (now - (txState.uiT || 0) >= 90 || (txState.total && done >= txState.total)) {
+    txState.uiT = now;
+    txRender();
+  }
 }
 function txText() {
   if (!txState) return '';

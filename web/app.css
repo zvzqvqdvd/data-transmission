@@ -906,8 +906,11 @@ body.booting #hostView { visibility: hidden; animation: none; }
   display: flex; align-items: center; justify-content: center;
   padding: 6px 10px; border-radius: var(--r-md);
   font-size: 11.5px; line-height: 1.5; text-align: center;
+  overflow-wrap: anywhere;      /* 长房间码 / 错误类型也别撑破卡片 */
 }
 #gateMsg.err { visibility: visible; background: var(--danger-soft); color: #C4292E; }
+/* 房间结束 / 被请出：不是错误，但要比过程提示醒目 */
+#gateMsg.warn { visibility: visible; background: var(--warn-soft); color: var(--warn); }
 #gateMsg.info { visibility: visible; background: transparent; color: var(--t3); }
 
 

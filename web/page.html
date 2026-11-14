@@ -351,8 +351,8 @@
 <div class="modal-mask" id="dissolveModal">
   <div class="modal">
     <h3>销毁房间</h3>
-    <p class="modal-tip" data-channel="lan">销毁后所有设备会立即断开，房间码作废，已经发出去的邀请链接和二维码都不能再用。<br><b>本机的接收文件会一并删除，聊天记录本来就不落盘，全部不可恢复。</b></p>
-    <p class="modal-tip" data-channel="cloud">销毁后所有设备会立即断开，房间码作废，已经发出去的邀请链接和二维码都不能再用。<br><b>这个纯网页房间的聊天记录与文件都保存在房主浏览器里，销毁即清除，不可恢复。</b></p>
+    <p class="modal-tip" data-channel="lan">销毁后所有设备立即断开，房间码和邀请链接作废。<br><b>本机接收文件一并删除，聊天记录不落盘，均不可恢复。</b></p>
+    <p class="modal-tip" data-channel="cloud">销毁后所有设备立即断开，房间码和邀请链接作废。<br><b>聊天记录与文件存在房主浏览器里，销毁即清除，不可恢复。</b></p>
     <div class="modal-btns">
       <button class="btn-plain" onclick="hideDissolve()">取消</button>
       <button class="btn-danger" onclick="dissolveRoom()">销毁</button>
@@ -362,7 +362,7 @@
 <div class="modal-mask" id="p2pOffModal">
   <div class="modal">
     <h3>关闭外网加入</h3>
-    <p class="modal-tip" id="p2pOffTip">关掉后外网链接与二维码立即失效，正在连着的设备会被断开；同一 WiFi 的设备不受影响。</p>
+    <p class="modal-tip" id="p2pOffTip">外网链接立即失效，在线外网设备会被请出房间；局域网不受影响。</p>
     <div class="modal-btns">
       <button class="btn-plain" onclick="hideP2POff()">取消</button>
       <button class="btn-danger" onclick="confirmP2POff()">关闭外网</button>

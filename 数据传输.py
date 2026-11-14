@@ -395,7 +395,10 @@ def _allowed_origins():
     if current:
         p = urllib.parse.urlparse(current)
         if p.scheme and p.netloc:
-            origins.add("%s://%s" % (p.scheme, p.netloc))
+            # 同一个主机同时放行 http 与 https：证书没配好、或用户手敲 http:// 打开时，
+            # 页面照样能连上本机程序，不会表现成「页面能开但一直提示连不上」。
+            for sch in ('http', 'https'):
+                origins.add("%s://%s" % (sch, p.netloc))
     for host in ('127.0.0.1', 'localhost'):
         origins.add("http://%s:%d" % (host, PORT))
     return origins
@@ -1246,7 +1249,7 @@ class Handler(BaseHTTPRequestHandler):
         # 没输房间码的局域网设备只能拿页面本身，不能读写房间内容
         if path not in ('/', '/index.html', '/api/join') and self._lan_needs_join():
             self._json({'ok': False, 'code': 'NEED_JOIN',
-                        'msg': '请先输入房间码加入房间'}, 403)
+                        'msg': '请先输入房间码。'}, 403)
             return
 
         if path == '/' or path == '/index.html':
@@ -1353,7 +1356,7 @@ class Handler(BaseHTTPRequestHandler):
 
         # 来自其他网站的指令一律拒绝（在线页和本机页面不受影响）
         if not self._origin_ok():
-            self._json({'ok': False, 'msg': '来源不被允许'}, 403)
+            self._json({'ok': False, 'msg': '访问被拒绝'}, 403)
             return
 
         # 用房间码进门：唯一一个不需要事先验证的写接口
@@ -1363,7 +1366,7 @@ class Handler(BaseHTTPRequestHandler):
             want = (urllib.parse.parse_qs(body).get('room', [''])[0] or '').strip().upper()
             if not has_room():
                 self._json({'ok': False, 'code': 'NO_ROOM',
-                            'msg': '房间还没创建，请让房主先点「创建房间」'}, 409)
+                            'msg': '房间还没创建，请房主先创建。'}, 409)
             elif want and want == ROOM:
                 cid = track_client(self)
                 # 只在本进程里把同一条设备记录标成「进过房间」，
@@ -1374,7 +1377,7 @@ class Handler(BaseHTTPRequestHandler):
                 # 满员检查：同一台设备重复进房（刷新、换标签页）不占新名额
                 if not already and room_member_count() >= ROOM_MAX_MEMBERS:
                     self._json({'ok': False, 'code': 'ROOM_FULL',
-                                'msg': '房间人数已满（最多 6 人，含房主）'}, 409)
+                                'msg': '房间已满（最多 6 人）。'}, 409)
                     return
                 with DATA_LOCK:
                     info = CLIENTS.get(cid)
@@ -1385,13 +1388,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({'ok': True, 'room': ROOM},
                            cookie=self._join_cookie_header())
             else:
-                self._json({'ok': False, 'msg': '房间码不正确，请向房主确认'})
+                self._json({'ok': False, 'msg': '房间码不对，请向房主确认。'})
             return
 
         # 没输房间码就来的写请求一律拒绝
         if self._lan_needs_join():
             self._json({'ok': False, 'code': 'NEED_JOIN',
-                        'msg': '请先输入房间码加入房间'}, 403)
+                        'msg': '请先输入房间码。'}, 403)
             return
 
         # 房主页面报「外网直连几台」，局域网设备靠它知道房间里还有谁

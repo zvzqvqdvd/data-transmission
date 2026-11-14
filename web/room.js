@@ -575,13 +575,13 @@ async function loadMessages(wait, gen) {
     // 房间已被解散：本机页面和局域网设备都退回入口页
     if (d.closed) {
       if (!dissolving) {
-        onRoomClosed('房间已销毁，房间码已作废。点「创建房间」可以重新开一个。');
+        onRoomClosed('房间已结束，可以重新创建。');
       }
       return true;
     }
     // 后端换了房间码（别处新建/销毁过房间），本机这份页面持有的码已过期
     if (d.room && ROOM && d.room !== ROOM) {
-      onRoomClosed('房间码已经变更，请重新创建或加入房间。');
+      onRoomClosed('房间码已变，请重新加入。');
       return true;
     }
     // 有人进来 / 离开都要立刻反映到输入区能不能用
@@ -645,7 +645,7 @@ async function loadMessages(wait, gen) {
     msgFailStreak++;
     if (msgFailStreak >= 3) {
       msgFailStreak = 0;
-      onRoomClosed('连接不到本机程序，房间可能已经关闭，已返回起始页。请确认程序仍在运行后重新创建或加入房间。');
+      onRoomClosed('连不上本机程序，已返回起始页。');
     }
     return false;
   } finally {
@@ -698,6 +698,56 @@ function buffered(c) {
   if (c && typeof c.bufferedAmount === 'number') return c.bufferedAmount;
   return 0;
 }
+// ===== 背压：事件驱动，定时轮询只当兜底 =====
+// 旧写法是 while(缓冲超标) await sleep(6)：每 6ms 醒一次去问「排空了吗」，
+// 一次 1 GB 传输要醒上十万次。浏览器本来就提供 bufferedamountlow 事件，
+// 缓冲一降到阈值就主动通知，这里改成「等一次事件 + 40ms 兜底」，
+// 弱网下空转的 CPU 直接省掉，主线程腾出来做分片和加密。
+function armDrain(c) {
+  const dc = c && c.dataChannel;
+  if (!dc || dc.__drainArmed) return;
+  dc.__drainArmed = true;
+  // 阈值必须等于「可以继续发」的那条线（MAX_BUFFERED）。
+  // 设成更小的低水位，事件只会晚到，真正的续发还得等 40ms 兜底轮询——
+  // 那就白白空出一段链路。设成同一个值，事件一到就能立刻接着发。
+  try { dc.bufferedAmountLowThreshold = MAX_BUFFERED; } catch (e) {}
+  try {
+    dc.addEventListener('bufferedamountlow', () => {
+      const f = dc.__drainWait;
+      if (f) f();
+    });
+  } catch (e) {}
+}
+// 等这条连接把在途字节排到阈值以下。连续 30 秒排不动就判链路僵死，
+// 让上层报错重试，而不是无限期挂住整个发送队列。
+function waitDrain(c) {
+  const dc = c && c.dataChannel;
+  if (!dc) return Promise.resolve();
+  armDrain(c);
+  if (buffered(c) <= MAX_BUFFERED) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    let done = false, ticks = 0, iv = null;
+    const finish = ok => {
+      if (done) return;
+      done = true;
+      if (dc.__drainWait === wake) dc.__drainWait = null;
+      if (iv) clearInterval(iv);
+      if (ok) resolve(); else reject(new Error('连接已断开'));
+    };
+    const wake = () => { if (buffered(c) <= MAX_BUFFERED) finish(true); };
+    dc.__drainWait = wake;
+    iv = setInterval(() => {
+      if (!c.open) { finish(false); return; }
+      if (buffered(c) <= MAX_BUFFERED) { finish(true); return; }
+      if (++ticks > 750) {
+        done = true;
+        if (dc.__drainWait === wake) dc.__drainWait = null;
+        clearInterval(iv);
+        reject(new Error('发送超时'));
+      }
+    }, 40);
+  });
+}
 function toArrayBuffer(data) {
   if (data instanceof ArrayBuffer) return data;
   if (ArrayBuffer.isView(data)) return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
@@ -707,7 +757,19 @@ function toArrayBuffer(data) {
 // 免得新访客连旧房主时每个文件都干等一轮超时。
 let peerAck = false;
 const fileAckWaiters = new Map();   // 文件传输 id -> { resolve, timer }
-const FILE_ACK_TIMEOUT = 20000;    // 房主收片 + 落盘的宽限
+// 房主收片 + /upload 落盘的宽限：按文件大小给，最小 20s、最大 90s。
+// 固定 20s 时慢网下的大文件房主其实已经存好，访客却先判失败并重试，
+// 结果同一个文件被存两份。
+function fileAckTimeout(size) {
+  return Math.min(90000, Math.max(20000, 20000 + Math.ceil(size / (1024 * 1024)) * 1500));
+}
+// 房间结束 / 连接断开 / 外网关闭：把还在等回执的传输立刻判失败。
+// 不清的话 sendAll 的串行循环会一直挂在「传输中」，退不回起始页，
+// 迟到 20~90 秒的回执还会把文件卡片塞回已经清空的聊天列表（幽灵消息）。
+function failAllFileAcks() {
+  for (const [, w] of Array.from(fileAckWaiters)) w.resolve('nak');
+  fileAckWaiters.clear();
+}
 
 function waitFileAck(id, ms) {
   return new Promise(resolve => {
@@ -736,26 +798,44 @@ async function sendFileTo(c, file, name, onProgress, mid, from) {
   if (mid) meta.mid = mid;
   if (from) meta.f = from;
   c.send('FILE_META:' + JSON.stringify(meta));
-  let offset = 0, stall = 0;
-  while (offset < file.size) {
-    while (buffered(c) > MAX_BUFFERED) {
-      if (!c.open) throw new Error('连接已断开');
-      await sleep(12);
-      // 只统计「连续等不到缓冲回落」的时间；大文件本来就要发很久，
-      // 旧写法把整个文件的等待次数累加，长传会被误判成超时
-      if (++stall > 2500) throw new Error('发送超时');
+  armDrain(c);                       // 一次装好低水位阈值，后面只等事件
+  let offset = 0;
+  const total = file.size;
+  // 双缓冲预读：始终有 1~2 片在「切片 + 读盘」的路上，与「等缓冲排空」重叠。
+  // 单缓冲写法每片都必须先等读盘完成才能开始等链路，高延迟链路上会留下一段段空档，
+  // 链路明明有余量也跑不满。
+  const sliceAt = o => file.slice(o, Math.min(o + CHUNK_SIZE, total));
+  const reads = [];
+  let readOff = 0;
+  const fill = () => {
+    while (reads.length < 2 && readOff < total) {
+      const s = sliceAt(readOff);
+      readOff += s.size;
+      reads.push(s.arrayBuffer());
     }
-    stall = 0;
-    const slice = file.slice(offset, Math.min(offset + CHUNK_SIZE, file.size));
-    c.send(await slice.arrayBuffer());
-    offset += slice.size;
-    if (onProgress) onProgress(offset / file.size);
+  };
+  fill();
+  // 告诉房主端的连接扫描「这条连接正在传文件」，别在这期间用 PING 判死
+  c.__sending = true;
+  try {
+    while (reads.length) {
+      const buf = await reads.shift();
+      fill();
+      if (!buf || !buf.byteLength) break;
+      // 缓冲超标就等它排空：等的是 bufferedamountlow 事件，不是定时轮询
+      await waitDrain(c);
+      c.send(buf);
+      offset += buf.byteLength;
+      if (onProgress) onProgress(offset / total);
+    }
+    c.send('FILE_END:' + id);
+  } finally {
+    c.__sending = false;
   }
-  c.send('FILE_END:' + id);
   // 只有「访客 → 房主」需要确认：房主把历史文件发给访客时走的是下载队列，
   // 有自己的进度与失败处理，别让它反过来等访客回执。
   if (MODE === 'guest' && peerAck) {
-    const r = await waitFileAck(id, FILE_ACK_TIMEOUT);
+    const r = await waitFileAck(id, fileAckTimeout(file.size));
     if (r === 'nak') throw new Error('房主没能完整收到，请点 ↻ 重试');
     if (r === 'timeout') throw new Error('房主还没确认收到，请点 ↻ 重试');
   }
@@ -894,7 +974,11 @@ function handleData(data, ctx) {
       if (mid) {
         pullInFlight.delete(mid); pullStartAt.delete(mid); pumpPullQueue();
         const w = document.getElementById('pullwrap-' + mid);
-        if (w) { w.style.display = 'none'; w.querySelector('.pull-bar i').style.width = '0%'; }
+        if (w) {
+          w.style.display = 'none';
+          const bar = w.querySelector('.pull-bar i');
+          if (bar) bar.style.width = '0%';
+        }
       }
       notify('「' + ((e0 && e0.name) || '文件') + '」已不存在，无法下载');
       return;
@@ -1011,14 +1095,13 @@ function handleData(data, ctx) {
     // 直接退回起始页并说清原因，别让访客对着「正在重新连接」干等。
     if (data === 'P2P_OFF') {
       if (MODE === 'guest') {
-        guestReturnToGate('房主已关闭外网加入，这个房间暂时只能在同一 WiFi 内进入。' +
-                          '需要用外网的话，请让房主把「外网加入」重新打开。');
+        guestReturnToGate('外网已关闭，请让房主打开「外网加入」。');
       }
       return;
     }
     // 房主解散了房间：房间码已作废，访客直接回入口页，不要自动重连
     if (data === 'ROOM_CLOSED') {
-      guestRoomGone('房主已销毁房间，房间码已作废。请联系房主获取新的房间码或邀请链接。');
+      guestRoomGone('房间已结束，请让房主重新创建。');
       return;
     }
     // 对端主动点了「断开」：房主端只收掉这一条连接（房间还在）；
@@ -1027,7 +1110,7 @@ function handleData(data, ctx) {
       if (MODE === 'host' && ctx) {
         dropHostConnById(ctx.id, true);
       } else if (MODE === 'guest') {
-        guestReturnToGate('房间那边已断开这台设备。如需再次加入，请重新输入房间码。');
+        guestReturnToGate('连接已被房主断开，请重新加入。');
       }
       return;
     }
@@ -1063,9 +1146,21 @@ function handleData(data, ctx) {
       try {
         const meta = JSON.parse(data.slice(10));
         if (meta.v !== PROTOCOL) { protoMismatch(meta.v, ctx); recvBuf.delete(key); return; }
+        // 上一条还没收完就来了新的 META：说明发送端已经重发或放弃了。
+        // 这里必须明确回一个 NAK，否则对方要干等到 20~90 秒的回执超时才报错。
+        const prev = recvBuf.get(key);
+        if (prev && prev.received < prev.size) {
+          if (MODE === 'host' && prev.conn && prev.conn.open) {
+            try { prev.conn.send('FILE_NAK:' + prev.id); } catch (e2) {}
+          }
+          if (MODE === 'guest' && prev.mid) {
+            pullInFlight.delete(prev.mid);
+            pullStartAt.delete(prev.mid);
+          }
+        }
         recvBuf.set(key, {
           id: meta.id, name: meta.name, size: meta.size,
-          chunks: [], received: 0,
+          chunks: [], pend: [], pendBytes: 0, received: 0,
           mid: meta.mid || '',
           from: meta.f || (ctx && ctx.name) || '外网设备',
           conn: (ctx && ctx.conn) || null   // 收完往这条连接回执
@@ -1100,10 +1195,24 @@ function handleData(data, ctx) {
   if (ab) appendChunk(key, ab);
 }
 // 把一片数据放进这条连接当前的接收缓冲
+const RECV_BATCH = 2 * 1024 * 1024;   // 攒到 2 MB 合成一个 Blob
+function flushPend(buf) {
+  if (!buf || !buf.pend || !buf.pend.length) return;
+  buf.chunks.push(new Blob(buf.pend));
+  buf.pend = [];
+  buf.pendBytes = 0;
+}
 function appendChunk(key, ab) {
   const buf = recvBuf.get(key);
   if (!buf) return;                  // 没有对应的 FILE_META：过期的残片，直接丢
-  buf.chunks.push(ab);
+  // 不再直接 push ArrayBuffer：那样整个文件会以裸数组形式压在 JS 堆里，
+  // 1 GB 文件的峰值占用要翻倍，手机端直接 OOM、桌面端也会卡死。
+  // 转成 Blob 后浏览器把数据交给 blob 存储管理（超过阈值会落盘），
+  // V8 堆只留句柄；攒成 2 MB 一批，兼得低开销与低占用。
+  if (!buf.pend) { buf.pend = []; buf.pendBytes = 0; }
+  buf.pend.push(ab);
+  buf.pendBytes += ab.byteLength;
+  if (buf.pendBytes >= RECV_BATCH) flushPend(buf);
   buf.received += ab.byteLength;
   // 有数据在动就说明链路还活着：看门狗据此判断「卡住」而不是「慢」
   if (buf.mid && pullInFlight.has(buf.mid)) pullStartAt.set(buf.mid, Date.now());
@@ -1116,6 +1225,7 @@ function appendChunk(key, ab) {
 // 回执是「房主真的存好了」的唯一凭证，发送端据此判断能不能标「已完成」。
 async function finishRecv(key, buf) {
   recvBuf.delete(key);
+  flushPend(buf);                    // 把最后不足 2 MB 的尾巴也合进去
   const blob = new Blob(buf.chunks, { type: mimeOf(buf.name) });
   let ok = true;
   try {
@@ -1129,11 +1239,13 @@ async function finishRecv(key, buf) {
 }
 // 收到 FILE_END 但字节数还差一点：再等一会儿（PeerJS 的异步重组可能慢半拍）。
 // 发送端现在会等回执才发下一个文件，这段等待期间不会有新的 FILE_META 顶掉缓冲，
-// 所以宽限可以从 2.5s 放宽到 6s，慢网络下也不会误判成丢片。
+// 所以宽限可以放宽到 9s，慢网络下也不会误判成丢片。
+// 分片提到 64 KB 后，一条消息会被 PeerJS 拆成 4 条再重组，尾片更容易慢半拍，
+// 这里留足余量是必要的。
 function waitRecvComplete(key, buf, t0) {
   if (recvBuf.get(key) !== buf) return;          // 已经收完 / 已被新传输顶掉
   if (buf.received >= buf.size) { finishRecv(key, buf); return; }
-  if (Date.now() - t0 > 6000) { dropRecv(key, buf); return; }
+  if (Date.now() - t0 > 9000) { dropRecv(key, buf); return; }
   setTimeout(() => waitRecvComplete(key, buf, t0), 100);
 }
 // 真的缺片了：丢弃这条传输，并且把下载队列的状态清干净，
@@ -1349,7 +1461,7 @@ async function toggleScreenShare() {
     return;
   }
   if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-    notify('当前访问方式不支持共享桌面：需要 https 链接，或在本机打开。移动端浏览器通常只能观看，不能发起共享。');
+    notify('不支持发起共享：需要 https 或本机地址，手机通常只能观看。');
     return;
   }
   let stream;
@@ -1513,7 +1625,8 @@ function pullWatchdogTick() {
     }
     const w = document.getElementById('pullwrap-' + mid);
     if (w) { w.style.display = 'none'; const bar = w.querySelector('.pull-bar i'); if (bar) bar.style.width = '0%'; }
-    notify('「' + mid + '」下载超时，点卡片可重试');
+    const dm = localMsgs.find(x => x.id === mid);
+    notify('「' + ((dm && dm.name) || '文件') + '」下载超时，点卡片重试');
     freed = true;
   }
   if (freed) pumpPullQueue();
@@ -1548,7 +1661,7 @@ function pumpPullQueue() {
   ensurePullWatchdog();
   try {
     guestConn.send('FILE_PULL:' + JSON.stringify({ mid: job.mid, name: job.name }));
-    setStatus('正在请求下载: ' + job.name);
+    setStatus('正在下载 ' + job.name + '…');
     // 卡片正下方的进度条先亮起来
     const w = document.getElementById('pullwrap-' + job.mid);
     if (w) {
@@ -1813,6 +1926,7 @@ async function applyRoomP2P(on) {
     // 关：先告诉每一台已经连着的设备「这里关门外网了」，再把连接收掉。
     // 只是静默断开的话，访客那边只会当成一次掉线，自动重连回来又被拒，
     // 界面就一直挂在「正在重新连接」——人既没被踢回起始页，也不知道发生了什么。
+    failAllFileAcks();
     for (const [, e] of hostConns) {
       if (e && e.conn && e.conn.open) { try { e.conn.send('P2P_OFF'); } catch (err) {} }
     }
@@ -1823,7 +1937,7 @@ async function applyRoomP2P(on) {
       for (const id of [...hostConns.keys()]) dropHostConnQuiet(id);
       renderMembers();
     }, 220);
-    toast('外网已关闭，同一 WiFi 的设备不受影响');
+    toast('外网已关闭，局域网不受影响');
   } else {
     setupInvite(ROOM);
     // 开着却没注册上（比如关的时候页面刚重载过）：补一次注册，正常情况这里什么都不做
@@ -2038,9 +2152,7 @@ async function dissolveRoom() {
     toast('销毁失败，请确认本机程序仍在运行');
     return;
   }
-  onRoomClosed(CHANNEL === 'cloud'
-    ? '房间已销毁，房间码已作废，浏览器里的聊天记录与文件已清除。要重新使用，点「创建房间」开一个新房间。'
-    : '房间已销毁，房间码已作废，本机聊天记录与接收文件已删除。要重新使用，点「创建房间」开一个新房间。');
+  onRoomClosed('房间已销毁，聊天记录与接收文件已清除。');
   dissolving = false;
   if (btn) btn.disabled = false;
 }
@@ -2066,6 +2178,7 @@ function onRoomClosed(tip) {
   }
   hostConns.clear();
   recvBuf.clear();
+  failAllFileAcks();
   if (pcPeer) {
     const p = pcPeer;
     pcPeer = null;
@@ -2095,7 +2208,7 @@ function onRoomClosed(tip) {
   if (isLanClient || JOIN_REQUIRED) showLanGate();
   else if (SEED_MODE === 'host') showHostGate();   // 本机：房间没了，重新点「创建房间」
   else gateShowChoices();
-  if (tip) gateMsg(tip, 'info');
+  if (tip) gateMsg(tip, 'warn');
 }
 // 局域网设备：房间码变了 / 房间没了，凭证失效，退回入口页重新输
 function onNeedJoin() {
@@ -2103,6 +2216,7 @@ function onNeedJoin() {
   roomClosed = true;
   applyDevicePrivacy();
   stopPolling();
+  stopRoomStat();                    // 房间没了就别再每秒算倒计时
   lanPeers = 0;
   hostP2PCount = 0;
   lastRev = null;
@@ -2119,9 +2233,13 @@ function onNeedJoin() {
   try { history.replaceState(null, '', location.pathname); } catch (e) {}
   forgetJoinRoom();           // 凭证已失效：先清回连记录，别让 showLanGate 又自动连回旧码
   showLanGate();
-  gateMsg('房间码已经变了（房主新建或销毁了房间），请重新输入。', 'info');
+  gateMsg('房间码已变，请重新输入。', 'warn');
 }
 let hostRetry = 0;
+// 信令断开后的退避重连：PeerJS 的 reconnect() 若立刻失败会再抛一次 disconnected，
+// 无脑重连等于把自己打成限流，反而更连不上。
+let hostSignTry = 0;
+let hostReSignAt = 0;
 // 「外网加入」从关拨回开的那条路：重试次数给足，且绝不换房间码
 let hostGraceful = false;
 // 创建房间时先在入口页把房主 Peer 注册好，PeerJS 报 open 才算「房间真的可用」，
@@ -2178,6 +2296,8 @@ function startHostPeer(roomCode) {
   pcPeer = reuse || new Peer('pc-' + roomCode, peerOpts());
   const onReady = () => {
     hostRetry = 0;
+    hostSignTry = 0;
+    hostReSignAt = 0;
     hostGraceful = false;
     refreshReady();
   };
@@ -2222,11 +2342,12 @@ function startHostPeer(roomCode) {
       renderAll();
       // 连接建立后 ICE 还要一小会儿才收敛，晚一点再去读对端地址
       setTimeout(() => resolvePeerIp(entry), 1200);
-      // 通道开了却一直不报身份（半路夭折、页面被关）：8 秒后悄悄收掉，
-      // 免得房主那边留一个既没名字也没内容的「幽灵设备」
+      // 通道开了却一直不报身份（半路夭折、页面被关）：20 秒后悄悄收掉，
+      // 免得房主那边留一个既没名字也没内容的「幽灵设备」。
+      // 原来给 8 秒，手机弱网冷启动握手经常超过 10 秒，人还没进来就被踢了。
       entry.regTimer = setTimeout(() => {
         if (!entry.registered) dropHostConnQuiet(id);
-      }, 8000);
+      }, 20000);
     });
     // 每台设备一个 ctx，handleData 靠它区分是谁发来的
     c.on('data', d => handleData(d, { id: id, conn: c, name: entry.name }));
@@ -2247,8 +2368,18 @@ function startHostPeer(roomCode) {
   // 对方发起桌面共享时在这里接住
   pcPeer.on('call', acceptScreenCall);
   pcPeer.on('disconnected', () => {
-    showHostHint('信令连接断开，正在自动重连…');
-    try { pcPeer.reconnect(); } catch (e) {}
+    if (!P2P_ON) return;                      // 外网关着，信令在不在都无所谓
+    if (hostReSignAt && Date.now() < hostReSignAt) return;   // 退避期内不重复触发
+    hostSignTry = Math.min(hostSignTry + 1, 3);
+    const wait = 1500 * Math.pow(2, hostSignTry - 1);        // 1.5s → 3s → 6s
+    hostReSignAt = Date.now() + wait;
+    showHostHint('信令连接断开，正在重连…');
+    setTimeout(() => {
+      hostReSignAt = 0;
+      if (!pcPeer || pcPeer.destroyed) return;
+      if (pcPeer.open) { hostSignTry = 0; return; }
+      try { pcPeer.reconnect(); } catch (e) {}
+    }, wait);
   });
   pcPeer.on('error', err => {
     const t = (err && err.type) || 'unknown';
@@ -2256,8 +2387,11 @@ function startHostPeer(roomCode) {
       // 刷新页面时旧连接可能还没被信令服务器释放，先重试拿回同一个码，
       // 直接换码会让已经发出去的邀请链接全部失效
       // hostGraceful = 刚从「外网加入」的关拨回开：这条路上更等得起，
-      // 因为此刻房间里已经有人，换码会把他们全踢掉
-      const cap = hostGraceful ? 12 : 3;
+      // 因为此刻房间里已经有人，换码会把他们全踢掉。
+      // 房间里只要有设备在线，也一律按 graceful 处理——为了抢一个房间码
+      // 把全房间踢掉，代价远大于多等几秒。
+      const hasGuests = hostConns.size > 0;
+      const cap = (hostGraceful || hasGuests) ? 12 : 3;
       if (hostRetry < cap) {
         hostRetry++;
         showHostHint('正在重新接入房间…（第 ' + hostRetry + ' 次）');
@@ -2265,10 +2399,10 @@ function startHostPeer(roomCode) {
           try { pcPeer.destroy(); } catch (e) {}
           startHostPeer(roomCode);
         }, 1000 * Math.min(hostRetry, 3));
-      } else if (hostGraceful) {
+      } else if (hostGraceful || hasGuests) {
         hostGraceful = false;
         hostRetry = 0;
-        showHostHint('外网通道暂时接不上信令服务器，局域网不受影响；稍后再拨一次开关试试');
+        showHostHint('外网通道暂时接不上信令服务器，已在房间的设备不受影响；稍后会再试');
       } else {
         hostRetry = 0;
         showHostHint('这个房间码被别的页面占着，正在换一个新码…');
@@ -2665,8 +2799,11 @@ function dropHostConnById(id, byPeer) {
 //   1) 数据通道已关 / 底层 PeerConnection 已经 failed 或 closed → 立刻摘掉
 //   2) 通道还开着但 12 秒没回 PONG（每轮敲一次 PING）→ 记一次，连续两次摘掉
 // 阈值有意放宽：弱网下短暂卡顿不该把人踢掉，约 15 秒无响应才判定离开。
+// 阈值有意放宽：弱网、手机切后台都会让 PONG 晚到，宁可多等也别把人误踢。
+// 现在约 60 秒无响应才判定离开（30 秒 × 2 次），且页面在后台时完全不判。
+// 真正「人已经走了」由对端的 pagehide→BYE 当场告知，不用靠超时兜。
 const SCAN_MS = 5000;
-const PONG_TIMEOUT_MS = 12000;
+const PONG_TIMEOUT_MS = 30000;
 let connScanTimer = null;
 
 function startConnScan() {
@@ -2676,6 +2813,9 @@ function startConnScan() {
 function scanHostConns() {
   if (MODE !== 'host' || isLanClient || !hostConns.size) return;
   const now = Date.now();
+  // 页面在后台时浏览器会冻结定时器和 JS：这时的「没回 PONG」不代表人走了。
+  // 后台一律不判死、也不发 PING，切出去一圈再回来，设备还在。
+  const hidden = document.visibilityState === 'hidden';
   for (const [id, e] of hostConns) {
     if (!e || !e.conn) { hostConns.delete(id); continue; }
     // 刚建连、握手还没走完（open 还没触发）的先放过，否则慢网下会被误杀
@@ -2685,10 +2825,40 @@ function scanHostConns() {
     }
     const pc = e.conn.peerConnection;
     const pcState = pc ? (pc.connectionState || pc.iceConnectionState || '') : '';
-    if (!e.conn.open || pcState === 'closed' || pcState === 'failed') {
+    if (!e.conn.open || pcState === 'closed') {
       dropStaleConn(id);
       continue;
     }
+    // failed 有时会自愈（ICE 重启）：给 8 秒观察期，别一看到就摘
+    if (pcState === 'failed') {
+      e.failedAt = e.failedAt || now;
+      if (now - e.failedAt > 8000) { dropStaleConn(id); continue; }
+    } else {
+      e.failedAt = 0;
+    }
+    if (hidden) continue;
+    // ── 传输中不判死 ──────────────────────────────────────────────
+    // DataChannel 是「可靠 + 有序」的：PING 会排在几千条文件分片后面，
+    // PONG 得等这些分片全部送达才回得来。传 1 GB 时这个延迟远超 60 秒，
+    // 结果就是「连接明明在正常收数据，却被当成僵尸摘掉」——大文件中途掉线的主因。
+    // 所以只要连接还「在动」，就把 PING 判死让路；真卡死由 120 秒无变化兜底。
+    const rec = recvBuf.get(id);
+    const inflight = buffered(e.conn);
+    if (rec || inflight > 0 || e.conn.__sending) {
+      // 接收方向看已收字节，发送方向看缓冲字节：两者任一在变就说明链路活着
+      const mark = rec ? rec.received : inflight;
+      if (mark !== e.lastMark) { e.lastMark = mark; e.bufAt = now; }
+      else if (!e.bufAt) { e.bufAt = now; }
+      if (now - e.bufAt > 120000) {
+        // 两分钟一个字节都没动：这不是慢，是真的僵住了
+        dropStaleConn(id);
+        continue;
+      }
+      e.lastPong = now;      // 有字节在走，等同于收到 PONG
+      continue;              // 传输期间连 PING 都不发，别再往队列里塞
+    }
+    e.lastMark = -1;         // 传输结束后重置，下次进忙态能立刻记到变化
+    e.bufAt = 0;
     if (now - (e.lastPong || 0) > PONG_TIMEOUT_MS) {
       e.missed = (e.missed || 0) + 1;
       if (e.missed >= 2) { dropStaleConn(id); continue; }
@@ -2702,6 +2872,13 @@ function dropStaleConn(id) {
   if (!e) return;
   if (e.regTimer) { clearTimeout(e.regTimer); e.regTimer = null; }
   const c = e.conn;
+  // 这条连接上如果还有没传完的文件，先明确回一个 NAK 再摘。
+  // 不回的话对端要干等到 20~90 秒的回执超时才报错，用户看到的就是
+  // 「进度条卡住不动，过很久才说失败」。
+  const half = recvBuf.get(id);
+  if (half && half.received < half.size && c && c.open) {
+    try { c.send('FILE_NAK:' + half.id); } catch (err) {}
+  }
   hostConns.delete(id);
   recvBuf.delete(id);
   setTimeout(() => { try { c.close(); } catch (err) {} }, 60);
@@ -2809,9 +2986,19 @@ function initHost() {
 // existing: 入口页已经探通连接时传入 {peer, conn}，直接复用，避免重复握手
 function initGuest(room, existing) {
   MODE = 'guest';
+  // 退出 / 刷新时主动道别：DataChannel 的关闭帧不一定来得及发出去，
+  // 房主只能等 PONG 超时（现在 60 秒）才把人摘掉。主动说一句 BYE，
+  // 房主当场就清掉这条设备，刷新回来也不会留一个「幽灵」。
+  if (!window.__byeWired) {
+    window.__byeWired = true;
+    window.addEventListener('pagehide', () => {
+      try { if (MODE === 'guest' && guestConn && guestConn.open) guestConn.send('BYE'); } catch (e) {}
+    });
+  }
   rememberJoinRoom(room);     // 记住本标签页的房间：刷新后自动回连，不用重输码
   applyDevicePrivacy();       // 访客只看得到自己的连接状态，看不到设备数 / IP
   guestGoneHandled = false;   // 重新进房，允许下一次「房间已不存在」再触发收尾
+  peerAck = false;            // 每次进房重新协商，绝不继承上一间房的能力
   showOtherDeviceCard('外网直连', room || '');
   setGuestActions('connecting');   // 连接中先不给按钮
 
@@ -2832,7 +3019,7 @@ function initGuest(room, existing) {
     guestPeer = existing.peer;
     guestConn = existing.conn;
     wireGuestPeer(guestPeer, room, (m, t, r, g) => {
-      if (g) guestRoomGone('房间已不存在或房主页面已关闭，已返回起始页。');
+      if (g) guestRoomGone('房间已不存在或房主已离开。');
       else failGuest(m, t);
     });
     wireGuestConn(guestConn, (m, t) => failGuest(m, t));
@@ -2853,6 +3040,10 @@ function initGuest(room, existing) {
   guestConnect(room);
 }
 let guestRetry = 0;
+let guestSignAt = 0;         // 上一次信令重连的时间：防止 disconnected 连环触发打成限流
+let guestCallSoft = 0;       // 本次尝试内「只重发呼叫、不重建信令」的次数
+let guestPhase = 'idle';     // signaling / calling / connected / recovering
+const TIP_CONNECT = '未能与对方设备建立直连，多为 NAT 限制或信令不通。建议两台设备连同一 WiFi 用局域网模式，或点右上角的网络图标配一台 TURN 中继服务器。';
 let guestTimer = null;
 let guestAutoTimer = null;   // 断线后的自动重连定时器
 let guestAutoTry = 0;        // 自动重连已尝试次数
@@ -2874,7 +3065,7 @@ function guestConnect(roomArg) {
 // 断线重连：信令长连接还活着时，重开一条数据通道通常只要几百毫秒，
 // 所以第一次不等，直接连；信令也断了才按 0.6s / 1.5s / 3s 退避，最多 4 次。
 // 主动断开（peerBye）一律不重连。
-const RETRY_WAITS = [0, 600, 1500, 3000];
+const RETRY_WAITS = [0, 600, 1500, 3000, 5000, 5000];
 function signalAlive() {
   return !!(guestPeer && !guestPeer.destroyed && guestPeer.open);
 }
@@ -2890,7 +3081,7 @@ function scheduleGuestRetry() {
   if (guestAutoTimer) return true;       // 已经有重连在排队，别重复
   if (guestAutoTry >= RETRY_WAITS.length) {
     // 多次重连都找不到房主：房间多半已经关了，别留在聊天主页面
-    guestRoomGone('与房间的连接中断后多次重连都没有找到房主，房间可能已关闭，已返回起始页。');
+    guestRoomGone('多次重连未找到房主，房间可能已结束。');
     return true;
   }
   // 信令还在就立刻重连；否则按退避表等，且给一次「刚断线马上恢复」的机会
@@ -2907,9 +3098,30 @@ function scheduleGuestRetry() {
 }
 // 网络恢复 / 页面切回前台：退避定时器还没走完也立刻插队重试一次，
 // 不然手机解锁后还要干等好几秒才恢复聊天。
+// 「假连接」判定：连接对象还说自己是 open，底层 PeerConnection 却已经 failed/closed。
+// 手机切后台久了、WiFi 换 4G、运营商 NAT 表项过期都会这样——
+// 界面显示「已连接」，一点发文件才报错，用户以为是自己网的问题。
+function connDead(c) {
+  if (!c || !c.open) return true;
+  try {
+    const dc = c.dataChannel;
+    if (dc && dc.readyState && dc.readyState !== 'open') return true;
+  } catch (e) {}
+  let pc = null;
+  try { pc = c.peerConnection || c._pc || null; } catch (e) {}
+  if (!pc) return false;
+  const st = pc.connectionState || pc.iceConnectionState || '';
+  return st === 'failed' || st === 'closed';
+}
 function flushGuestRetry() {
   if (MODE !== 'guest' || peerBye || !currentRoom) return false;
-  if (guestConnState === 'connected' && guestConn && guestConn.open) return false;
+  if (guestConnState === 'connected' && guestConn && guestConn.open) {
+    // 回到前台先体检：假连接直接判死重开，不等用户发文件才发现
+    if (!connDead(guestConn)) return false;
+    failAllFileAcks();
+    setGuestActions('connecting');
+    setStatus('连接已中断，正在重连…');
+  }
   if (guestAutoTimer) { clearTimeout(guestAutoTimer); guestAutoTimer = null; }
   if (guestTimer) { clearTimeout(guestTimer); guestTimer = null; }
   try {
@@ -2951,6 +3163,9 @@ function resetToGate() {
   guestAutoTry = 0;
   guestGoneHits = 0;
   pullInFlight.clear(); pullQueue.length = 0; pullStartAt.clear();   // 清掉没完成的下载任务
+  failAllFileAcks();          // 等回执的传输立刻判失败，别把发送队列挂住
+  peerAck = false;            // 下一间房的房主可能是旧版，能力要重新协商
+  recvBuf.clear();            // 残片不带进下一间房
   serverMsgs = []; localMsgs = [];
   seenIds = new Set();
   myName = '';
@@ -2976,6 +3191,7 @@ function resetToGate() {
 function guestRoomGone(tip) {
   if (MODE !== 'guest' || guestGoneHandled) return;
   guestGoneHandled = true;
+  failAllFileAcks();
   peerBye = true;                    // 关连接时别再触发自动重连
   if (guestTimer) { clearTimeout(guestTimer); guestTimer = null; }
   if (guestAutoTimer) { clearTimeout(guestAutoTimer); guestAutoTimer = null; }
@@ -2983,12 +3199,15 @@ function guestRoomGone(tip) {
   try { if (guestPeer) guestPeer.destroy(); } catch (e) {}
   guestConn = null; guestPeer = null;
   stopScreenShare();
-  resetToGate();                    // 里面把 guestGoneHandled 放开
-  if (tip) gateMsg(tip, 'info');
+  resetToGate();                    // initGuest 会重新放开 guestGoneHandled
+  if (tip) gateMsg(tip, 'warn');
 }
 // 访客被房主断开 / 拒绝：清掉连接、退回入口页，并说明原因。
 // peerBye 必须置上，否则 conn 的 close 事件会把它当成掉线、自动重连回来。
-function guestReturnToGate(msg) {
+function guestReturnToGate(msg, kind) {
+  if (guestGoneHandled) return;   // 房间销毁通知可能和它前后脚到，只收尾一次
+  guestGoneHandled = true;
+  failAllFileAcks();
   peerBye = true;
   if (guestAutoTimer) { clearTimeout(guestAutoTimer); guestAutoTimer = null; }
   try { if (guestConn) guestConn.close(); } catch (e) {}
@@ -2996,10 +3215,11 @@ function guestReturnToGate(msg) {
   guestConn = null; guestPeer = null;
   stopScreenShare();
   resetToGate();
-  if (msg) gateMsg(msg, 'err');
+  if (msg) gateMsg(msg, kind || 'warn');
 }
 function connectOnce(room) {
   if (guestTimer) { clearTimeout(guestTimer); guestTimer = null; }
+  guestCallSoft = 0;
   // 这条旧通道是自己关的，别让它的 close 事件又触发一轮重连
   try {
     if (guestConn) { guestConn.__ignoreClose = true; guestConn.close(); }
@@ -3010,6 +3230,12 @@ function connectOnce(room) {
   const fail = (msg, tip, retry, gone) => {
     // 已经主动断开 / 退回起始页了，迟到的超时或信令错误一律不再处理
     if (peerBye || MODE !== 'guest' || !currentRoom) return;
+    // 通道已经通了：信令层的抖动与它无关，绝不能因为信令报错去拆一条正在传文件的连接。
+    // 只有「房间确实没了」（gone）才继续往下走。
+    if (!gone && guestConnState === 'connected' && guestConn && guestConn.open) {
+      showGuestTip('信令有波动，当前连接不受影响。');
+      return;
+    }
     if (guestTimer) { clearTimeout(guestTimer); guestTimer = null; }
     // 失败时把还没打通的通道自己收掉：它的 close 事件不能再触发另一轮重连，
     // 更不能因为「还没收到 WELCOME」把人直接踢回起始页，短重试才有机会生效。
@@ -3019,28 +3245,40 @@ function connectOnce(room) {
       try { guestConn.close(); } catch (e) {}
       guestConn = null;
     }
-    // 信令说「这个房主 Peer 不存在」= 房间没了。但房主刷新页面时
-    // Peer ID 也会短暂注销，所以连着两次确认不到才判定真的关闭。
-    guestGoneHits = gone ? guestGoneHits + 1 : 0;
-    if (guestGoneHits >= 2) {
-      guestRoomGone('房间已不存在或房主页面已关闭，已返回起始页。可重新输入房间码加入。');
-      return;
+    // 信令说「这个房主 Peer 不存在」= 可能房间没了。但房主刷新页面时 Peer ID
+    // 也会先注销再注册，中间必然出现 peer-unavailable。以前累计 2 次（约 1 秒）
+    // 就判定房间结束——房主只要刷新一下，全房间的人都被踢回起始页。
+    // 现在要连续 4 次、约 8 秒都找不到，才认定房间真的关了。
+    if (gone) {
+      guestGoneHits++;
+      if (guestGoneHits >= 4) {
+        guestRoomGone('房间已不存在或房主已离开。');
+        return;
+      }
+    } else {
+      guestGoneHits = 0;
     }
-    if (retry && guestRetry < 2) {
+    if (retry && guestRetry < 5) {
       guestRetry++;
+      guestPhase = 'recovering';
       setStatus(msg + '，正在自动重试…');
       showGuestTip(tip);
-      // 连不上时别反复复用同一条半死的信令 socket（网络切换后它常常看着还 open，
-      // 其实已经收不到任何东西），换一条新的再试，成功率明显更高。
-      dropGuestSignal();
-      setTimeout(() => connectOnce(room), 400);
+      // 关键：信令还活着就绝不拆它。以前无条件 dropGuestSignal()，等于把刚握到
+      // 一半的 ICE 扔掉、从「连接信令服务器」重来——界面在 ①② 之间来回闪就是这个。
+      if (!signalAlive()) dropGuestSignal();
+      // 「找不到房主」比「NAT 打不通」更需要耐心：刷新页面要几秒才重新注册上。
+      // 5 次的总窗口约 25 秒，覆盖手机冷启动、4G 弱信号、房主刷新这类常见情况；
+      // 以前只给 3 次（约 12 秒），弱网下经常还没握上就报失败。
+      const wait = gone ? ([1200, 2500, 4000, 5000, 5000][guestRetry - 1] || 5000)
+                        : ([800, 1600, 3200, 4000, 4000][guestRetry - 1] || 4000);
+      setTimeout(() => connectOnce(room), wait);
     } else if (gone) {
-      // 第一次没找到房间：几秒后再确认一次，不留在主页面干等
+      // 重试次数用完了还在「找不到房主」：继续按 3 秒一轮确认，别提前离场
       setStatus('正在确认房间是否还在…');
-      showGuestTip('房主页面可能正在刷新，稍等几秒再确认一次。');
+      showGuestTip('房主可能正在刷新，稍等几秒。');
       setTimeout(() => {
         if (MODE === 'guest' && !peerBye && currentRoom) connectOnce(room);
-      }, 2500);
+      }, 3000);
     } else {
       failGuest(msg, tip);
     }
@@ -3065,24 +3303,60 @@ function connectOnce(room) {
     });
   }
   const peer = p;
+  // 本次尝试内，同一时刻只允许一次 connect：信令的 open 可能重复触发，
+  // 重复呼叫会让房主那边多出一条连接，关掉时又引发一轮重连，界面就开始闪
+  let callInFlight = false;
   const call = () => {
     if (peerBye || MODE !== 'guest' || !currentRoom) return;
     // 信令断线重连成功后也会再报一次 open：这时已经连着了就别再呼叫一遍，
     // 否则房主那边会多出一条重复连接
     if (guestConnState === 'connected' && guestConn && guestConn.open) return;
+    if (callInFlight) return;
+    callInFlight = true;
     setStatus('② 已连到信令，正在呼叫对方设备…');
+    guestPhase = 'calling';
     // 复用已有信令时，入口页那条没用上的预热连接顺手收掉，别白占一条 WebSocket
     const spare = takeWarmPeer();
     if (spare && spare !== peer) { try { spare.destroy(); } catch (e) {} }
+    // 上一次没谈成的半截通道先收掉，别让它和新通道同时活着
+    try {
+      if (guestConn && !guestConn.open) { guestConn.__ignoreClose = true; guestConn.close(); }
+    } catch (e) {}
     guestConn = peer.connect('pc-' + room, { reliable: true, metadata: identityMeta() });
-    wireGuestConn(guestConn, (msg, tip) => fail(msg, tip, true), () => {
+    const unlock = () => { callInFlight = false; };
+    try { guestConn.on('close', unlock); guestConn.on('error', unlock); } catch (e) {}
+    wireGuestConn(guestConn, (msg, tip) => { unlock(); fail(msg, tip, true); }, () => {
+      unlock();
       if (guestTimer) { clearTimeout(guestTimer); guestTimer = null; }
       markGuestConnected();
     });
   };
-  setStatus(peer.open ? '② 已连到信令，正在呼叫对方设备…' : '① 正在连接信令服务器…');
-  // 10 秒还没连上就判超时：以前 16 秒干等太久，早一点换条信令重试更省时间
-  guestTimer = setTimeout(() => fail('连接超时', '未能与对方设备建立直连，多为 NAT 限制或信令不通。建议两台设备连同一 WiFi 用局域网模式，或点右上角的网络图标配一台 TURN 中继服务器。', true), 10000);
+  // 通道没谈成、但信令还活着：只重发一次 connect，绝不销毁信令重来。
+  // 以前这里直接判失败 → dropGuestSignal() → 从「连接信令服务器」重新开始，
+  // 界面就在 ① 和 ② 之间来回闪，那才是用户看到的「断开又连上」。
+  const softRetry = () => {
+    if (peerBye || MODE !== 'guest' || !currentRoom) return;
+    if (guestConn && guestConn.open) return;
+    if (!peer.open) { fail('连接超时', TIP_CONNECT, true); return; }
+    if (guestCallSoft < 4) {
+      guestCallSoft++;
+      guestPhase = 'recovering';
+      setStatus('正在重新建立直连…');
+      callInFlight = false;          // 上一轮可能卡在「已呼叫但没有任何事件」的状态
+      call();
+      guestTimer = setTimeout(softRetry, 15000);
+      return;
+    }
+    fail('连接超时', TIP_CONNECT, true);
+  };
+  setStatus(peer.open ? '② 已连到信令，正在呼叫对方设备…'
+                      : (guestPhase === 'recovering' ? '正在恢复连接…' : '① 正在连接信令服务器…'));
+  guestPhase = peer.open ? 'calling' : 'signaling';
+  // 分阶段超时：信令还没通给 24 秒（手机冷启动 + 弱网握手常见 10～20 秒），
+  // 已通但通道没谈成给 18 秒。之前 15/12 秒在 4G 弱信号下会被反复误判，
+  // 每误判一次就重发一轮呼叫——用户看到的「闪一下又连上」就是这么来的。
+  // 超时只重发呼叫，不销毁信令，这是「不再闪」的关键。
+  guestTimer = setTimeout(softRetry, peer.open ? 18000 : 24000);
   // 同一条信令连接只挂一次 open 监听，靠可替换钩子调用「最新一次」的 call：
   // 以前每次重试都新挂一个，open 一来会同时呼叫好几次，房主那边多出一堆幽灵连接
   peer.__callHook = call;
@@ -3103,12 +3377,45 @@ function failGuest(msg, tip) {
 // 对端 Peer 上的通用事件（信令断开、来电、错误）
 function wireGuestPeer(peer, room, onFail) {
   peer.on('call', acceptScreenCall);
-  peer.on('disconnected', () => { try { peer.reconnect(); } catch (e) {} });
+  peer.on('disconnected', () => {
+    // 通道已经通了就别惊动它：信令只是一条「介绍人」，介绍完了就没用了。
+    // 对方项目里 WS 断了根本不去碰 PeerConnection，这正是它看起来稳的原因；
+    // 我们以前一断就 reconnect()，撞上 unavailable-id 反而把好连接一起拆了。
+    if (guestConnState === 'connected' && guestConn && guestConn.open) return;
+    // 1.5 秒内只重连一次：reconnect() 失败会再抛一次 disconnected，
+    // 连环重连会被公共信令当成攻击，直接把你限流——那才是「一直连不上信令」。
+    if (Date.now() - guestSignAt < 1500) return;
+    guestSignAt = Date.now();
+    try { peer.reconnect(); } catch (e) {}
+  });
   peer.on('error', err => {
     const t = (err && err.type) || 'unknown';
+    // 同上：通道已经通了，信令层的任何毛病都不该影响正在传的文件
+    if (guestConnState === 'connected' && guestConn && guestConn.open &&
+        t !== 'peer-unavailable') {
+      try { console.warn('[signal] 已连接，忽略信令错误:', t); } catch (e) {}
+      return;
+    }
+    if (t === 'unavailable-id') {
+      // 重连时复用旧 Peer ID，信令服务器还没释放就会报这个——这是正常现象，不是失败。
+      // 以前它落进 else 分支被当成「连接失败」→ 清理重来 → 再撞 → 死循环，界面一直闪。
+      // 正确做法：静默换一条全新 ID 的信令，界面停在「正在恢复连接」，不跳 ①。
+      try { peer.destroy(); } catch (e) {}
+      if (guestPeer === peer) guestPeer = null;
+      guestRetry = 0;
+      guestPhase = 'recovering';
+      setStatus('正在恢复连接…');
+      setTimeout(() => {
+        if (!peerBye && MODE === 'guest' && currentRoom) connectOnce(currentRoom);
+      }, 400);
+      return;
+    }
     if (t === 'peer-unavailable') {
       // 信令明确找不到 pc-<房间码>：房间可能已销毁/换码，交给上层确认后回起始页
       onFail('未找到对方设备', '正在确认房间是否还在…', true, true);
+    } else if (t === 'negotiation-failed' || t === 'ice-failed' || t === 'datachannel-error') {
+      // 通道谈崩但信令没问题：重发呼叫即可，别把整条信令拆了
+      onFail('直连没谈成', '正在换一种方式重试…', true);
     } else if (t === 'network' || t === 'server-error' || t === 'socket-error') {
       onFail('信令服务器连不上', '当前网络访问 PeerJS 公共信令服务器失败，可切换 WiFi / 蜂窝网络，或用系统浏览器打开。', true);
     } else {
@@ -3182,10 +3489,16 @@ function wireGuestConn(conn, onFail, onOpen) {
   conn.on('data', d => handleData(d, null));
   conn.on('close', () => {
     if (conn.__ignoreClose || peerBye) return;  // 自己换掉 / 主动断开的，不自动恢复
-    // 还没拿到 WELCOME 就被关掉：房主那句 WELCOME 没发过来（页面关了、网络断了），
-    // 这种情况不自动重连，退回入口页让用户自己决定
+    // 还没拿到 WELCOME 就被关掉：房主那句 WELCOME 没发过来（页面卡住、正在刷新、
+    // 或网络瞬断）。以前这里直接把人踢回入口页，得重新输一遍房间码；
+    // 现在先走自动重连，几轮都握不上才回入口页。
     if (!myName) {
-      guestReturnToGate('没进得去：房间那边没有回应（房主的页面可能已经关闭）。请稍后重新加入。');
+      if (scheduleGuestRetry()) {
+        setGuestActions('connecting');
+        setStatus('连接中断，正在重连…');
+        return;
+      }
+      guestReturnToGate('房主没有回应，请稍后重新加入。', 'err');
       return;
     }
     setGuestActions('connecting');
@@ -3236,6 +3549,9 @@ function markGuestConnected() {
   guestAutoTry = 0;
   guestGoneHits = 0;
   peerBye = false;
+  guestPhase = 'connected';
+  guestRetry = 0;
+  guestCallSoft = 0;
   // 连上后状态行整行收起，卡片只留「通道名 / 房间号 / 断开连接」
   setGuestActions('connected');    // 连上后只留「断开连接」
   setStatus('');                   // 顺手清掉连接阶段文字，掉线重连时不会翻旧账
@@ -3265,7 +3581,9 @@ function itemProgress(it, frac) {
     it._t = now;
     it._lastPct = it.pct;
   }
-  updateItemUI(it);
+  // 同上：发送端每片都刷一次进度会让 1 GB 传输做一万多次 DOM 重排，
+  // 这些都发生在「发下一片」之前，等于自己给自己限速。90ms 一次足够。
+  if (now - (it._uiT || 0) >= 90 || it.pct >= 100) { it._uiT = now; updateItemUI(it); }
 }
 
 async function sendAll() {
