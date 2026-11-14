@@ -338,7 +338,7 @@ def room_watchdog():
         time.sleep(10)
 
 
-def purge_stale_rooms():
+def purge_stale_rooms(keep_current=False):
     """清掉磁盘上残留的所有房间文件夹（由看门狗在程序退出时调用）
 
     房间只在内存里活着：程序一退，房间就没了；磁盘上遗留的文件夹
@@ -353,6 +353,9 @@ def purge_stale_rooms():
         return 0
     n = 0
     for name in names:
+        # 启动后台清理时房间可能刚好被创建：那个目录绝对不能删
+        if keep_current and name == ROOM:
+            continue
         if re.fullmatch(r'[A-Z2-9]{10}', name) and \
                 os.path.isdir(os.path.join(ROOM_ROOT, name)):
             shutil.rmtree(os.path.join(ROOM_ROOT, name), ignore_errors=True)
@@ -365,8 +368,11 @@ def _purge_old_rooms_bg():
     try:
         if ROOM:
             return
-        purge_stale_rooms()
+        purge_stale_rooms(keep_current=True)
         _drop_room_files()
+        # 清理与「创建房间」撞上时，补一次建目录，别让新房间一开始就缺接收文件夹
+        if ROOM:
+            ensure_room()
     except Exception:
         pass
 
@@ -455,9 +461,15 @@ _MSG_VER = 0        # 内容版本号：长轮询靠它判断「这期间有没�
 
 
 def bump_messages():
-    """消息内容变了（新增 / 删除 / 改状态）：调用方必须已持有 DATA_LOCK"""
+    """消息内容变了（新增 / 删除 / 改状态）：自增内容版本号唤醒长轮询。
+
+    自己取 DATA_LOCK（RLock 可重入，调用方持不持锁都安全）。以前要求
+    「调用方必须已持锁」，但 /upload、/text、/screen 三处实际都在锁外调用，
+    `_MSG_VER += 1` 不是原子操作，并发时会丢一次唤醒，长轮询少推一条消息。
+    """
     global _MSG_VER
-    _MSG_VER += 1
+    with DATA_LOCK:
+        _MSG_VER += 1
 
 
 def reset_messages():
@@ -559,12 +571,21 @@ def touch_client(cid):
 
 PEER_TIMEOUT = 25     # 秒：超过这么久没发过任何请求，算这台设备已经离开
 _LOCAL_IPS = None
+_LOCAL_IPS_AT = 0.0
+LOCAL_IPS_TTL = 2.0    # 秒：地址集合最多缓存 2 秒，换网络后自动跟上
 
 
 def local_ips():
-    """本机自己的所有地址。本机开多个标签页时不该被算成「别人进来了」"""
-    global _LOCAL_IPS
-    if _LOCAL_IPS is not None:
+    """本机自己的所有地址。本机开多个标签页时不该被算成「别人进来了」
+
+    以前整份结果永久缓存：换 WiFi / 插网线 / 开关 VPN 之后，新地址不在缓存里，
+    房主从 http://192.168.x.x:8000 打开自己的服务会被当成客人，反过来要求他
+    输房间码；旧地址却还被当成自己人，别人恰好用到那个 IP 时能直接读到房间。
+    现在短 TTL 重算整份集合（含当前出口 IP），2 秒内自动收敛，开销可忽略。
+    """
+    global _LOCAL_IPS, _LOCAL_IPS_AT
+    now = time.time()
+    if _LOCAL_IPS is not None and now - _LOCAL_IPS_AT < LOCAL_IPS_TTL:
         return _LOCAL_IPS
     ips = {'127.0.0.1', '::1', '0.0.0.0', get_lan_ip()}
     try:
@@ -572,8 +593,9 @@ def local_ips():
             ips.add(info[4][0])
     except Exception:
         pass
-    _LOCAL_IPS = ips
-    return ips
+    _LOCAL_IPS = frozenset(ips)
+    _LOCAL_IPS_AT = now
+    return _LOCAL_IPS
 
 
 def lan_peer_count():
@@ -828,8 +850,13 @@ _WIN_RESERVED = ({'CON', 'PRN', 'AUX', 'NUL'}
                  | {f'COM{i}' for i in range(1, 10)}
                  | {f'LPT{i}' for i in range(1, 10)})
 
-def unique_path(raw_name):
-    """过滤危险文件名，返回 (绝对路径, 实际保存名)；同名文件自动加序号"""
+def unique_path(raw_name, room=None):
+    """过滤危险文件名，返回 (绝对路径, 实际保存名)；同名文件自动加序号
+
+    room 由上传请求在开始时快照下来：一次流式上传可能持续很久，期间房间若被
+    销毁，全局 ROOM 变成 None，旧写法会把文件写进 `UNKNOWN/` 这个孤儿目录
+    （清理只认 10 位房间码，永远清不掉），还会往已清空的消息列表塞一条幽灵消息。
+    """
     name = os.path.basename(str(raw_name).replace('\\', '/')).strip()
     name = ''.join(c for c in name if ord(c) >= 32 and c not in '<>:"|?*')
     name = name.strip('. ') or 'unnamed'
@@ -837,13 +864,14 @@ def unique_path(raw_name):
     if stem.upper() in _WIN_RESERVED:
         name = stem + '_1' + ext
         stem = stem + '_1'
-    target = os.path.join(upload_dir(), name)
+    base = upload_dir(room)
+    target = os.path.join(base, name)
     if not os.path.exists(target):
         return target, name
     i = 1
     while True:
         candidate = f"{stem}_{i}{ext}"
-        path = os.path.join(upload_dir(), candidate)
+        path = os.path.join(base, candidate)
         if not os.path.exists(path):
             return path, candidate
         i += 1
@@ -889,22 +917,47 @@ class _MultipartStream:
             self.buf = data + self.buf
 
 
-def parse_multipart_stream(rfile, boundary, length):
-    """流式解析 multipart/form-data，逐块写盘
+def _rollback_saved(saved, room=None):
+    """把一次 multipart 里已经写盘的文件全部删掉：整单回滚，不留孤儿"""
+    base = upload_dir(room)
+    for name, _size in saved:
+        try:
+            path = os.path.join(base, name)
+            if os.path.isfile(path):
+                os.remove(path)
+        except OSError:
+            pass
+    saved.clear()
+
+
+def parse_multipart_stream(rfile, boundary, length, room_code=None):
+    """流式解析 multipart/form-data，逐块写盘；任何失败都整单回滚
 
     返回 (saved, fields)：
       saved  —— [(保存名, 字节数)]
       fields —— 普通文本字段（from / id 等），用来标注是谁发的、对应哪条消息
     """
     saved, fields = [], {}
+    try:
+        _parse_multipart_into(rfile, boundary, length, room_code, saved, fields)
+    except Exception:
+        # 第 N 个文件超限 / 解析中断时，前 N-1 个已经落盘却没有消息记录，
+        # 会变成占着磁盘、界面上看不见、房间清理也清不掉的孤儿。整单删掉。
+        _rollback_saved(saved, room_code)
+        raise
+    return saved, fields
+
+
+def _parse_multipart_into(rfile, boundary, length, room_code, saved, fields):
+    """实现体：saved / fields 由外层传入，异常时外层才能拿到已写文件清单"""
     if length <= 0:
-        return saved, fields
+        return
     stream = _MultipartStream(rfile, length)
     marker = b'--' + boundary
     sep = b'\r\n' + marker
     keep = len(sep) - 1
     if marker not in stream.readline():
-        return saved, fields
+        return
     while True:
         headers = []
         while True:
@@ -931,8 +984,19 @@ def parse_multipart_stream(rfile, boundary, length):
                 break
         fout, target, save_name, written = None, None, None, 0
         if filename:
-            target, save_name = unique_path(filename)
-            fout = open(target, 'wb')
+            # 'xb' 独占创建：把「检查是否存在」和「打开」合成一个原子步骤。
+            # ThreadingHTTPServer 是多线程的，exists() 与 open() 之间的空隙会让
+            # 两个并发上传（或访客 ACK 超时后重发同名文件）拿到同一个路径，
+            # 两个 fd 交错写入，最后文件内容是乱码却都返回 ok。
+            for _ in range(10000):
+                target, save_name = unique_path(filename, room_code)
+                try:
+                    fout = open(target, 'xb')
+                    break
+                except FileExistsError:
+                    continue
+            else:
+                raise OSError('同名文件过多，无法确定保存名')
         found = False
         field_buf = [] if (not fout and field_name) else None
         try:
@@ -947,6 +1011,10 @@ def parse_multipart_stream(rfile, boundary, length):
                     if fout:
                         fout.write(data[:idx])
                         written += idx
+                        # 分隔符和文件尾同批到达时也会走这里。以前只在
+                        # 「没找到分隔符」的分支查上限，小文件超限就漏过去了。
+                        if written > MAX_FILE_SIZE:
+                            raise ValueError('文件超过大小上限')
                     elif field_buf is not None:
                         field_buf.append(data[:idx])
                     stream.unread(data[idx + len(sep):])
@@ -990,7 +1058,7 @@ def parse_multipart_stream(rfile, boundary, length):
         tail = stream.readline()
         if not tail or tail.startswith(b'--'):
             break
-    return saved, fields
+    return
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1055,13 +1123,14 @@ class Handler(BaseHTTPRequestHandler):
     def _origin_ok(self):
         """写操作校验来源，防止其他网站盲发指令
 
-        - 没带 Origin：非浏览器请求，放行
-        - 同源（Origin 的 host:port 与本服务一致）：放行 —— 局域网设备就是这样访问的
-        - 其余必须在白名单里（在线页 https → 本机 8000 属于跨源，要显式放行）
+        - 带 Origin：同源或白名单才放行（在线页 https → 本机 8000 属于跨源）
+        - 没带 Origin：非浏览器请求。以前无条件放行，等于任何本机进程都能
+          盲发写指令；现在只放行本机回环，以及已经凭房间码进过房的设备
+          （join cookie 兜底，不影响 curl / 老客户端）。
         """
         origin = self.headers.get('Origin', '')
         if not origin:
-            return True
+            return is_self_client(self.client_address[0]) or self._join_cookie_ok()
         if _origin_allowed(origin):
             return True
         try:
@@ -1183,7 +1252,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_response(204)
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        # Range 不是 CORS 安全头：断点续传拉 /download 时会带它，跨源时要放行，
+        # 否则预检直接失败、续传只能退回整份重下
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Range')
+        self.send_header('Access-Control-Expose-Headers',
+                         'Content-Range, Content-Length, Accept-Ranges')
         self.send_header('Access-Control-Max-Age', '600')
         self.send_header('Content-Length', '0')
         self.end_headers()
@@ -1334,6 +1407,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
             name = qs.get('name', [''])[0]
             safe = os.path.basename(name.replace('\\', '/'))
+            # Python 3.8+ 对含 NUL 的路径，os.path.isfile 会直接抛 ValueError，
+            # do_GET 没有兜底 → 请求线程不打任何字节就挂住，可以被反复触发占满线程池。
+            if not safe or any(ord(c) < 32 for c in safe):
+                self._json({'ok': False, 'msg': '文件名非法'}, 400)
+                return
             fpath = os.path.join(upload_dir(), safe)
             if os.path.isfile(fpath):
                 touch_activity()      # 下载也算一次通信
@@ -1399,6 +1477,11 @@ class Handler(BaseHTTPRequestHandler):
 
         # 房主页面报「外网直连几台」，局域网设备靠它知道房间里还有谁
         if path == '/api/stats':
+            # 与 /api/devices 同样只认本机页面：任何已加入的局域网设备都能伪造
+            # p2p 人数，把 hostP2PCount / 成员数 / /api/host 全部带偏。
+            if not is_self_client(self.client_address[0]):
+                self._json({'ok': False, 'msg': '只有房主能上报在线人数'}, 403)
+                return
             length = int(self.headers.get('Content-Length', 0))
             body = self.rfile.read(min(length, 4096)).decode('utf-8', 'replace')
             raw = (urllib.parse.parse_qs(body).get('p2p', [''])[0] or '').strip()
@@ -1511,10 +1594,20 @@ class Handler(BaseHTTPRequestHandler):
             if length > MAX_FILE_SIZE + 1024 * 1024:
                 self._json({'ok': False, 'msg': '请求体超过大小上限'}, 413)
                 return
+            # 房间码在此刻快照，整段流式读取都用它：期间房间被销毁也不会
+            # 把文件写进 UNKNOWN 孤儿目录；失败回滚时也认准同一个目录。
+            room_snapshot = ROOM
             try:
-                saved, fields = parse_multipart_stream(self.rfile, boundary, length)
+                saved, fields = parse_multipart_stream(
+                    self.rfile, boundary, length, room_code=room_snapshot)
             except Exception as e:
                 self._json({'ok': False, 'msg': f'解析失败: {e}'}, 400)
+                return
+            if not has_room():
+                # 读文件的这几秒里房间被解散了：文件已落盘、消息列表却已清空。
+                # 先整单删掉，否则这些文件没有任何消息指向，界面看不到也清不掉。
+                _rollback_saved(saved, room_snapshot)
+                self._json({'ok': False, 'code': 'NO_ROOM', 'msg': '房间已结束'}, 409)
                 return
             touch_activity()      # 收到文件：房间还活着
             # from / id：房主替外网设备转存时带上，用来标注来源和对应同一条消息

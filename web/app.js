@@ -68,21 +68,23 @@ let hostConns = new Map();
 let hostSeq = 0;
 // 文件接收缓冲按连接隔离，否则两台设备同时发文件会串包
 let recvBuf = new Map();
-// 二进制分片若是 Blob 形式到达（部分手机浏览器），要异步读成 ArrayBuffer；
-// 这条链保证异步读取也严格按到达顺序拼进 recvBuf
-let chunkChain = Promise.resolve();
+// 二进制分片若是 Blob 形式到达（部分手机浏览器），要异步读成 ArrayBuffer。
+// 按连接各排一条 Promise 链：同一条连接的异步读取严格按到达顺序拼进 recvBuf，
+// 不同连接互不拖累（全局单链时，慢设备会把快设备的尾片拖到 9s 宽限超时）。
+const chunkChains = new Map();
 let guestPeer = null, guestConn = null;
 let myName = '';             // 本机在房间里的名字（房主为「房主」，访客由房主分配）
 let pushedIds = new Set();   // 房主端：已经转发给外网设备的消息 id
 let relaySeeded = false;     // 首次拉 /messages 只记 id 不转发（历史由 HISTORY 单独推）
-// 分片超过 PeerJS 内部的 chunkedMTU(16300) 后，PeerJS 会把每片再拆成多条消息、
-// 在接收端异步重组，最后一片可能晚一步才交上来。接收端对此有 9 秒宽限
-// （room.js 的 waitRecvComplete），所以这里可以放到 64 KB：
-// 每 1 MB 的 JS 调用从 67 次降到 16 次，是外网大文件吞吐提升最明显的一档。
-// 再往上收益递减，且 256 KB 会撞浏览器 sctp.maxMessageSize 上限。
-const CHUNK_SIZE = 65536;
-// 在途窗口：吞吐上限约等于「窗口 ÷ RTT」。512 KB 在 100ms RTT 下只能跑约 5 MB/s，
-// 2 MB 可以到约 20 MB/s——这是纯外网下载慢的主因，不是带宽。
+// ── 文件分片与序列化 ────────────────────────────────────────────────
+// 所有 DataConnection 统一用 serialization:'raw'（gate.js / room.js 的
+// peer.connect）。默认的 BinaryPack 会按 chunkedMTU=16300 拆包：一片 64 KB
+// 要变成 5 条 {__peerData,n,data,total} 消息，各自编码、send、走一次事件回调，
+// 接收端还要缓存并按序号重组。raw 模式下 _send() 直接 _bufferedSend(buf)，
+// 一帧到底，编码与重组开销归零；字符串控制消息原样派发，协议一个字节没改。
+// PeerJS 按 offer 里的 serialization 自动挑实现，新旧客户端互联各自兼容。
+const CHUNK_SIZE = 65536;   // 拿不到 sctp 协商值时的全平台安全档
+// 在途窗口：吞吐上限约等于「窗口 ÷ RTT」。2 MB 在 100ms RTT 下约 20 MB/s。
 const MAX_BUFFERED = 2 * 1024 * 1024;
 const ICE_SERVERS = [
   { urls: 'stun:stun.miwifi.com:3478' },
@@ -95,17 +97,6 @@ const ICE_SERVERS = [
   { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
   { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' }
 ];
-// 自建信令服务器（可选）：对方项目的「加入/刷新秒回」本质是信令同源同进程，
-// 没有第三方 DNS + TLS + ID 注册这一圈。填了这一项就能拿到同样的速度。
-// 格式：{"host":"peer.example.com","port":443,"path":"/","secure":true,"key":"peerjs"}
-// 只存本机，不上传；房主和访客必须填同一台，否则互相找不到。
-function customSignal() {
-  try {
-    const v = JSON.parse(localStorage.getItem('lanshare_signal') || 'null');
-    if (v && v.host) return v;
-  } catch (e) {}
-  return null;
-}
 // 自定义 STUN/TURN：只存在这台设备的浏览器里，不写进房间、不上传。
 // 存的是「完整列表」（含用户删改后的默认项），没存过就用上面的默认值。
 function customIce() {
@@ -134,15 +125,6 @@ function peerOpts() {
       rtcpMuxPolicy: 'require'
     }
   };
-  // 可选的自建信令：只在本机存过配置时才生效，默认仍走 PeerJS 公共服务
-  const sig = customSignal();
-  if (sig) {
-    o.host = String(sig.host).slice(0, 200);
-    o.port = Number(sig.port) || 443;
-    o.path = String(sig.path || '/').slice(0, 100);
-    o.secure = sig.secure !== false;
-    o.key = String(sig.key || 'peerjs').slice(0, 40);
-  }
   return o;
 }
 // 每次都是一个全新的 Peer ID：不能用固定值，否则两台设备撞号
@@ -424,9 +406,16 @@ function protoMismatch(v, ctx) {
   const msg = '协议版本不一致（本机 v' + PROTOCOL + '，对方 v' + v + '），请刷新对方页面或更新本机程序';
   notify(msg);
   const c = (ctx && ctx.conn) || activeConn();
+  // 只清这一条连接：一台旧版设备 HELLO 不该把房主其他连接正在收的文件全丢了，
+  // 更不能让那些发送端干等 20~90 秒的回执超时。
+  const key = ctx ? ctx.id : 'guest';
+  const half = recvBuf.get(key);
+  if (half && !half.__superseded && half.received < half.size && half.conn && half.conn.open) {
+    try { half.conn.send('FILE_NAK:' + half.id); } catch (e) {}
+  }
+  recvBuf.delete(key);
   if (c) { try { c.close(); } catch (e) {} }
   if (ctx && MODE === 'host') dropHostConnById(ctx.id);
-  recvBuf.clear();
 }
 
 // 顶栏地址由 startHostUI 里按「本机 / 局域网设备」分别填充
@@ -497,7 +486,9 @@ window.addEventListener('dragover', e => {
   e.dataTransfer.dropEffect = 'copy';
 });
 window.addEventListener('dragleave', e => {
-  if (!hasFiles(e)) return;
+  // 部分浏览器在拖出窗口边界时 dataTransfer.types 里不含 'Files'。
+  // 以前这里提前 return，dragDepth 就永远减不回去，遮罩会一直盖住整个房间，
+  // 用户只能刷新页面。dragleave 必须无条件递减。
   dragDepth = Math.max(0, dragDepth - 1);
   if (!dragDepth) dropMask.classList.remove('show');
 });

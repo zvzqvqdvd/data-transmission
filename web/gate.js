@@ -27,7 +27,9 @@ function probeRoom(room, timeoutMs) {
     const call = () => {
       if (done || !peer || peer.destroyed) return;
       if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
-      conn = peer.connect('pc-' + room, { reliable: true, metadata: identityMeta() });
+      conn = peer.connect('pc-' + room, {
+        reliable: true, serialization: 'raw', metadata: identityMeta()
+      });
       conn.on('open', () => {
         try { conn.send('HELLO:' + PROTOCOL + ':' + myNick() + ':' + devId()); } catch (e) {}
       });
@@ -934,6 +936,16 @@ document.addEventListener('visibilitychange', () => {
   try { flushGuestRetry(); } catch (e) {}
   // 回到前台补拉一次：后台时浏览器可能把页面冻住，挂着的请求不一定还活着
   try { if (MODE === 'host' && !roomClosed) loadMessages(); } catch (e) {}
+  // 后台期间定时器被冻结，e.lastPong 是陈旧的。回前台第一次扫描若直接拿它判死，
+  // 会把其实还在线的设备全摘掉（正在传的文件也会被打断）。先给一次宽限。
+  try {
+    if (MODE === 'host' && typeof hostConns !== 'undefined') {
+      const t = Date.now();
+      for (const e of hostConns.values()) {
+        if (e) { e.lastPong = t; e.missed = 0; e.bufAt = t; }
+      }
+    }
+  } catch (e) {}
 });
 // 窗口宽度跨过 640 时输入框提示要换长短版（手机上那句快捷键提示放不下）
 window.addEventListener('resize', () => {

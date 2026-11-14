@@ -414,6 +414,15 @@ function resumeDownload(job) {
   dlPump(job);
 }
 
+// HTTP 下载与 P2P 接收一样，不能把每个 Uint8Array 分片裸存在数组里：
+// 接近 4 GiB 的文件峰值会占两倍内存。攒到 RECV_BATCH 合成一个 Blob 再入队。
+// 分批数据挂在 job 上，暂停后续传能接着用，不会丢掉尾巴。
+function dlFlush(job) {
+  if (!job.pend || !job.pendBytes) return;
+  job.chunks.push(new Blob(job.pend));
+  job.pend = [];
+  job.pendBytes = 0;
+}
 async function dlPump(job) {
   const ctl = new AbortController();
   job.ctl = ctl;
@@ -431,7 +440,19 @@ async function dlPump(job) {
     refreshDownloadBars();
     return;
   }
-  if (res.status === 416) { dlFinish(job); return; }   // 断点已在末尾：其实已经收全
+  if (res.status === 416) {
+    // 416 也可能来自服务端文件被销毁或截断，不能无条件当成「已经收全」，
+    // 否则会存出半截文件还标成 done。
+    dlFlush(job);
+    if (job.total && job.received < job.total) {
+      job.running = false;
+      notify('下载失败：服务端文件已变短，请重新下载');
+      refreshDownloadBars();
+      return;
+    }
+    dlFinish(job);
+    return;
+  }
   if (!res.ok && res.status !== 206) {
     job.running = false;
     notify('下载失败（HTTP ' + res.status + '）');
@@ -449,16 +470,21 @@ async function dlPump(job) {
   }
   const reader = res.body.getReader();
   let shown = -1;
+  job.pend = job.pend || [];
+  job.pendBytes = job.pendBytes || 0;
   try {
     while (true) {
       const step = await reader.read();
       if (step.done) break;
-      job.chunks.push(step.value);
+      job.pend.push(step.value);
+      job.pendBytes += step.value.length;
+      if (job.pendBytes >= RECV_BATCH) dlFlush(job);
       job.received += step.value.length;
       // 进度按 1% 一档刷新，不然每 64KB 就改一次 DOM，白费力气
       const pct = job.total ? Math.floor(job.received / job.total * 100) : 0;
       if (pct !== shown) { shown = pct; refreshDownloadBars(); }
     }
+    dlFlush(job);
   } catch (e) {
     if (job.paused) return;                        // abort 掉了：保留已收分片，等继续
     job.running = false;
@@ -474,6 +500,7 @@ function dlFinish(job) {
   job.running = false;
   job.done = true;
   try {
+    dlFlush(job);            // 收尾那不足 2 MB 的尾巴也要拼进去
     const blob = new Blob(job.chunks);
     const u = URL.createObjectURL(blob);
     saveBlob(u, job.name);
@@ -485,14 +512,26 @@ function dlFinish(job) {
   refreshDownloadBars();
 }
 
-// 换了（重）连接：上一条通道上的拉取全都作废，队列跟着清空，
-// 没下完的文件在新通道上重新点一次就能继续——旧通道上的失败不该算数
+// 换了（重）连接：上一条通道上的拉取全都作废，队列跟着清空。
+// 但「已经下到哪儿」不丢——没下完的先收进残片表，重连后自动接着下。
 function resetPullsForReconnect() {
+  const kept = [];
+  // 顺序要紧：先收残片，再清 pullInFlight。反过来的话 trimPartials 会把它
+  // 当成「已经不在下载了」的陈旧项删掉，续传就白留了。
+  for (const [k, buf] of Array.from(recvBuf)) {
+    if (buf && buf.mid && MODE === 'guest' && keepPartial(buf)) kept.push(buf.mid);
+  }
   pullInFlight.clear();
   pullQueue.length = 0;
   pullStartAt.clear();
-  recvBuf.clear();          // 旧通道上的半截分片一律丢掉，别污染新的传输
-  chunkChain = Promise.resolve();
+  recvBuf.clear();          // 旧通道上的半截分片已经进残片表了，这里只清索引
+  chunkChains.clear();
+  // 断开那一刻正在下的文件，重连后自动接着下；只补这一个，不翻历史旧账
+  for (const mid of kept) {
+    const m = localMsgs.find(x => x.id === mid);
+    if (m && !m.url) pullQueue.push({ mid: mid, name: m.name });
+  }
+  if (pullQueue.length) setTimeout(pumpPullQueue, 200);   // 等握手收尾再发请求
 }
 
 
@@ -791,24 +830,43 @@ function settleFileAck(id, ok) {
 // from 是发送者名字，转发时告诉下游是谁发的。
 // 访客上传必须等房主回执才算成功：只把字节塞进 DataChannel 就报「已发送」，
 // 房主可能还在慢慢收、甚至已经丢片，用户看到的就是「10 个发成功、只到 4 个」。
-async function sendFileTo(c, file, name, onProgress, mid, from) {
+// raw 序列化不再受 16300 拆包限制：单帧大小由 SCTP 协商的 maxMessageSize 决定。
+// 明确支持 256 KB 时把分片放大到 128 KB，send 次数和 SCTP 头部再减半；
+// 协商值缺失或偏小（老 Safari 等）就退回 64 KB 这个全平台安全档。
+function chunkSizeFor(c) {
+  try {
+    const pc = c && c.peerConnection;
+    const max = pc && pc.sctp && pc.sctp.maxMessageSize;
+    if (max >= 262144) return 131072;
+  } catch (e) {}
+  return CHUNK_SIZE;
+}
+
+// baseOff / totalSize 是断点续传用的：baseOff 表示「这份 file 的内容从整份文件的
+// 第几个字节开始」，totalSize 是整份文件的长度。两个都缺省时行为和以前完全一样
+// （从头整份发），所以老调用点一个字都不用改。
+async function sendFileTo(c, file, name, onProgress, mid, from, baseOff, totalSize) {
   if (!c || !c.open) throw new Error('连接已断开');
+  const base = Math.max(0, Number(baseOff) || 0);
+  const span = file.size;                       // 这次实际要发的字节数
+  const total = Math.max(0, Number(totalSize) || (base + span));
   const id = 'f' + Date.now() + Math.random().toString(36).slice(2, 8);
-  const meta = { id: id, v: PROTOCOL, name: name, size: file.size };
+  const meta = { id: id, v: PROTOCOL, name: name, size: total };
+  if (base) meta.off = base;                    // 旧客户端不认这个字段，会当 0 处理
   if (mid) meta.mid = mid;
   if (from) meta.f = from;
   c.send('FILE_META:' + JSON.stringify(meta));
   armDrain(c);                       // 一次装好低水位阈值，后面只等事件
   let offset = 0;
-  const total = file.size;
   // 双缓冲预读：始终有 1~2 片在「切片 + 读盘」的路上，与「等缓冲排空」重叠。
   // 单缓冲写法每片都必须先等读盘完成才能开始等链路，高延迟链路上会留下一段段空档，
   // 链路明明有余量也跑不满。
-  const sliceAt = o => file.slice(o, Math.min(o + CHUNK_SIZE, total));
+  const cs = chunkSizeFor(c);       // 一次传输内固定，不让分片大小中途忽大忽小
+  const sliceAt = o => file.slice(o, Math.min(o + cs, span));
   const reads = [];
   let readOff = 0;
   const fill = () => {
-    while (reads.length < 2 && readOff < total) {
+    while (reads.length < 2 && readOff < span) {
       const s = sliceAt(readOff);
       readOff += s.size;
       reads.push(s.arrayBuffer());
@@ -826,7 +884,7 @@ async function sendFileTo(c, file, name, onProgress, mid, from) {
       await waitDrain(c);
       c.send(buf);
       offset += buf.byteLength;
-      if (onProgress) onProgress(offset / total);
+      if (onProgress) onProgress(total ? (base + offset) / total : 1);
     }
     c.send('FILE_END:' + id);
   } finally {
@@ -835,7 +893,7 @@ async function sendFileTo(c, file, name, onProgress, mid, from) {
   // 只有「访客 → 房主」需要确认：房主把历史文件发给访客时走的是下载队列，
   // 有自己的进度与失败处理，别让它反过来等访客回执。
   if (MODE === 'guest' && peerAck) {
-    const r = await waitFileAck(id, fileAckTimeout(file.size));
+    const r = await waitFileAck(id, fileAckTimeout(span || total));
     if (r === 'nak') throw new Error('房主没能完整收到，请点 ↻ 重试');
     if (r === 'timeout') throw new Error('房主还没确认收到，请点 ↻ 重试');
   }
@@ -950,13 +1008,38 @@ function handleData(data, ctx) {
       const want = String((req && req.name) || '').replace(/\\/g, '/');
       const safe = want.split('/').pop().slice(0, 200);   // 只取文件名，防路径穿越
       const mid = String((req && req.mid) || '').slice(0, 32);
+      // 断点续传：访客报上「我已经存了多少字节」，这里用 Range 只取后面的部分。
+      // 后端 _serve_file 本来就支持 Range/206，所以后端一行都不用改。
+      const askOff = Math.max(0, Number(req && req.off) || 0);
       if (!safe || !ctx.conn || !ctx.conn.open) return;
       // 串行：这台设备上的每次请求按到达顺序排队发送，绝不会和另一路分片交织
       queueConnSend(ctx.conn, () => {
         if (!ctx.conn || !ctx.conn.open) return Promise.resolve();
-        return apiFetch(API + '/download?name=' + encodeURIComponent(safe))
-          .then(r => { if (!r.ok) throw new Error('gone'); return r.blob(); })
-          .then(blob => sendFileTo(ctx.conn, blob, safe, null, mid || undefined, '历史文件'))
+        const url = API + '/download?name=' + encodeURIComponent(safe);
+        const opt = askOff > 0 ? { headers: { Range: 'bytes=' + askOff + '-' }, cache: 'no-store' }
+                               : { cache: 'no-store' };
+        return apiFetch(url, opt)
+          .then(r => {
+            // 416：off 已经等于文件末尾——说明对方其实已经收全了，发一个空尾巴收尾
+            if (r.status === 416) {
+              return { blob: new Blob([]), off: askOff, total: askOff };
+            }
+            if (!r.ok && r.status !== 206) throw new Error('gone');
+            let start = 0, total = 0;
+            const m = /bytes\s+(\d+)-(\d+)\/(\d+)/i.exec(r.headers.get('Content-Range') || '');
+            if (m) { start = Number(m[1]); total = Number(m[3]); }
+            return r.blob().then(blob => {
+              if (r.status !== 206) {
+                // 服务端没认 Range（文件被换成不支持范围的实现）：只能整份重发
+                start = 0; total = blob.size;
+              } else if (!total) {
+                total = start + blob.size;
+              }
+              return { blob: blob, off: start, total: total };
+            });
+          })
+          .then(res => sendFileTo(ctx.conn, res.blob, safe, null, mid || undefined,
+                                  '历史文件', res.off, res.total))
           .catch(() => {
             try { ctx.conn.send('FILE_PULL_ERR:' + JSON.stringify({ mid: mid, name: safe })); } catch (e) {}
           });
@@ -970,14 +1053,22 @@ function handleData(data, ctx) {
       // 解析失败就清不掉 pullInFlight，下载队列从此永久堵死（历史/实时全堵）
       let e0 = null;
       try { e0 = JSON.parse(data.slice(14)); } catch (e) {}
-      const mid = e0 && e0.mid;
+      let mid = e0 && e0.mid;
+      // 旧版房主发的是裸文件名、弱网把 JSON 打坏、或干脆没有 mid：
+      // 这时绝不能什么都不清，否则 pullInFlight 一直占着位，后面排队的所有下载
+      // 都会被提示「已在下载队列里」而永久堵死。退而求其次放行最早那个在途任务。
+      if (!mid) {
+        mid = pullInFlight.values().next().value;
+        if (!mid) pumpPullQueue();
+      }
       if (mid) {
         pullInFlight.delete(mid); pullStartAt.delete(mid); pumpPullQueue();
-        const w = document.getElementById('pullwrap-' + mid);
-        if (w) {
-          w.style.display = 'none';
-          const bar = w.querySelector('.pull-bar i');
-          if (bar) bar.style.width = '0%';
+        // 对应的残片缓冲一并丢掉，免得下个文件的分片被拼进半截旧文件。
+        // 房主说文件已不存在，本地留着残片也没法续，一并清掉。
+        partialPulls.delete(mid);
+        hidePullBar(mid);
+        for (const [k, buf] of Array.from(recvBuf)) {
+          if (buf && buf.mid === mid) recvBuf.delete(k);
         }
       }
       notify('「' + ((e0 && e0.name) || '文件') + '」已不存在，无法下载');
@@ -1150,6 +1241,7 @@ function handleData(data, ctx) {
         // 这里必须明确回一个 NAK，否则对方要干等到 20~90 秒的回执超时才报错。
         const prev = recvBuf.get(key);
         if (prev && prev.received < prev.size) {
+          prev.__superseded = true;   // 这条已经作废，不许它再补发旧 id 的回执
           if (MODE === 'host' && prev.conn && prev.conn.open) {
             try { prev.conn.send('FILE_NAK:' + prev.id); } catch (e2) {}
           }
@@ -1158,15 +1250,39 @@ function handleData(data, ctx) {
             pullStartAt.delete(prev.mid);
           }
         }
+        // 上一条已收全、正在落盘：它的 ACK 还在路上，也要同样作废旧 id 回执
+        const busy = finishingRecv.get(key);
+        if (busy) busy.__superseded = true;
+        // 断点续传：发送端从 meta.off 处接着发，得先把上次留下的残片接回来。
+        // 只有「已收字节数正好等于 off」且「文件长度没变」才敢接——文件被换过
+        // 还对缝，拼出来的就是坏文件。
+        const off = Math.max(0, Number(meta.off) || 0);
+        let seed = null;
+        if (off > 0 && meta.mid) {
+          seed = resumePoint(partialPulls.get(meta.mid), off, meta.size);
+          partialPulls.delete(meta.mid);   // 接得上的已经取走，接不上的直接作废
+        }
+        if (off > 0 && !seed) {
+          // 手上没有能接的残片（被清理或过期）：这条接不上，一个字节都不能收，
+          // 否则后面的分片会接到错误的偏移上。清空缓冲，请房主从 0 重发。
+          recvBuf.delete(key);
+          if (MODE === 'guest' && meta.mid) restartPullFromZero(meta.mid, meta.name);
+          return;
+        }
         recvBuf.set(key, {
           id: meta.id, name: meta.name, size: meta.size,
-          chunks: [], pend: [], pendBytes: 0, received: 0,
+          chunks: seed ? seed.chunks : [], pend: [], pendBytes: 0,
+          received: seed ? seed.received : 0,
           mid: meta.mid || '',
           from: meta.f || (ctx && ctx.name) || '外网设备',
           conn: (ctx && ctx.conn) || null   // 收完往这条连接回执
         });
         // 收文件只留进度（访客是卡片下方的进度条），不再往状态行/提示行推文字
-        if (MODE === 'guest') txStart(meta.name, meta.size, meta.mid || '');
+        if (MODE === 'guest') {
+          txStart(meta.name, meta.size, meta.mid || '');
+          // 续传时进度从已有的字节数起步，别从 0 重新爬一遍
+          if (seed && txState) { txState.done = seed.received; txState.lastD = seed.received; }
+        }
       } catch (e) { recvBuf.delete(key); }
     } else if (data.startsWith('FILE_END:')) {
       const buf = recvBuf.get(key);
@@ -1179,20 +1295,21 @@ function handleData(data, ctx) {
     }
     return;
   }
-  // 分片：绝大多数浏览器按 binaryType='arraybuffer' 给 ArrayBuffer，
-  // 但个别手机浏览器（微信 X5 / 部分安卓 WebView）会把二进制当 Blob 递过来。
-  // 以前 toArrayBuffer 对 Blob 返回 null 就直接丢包，对端永远是「文件不完整」——
-  // 手机端所有图片（实时和历史）一张都出不来，正是这个原因。
-  // Blob 只能异步读，统一排进一条 promise 链，保证分片顺序不乱。
-  if (typeof Blob !== 'undefined' && data instanceof Blob) {
-    chunkChain = chunkChain
-      .then(() => (data.arrayBuffer ? data.arrayBuffer() : null))
-      .then(ab => { if (ab) appendChunk(key, ab); })
-      .catch(() => {});
-    return;
-  }
-  const ab = toArrayBuffer(data);
-  if (ab) appendChunk(key, ab);
+  // 所有二进制分片统一排队：同一连接绝对有序，不同连接各用各的链。
+  // 统一走 Promise 也解决了「同步 ArrayBuffer 与异步 Blob 分片混在一起」时
+  // 同步片抢在 Blob 片前面、拼出损坏文件的老问题。
+  const prev = chunkChains.get(key) || Promise.resolve();
+  const next = prev
+    .then(() => {
+      if (typeof Blob !== 'undefined' && data instanceof Blob) {
+        return data.arrayBuffer ? data.arrayBuffer() : null;
+      }
+      return toArrayBuffer(data);
+    })
+    .then(ab => { if (ab) appendChunk(key, ab); })
+    .catch(() => {});
+  chunkChains.set(key, next);
+  next.then(() => { if (chunkChains.get(key) === next) chunkChains.delete(key); });
 }
 // 把一片数据放进这条连接当前的接收缓冲
 const RECV_BATCH = 2 * 1024 * 1024;   // 攒到 2 MB 合成一个 Blob
@@ -1221,20 +1338,41 @@ function appendChunk(key, ab) {
   }
   // 房主端不报「正在接收 x%」：收文件是后台动作，进度看聊天里的卡片就行
 }
+// 正在落盘（onFileReceived 还没返回）的接收缓冲，按连接 key 存。
+// 这段时间 recvBuf 里已经没有它了，新的 FILE_META 会直接建一份新缓冲；
+// 必须让新 META 把旧的标成「已被顶掉」，否则旧缓冲落盘完仍拿旧文件 id
+// 补发 ACK/NAK，和正在进行的那次传输互相串扰。
+const finishingRecv = new Map();
+
 // 收全了：拼成 Blob 交给上层（房主落盘 / 访客存下载），落盘成功后才回执。
 // 回执是「房主真的存好了」的唯一凭证，发送端据此判断能不能标「已完成」。
 async function finishRecv(key, buf) {
   recvBuf.delete(key);
+  finishingRecv.set(key, buf);
+  // 收全了：这个 mid 的残片就是多余的，留着只会占内存
+  if (buf.mid) { partialPulls.delete(buf.mid); pullRestarts = 0; }
   flushPend(buf);                    // 把最后不足 2 MB 的尾巴也合进去
   const blob = new Blob(buf.chunks, { type: mimeOf(buf.name) });
+  const c = buf.conn;
+  // 落盘（POST /upload 或写 IndexedDB）可能要几十秒。这段时间 recvBuf 已删、
+  // bufferedAmount=0、又不是发送方，scanHostConns 会误判连接空闲而走 PING 判死；
+  // 等落盘完成连接已被关掉，ACK 发不出去 → 访客超时重试 → 同一文件在房主存两份。
+  if (c) c.__finishing = true;
   let ok = true;
   try {
     const r = await onFileReceived(blob, buf.name, buf.mid, buf.from);
     if (r === false) ok = false;
   } catch (e) { ok = false; }
+  finally {
+    if (c) c.__finishing = false;
+    if (finishingRecv.get(key) === buf) finishingRecv.delete(key);
+  }
+  // 落盘期间对方已经重发（新 FILE_META 顶掉了这条）：回执带的是旧文件 id，
+  // 发出去只会让新传输的等待者被误判，或者干脆没人认领。新传输会自己回执。
+  if (buf.__superseded) return;
   // 只给「访客上传 → 房主接收」回执；房主把文件发给访客属于下载，不等回执
-  if (MODE === 'host' && buf.conn && buf.conn.open) {
-    try { buf.conn.send((ok ? 'FILE_ACK:' : 'FILE_NAK:') + buf.id); } catch (e) {}
+  if (MODE === 'host' && c && c.open) {
+    try { c.send((ok ? 'FILE_ACK:' : 'FILE_NAK:') + buf.id); } catch (e) {}
   }
 }
 // 收到 FILE_END 但字节数还差一点：再等一会儿（PeerJS 的异步重组可能慢半拍）。
@@ -1251,7 +1389,9 @@ function waitRecvComplete(key, buf, t0) {
 // 真的缺片了：丢弃这条传输，并且把下载队列的状态清干净，
 // 否则 pullInFlight 占着位，后面排队等着的下载全被堵死
 function dropRecv(key, buf) {
-  if (recvBuf.get(key) === buf) recvBuf.delete(key);
+  // 已经被新 META 顶掉：这份 buf 属于上一次传输，回执和队列清理都会误伤新的
+  if (recvBuf.get(key) !== buf || buf.__superseded) return;
+  recvBuf.delete(key);
   // 明确告诉上传方「这次没收到」，别让它干等 20 秒超时才报失败
   if (MODE === 'host' && buf.conn && buf.conn.open) {
     try { buf.conn.send('FILE_NAK:' + buf.id); } catch (e) {}
@@ -1259,11 +1399,18 @@ function dropRecv(key, buf) {
   if (MODE === 'guest' && buf.mid) {
     pullInFlight.delete(buf.mid);
     pullStartAt.delete(buf.mid);
-    const w = document.getElementById('pullwrap-' + buf.mid);
-    if (w) { w.style.display = 'none'; const bar = w.querySelector('.pull-bar i'); if (bar) bar.style.width = '0%'; }
+    hidePullBar(buf.mid);
+    // 已经收到的部分留着：用户再点一次卡片就从这里接着下，不用从头重来
+    if (keepPartial(buf)) {
+      notify('下载中断，已保留 ' + Math.round(buf.received / buf.size * 100) +
+             '%，点卡片可继续（不会从头下）');
+    } else {
+      notify('文件不完整，已丢弃');
+    }
     pumpPullQueue();
+  } else {
+    notify('文件不完整，已丢弃');
   }
-  notify('文件不完整，已丢弃');
 }
 // ===== 桌面共享：走 WebRTC 媒体流，与传文件的数据通道互不干扰 =====
 let screenStream = null, screenCalls = [], recvCall = null;
@@ -1601,6 +1748,78 @@ function acceptScreenCall(call) {
 const pullInFlight = new Set();  // 正在拉取的 mid
 const pullQueue = [];            // 排队中的 {mid, name}
 const pullStartAt = new Map();   // mid -> 发起时间（看门狗用）
+// ===== 断点续传 =====
+// 访客端「房主 → 本机」方向没下完的分片，按 mid 留在这里；重连或重新点卡片时
+// 把已收字节数报给房主，房主用 Range 从那个位置取，接着往后发。
+// 以前一断就整份作废，1 GB 传到 90% 断了要重下 900 MB，这是最后一个真正影响
+// 体验的问题。只放内存、「超过 256 MB 丢最旧的」，不写磁盘、不加配置项。
+const partialPulls = new Map();          // mid -> { name, size, chunks, received, at }
+const PARTIAL_MAX = 256 * 1024 * 1024;   // 残片总量上限
+const PARTIAL_TTL = 30 * 60 * 1000;      // 半小时没用就作废
+let pullRestarts = 0;                    // 本轮「接不上、从 0 重来」的次数，防成环
+
+// 判断「这条 FILE_META 能不能接着上次的残片往下收」。
+// 三个条件缺一不可，否则拼接出来的就是错位的坏文件：
+//   ① 发送端确实是从中间开始发的（off > 0）
+//   ② 文件长度没变（同名文件可能被换过内容）
+//   ③ 已收字节数正好等于对方的起点
+// 返回残片对象表示可以接，返回 null 表示接不上、必须从 0 重来。
+function resumePoint(partial, off, size) {
+  if (!partial || !off || !size) return null;
+  if (partial.size !== size) return null;
+  if (partial.received !== off) return null;
+  return partial;
+}
+
+// 把一条没下完的接收缓冲收进残片表。返回 false 表示没留下（没收到字节/已收全）
+function keepPartial(buf) {
+  if (!buf || !buf.mid || MODE !== 'guest') return false;
+  if (!buf.received || !buf.size || buf.received >= buf.size) return false;
+  flushPend(buf);                 // 尾巴那不足 2 MB 的也合进去，保证 chunks 是整批
+  buf.__superseded = true;        // 这条已作废，不许它再补发回执
+  partialPulls.set(buf.mid, {
+    name: buf.name, size: buf.size,
+    chunks: buf.chunks, pend: [], pendBytes: 0,
+    received: buf.received, at: Date.now()
+  });
+  buf.chunks = [];
+  trimPartials();
+  return true;
+}
+function trimPartials() {
+  const now = Date.now();
+  let total = 0;
+  const rows = Array.from(partialPulls.entries()).sort((a, b) => a[1].at - b[1].at);
+  for (const [mid, p] of rows) {
+    if (pullInFlight.has(mid)) continue;      // 正在下的不能清，清了下一次就对不上 offset
+    if (now - p.at > PARTIAL_TTL || total + p.received > PARTIAL_MAX) {
+      partialPulls.delete(mid);
+      continue;
+    }
+    total += p.received;
+  }
+}
+function hidePullBar(mid) {
+  const w = document.getElementById('pullwrap-' + mid);
+  if (!w) return;
+  w.style.display = 'none';
+  const bar = w.querySelector('.pull-bar i');
+  if (bar) bar.style.width = '0%';
+}
+// 房主那边已经在按 offset 发了，本地却没有能接的残片：这条接不上。
+// 清掉状态、让队列重发一次「从头来」的请求（房主按连接串行，这条会排在当前之后）。
+function restartPullFromZero(mid, name) {
+  if (pullRestarts >= 3) {
+    notify('下载状态异常，请刷新页面后重新下载');
+    return;
+  }
+  pullRestarts++;
+  pullInFlight.delete(mid);
+  pullStartAt.delete(mid);
+  partialPulls.delete(mid);
+  pullQueue.unshift({ mid: mid, name: name || '文件', fromZero: true });
+  setTimeout(pumpPullQueue, 150);
+}
 // 拉取看门狗：判断「卡死」只看**有没有数据在动**，不看发了多久。
 // 以前按「发起时间」算 20 秒，手机弱网下一张稍大的图还没传完就被判超时，
 // 判超时后又立刻发下一个请求——两路分片挤进同一个接收缓冲，结果两边全废，
@@ -1619,14 +1838,19 @@ function pullWatchdogTick() {
     if (now - t0 < 60000) continue;
     pullStartAt.delete(mid);
     pullInFlight.delete(mid);
-    // 这条请求的残片还留在接收缓冲里：不丢掉的话，后面那一路会被它污染
+    // 这条请求的残片还留在接收缓冲里：收进残片表，下次接着下；
+    // 直接丢掉的话，后面那一路会被它污染，而且下次只能从 0 重来
+    let kept = -1;
     for (const [k, buf] of Array.from(recvBuf)) {
-      if (buf && buf.mid === mid) recvBuf.delete(k);
+      if (buf && buf.mid === mid) {
+        recvBuf.delete(k);
+        if (keepPartial(buf)) kept = Math.round(buf.received / buf.size * 100);
+      }
     }
-    const w = document.getElementById('pullwrap-' + mid);
-    if (w) { w.style.display = 'none'; const bar = w.querySelector('.pull-bar i'); if (bar) bar.style.width = '0%'; }
+    hidePullBar(mid);
     const dm = localMsgs.find(x => x.id === mid);
-    notify('「' + ((dm && dm.name) || '文件') + '」下载超时，点卡片重试');
+    notify('「' + ((dm && dm.name) || '文件') + '」下载超时，' +
+           (kept >= 0 ? '已保留 ' + kept + '%，点卡片可继续' : '点卡片重试'));
     freed = true;
   }
   if (freed) pumpPullQueue();
@@ -1659,17 +1883,23 @@ function pumpPullQueue() {
   pullInFlight.add(job.mid);
   pullStartAt.set(job.mid, Date.now());
   ensurePullWatchdog();
+  // 有残片就从断点接着要；没有（或这次被要求从头来）就 off=0
+  const part = job.fromZero ? null : partialPulls.get(job.mid);
+  const off = part ? part.received : 0;
+  const pct = part && part.size ? Math.round(off / part.size * 100) : 0;
   try {
-    guestConn.send('FILE_PULL:' + JSON.stringify({ mid: job.mid, name: job.name }));
-    setStatus('正在下载 ' + job.name + '…');
-    // 卡片正下方的进度条先亮起来
+    guestConn.send('FILE_PULL:' +
+      JSON.stringify({ mid: job.mid, name: job.name, off: off }));
+    setStatus(off > 0 ? '继续下载 ' + job.name + '（已存 ' + pct + '%）…'
+                      : '正在下载 ' + job.name + '…');
+    // 卡片正下方的进度条先亮起来；续传时直接画到已完成的那个位置
     const w = document.getElementById('pullwrap-' + job.mid);
     if (w) {
       w.style.display = 'block';
       const bar = w.querySelector('.pull-bar i');
       const txt = w.querySelector('.pull-text');
-      if (bar) bar.style.width = '0%';
-      if (txt) txt.textContent = '正在请求…';
+      if (bar) bar.style.width = pct + '%';
+      if (txt) txt.textContent = off > 0 ? '已存 ' + pct + '%，继续接收…' : '正在请求…';
     }
   } catch (e) {
     pullInFlight.delete(job.mid);
@@ -1907,6 +2137,7 @@ function toggleRoomP2P() {
   }
   applyRoomP2P(false);
 }
+let p2pOffTimer = null;   // 关外网后「等 P2P_OFF 发出去再收连接」的延时器，拨回时要能取消
 async function applyRoomP2P(on) {
   const sw = document.getElementById('p2pSw');
   if (sw) sw.disabled = true;          // 请求在飞的时候别再点第二下
@@ -1933,12 +2164,17 @@ async function applyRoomP2P(on) {
     // 留 220ms 让这帧真的发出去（立刻 close 会把它一起丢掉），再统一收连接。
     // 保留 Peer 注册：注销 ID 再注册回来要等信令服务器释放，中间还有撞号换码的风险，
     // 对一个想随手拨动的开关来说代价太大；门锁在 connection 回调里关上就行。
-    setTimeout(() => {
+    if (p2pOffTimer) { clearTimeout(p2pOffTimer); p2pOffTimer = null; }
+    p2pOffTimer = setTimeout(() => {
+      p2pOffTimer = null;
+      // 这 220ms 内若又拨回「开」，或已经有新设备接入，就别再清连接了
+      if (P2P_ON) return;
       for (const id of [...hostConns.keys()]) dropHostConnQuiet(id);
       renderMembers();
     }, 220);
     toast('外网已关闭，局域网不受影响');
   } else {
+    if (p2pOffTimer) { clearTimeout(p2pOffTimer); p2pOffTimer = null; }
     setupInvite(ROOM);
     // 开着却没注册上（比如关的时候页面刚重载过）：补一次注册，正常情况这里什么都不做
     if (!pcPeer || pcPeer.destroyed || !pcPeer.open) {
@@ -2156,10 +2392,24 @@ async function dissolveRoom() {
   dissolving = false;
   if (btn) btn.disabled = false;
 }
+// 房间结束 / 退出时回收访客端给文件卡片建的 objectURL。不 revoke 的话底层 Blob
+// 一直被引用无法 GC，房间里收发过的所有文件会一直留在内存里（大文件场景下几百 MB 起步）。
+function revokeLocalUrls() {
+  for (const m of localMsgs) {
+    if (m && typeof m.url === 'string' && m.url.indexOf('blob:') === 0) {
+      try { URL.revokeObjectURL(m.url); } catch (e) {}
+    }
+  }
+}
 // 房间被解散（房主自己点的，或本机页面刷到了 closed 标记）：统一退回入口页
 function onRoomClosed(tip) {
   if (roomClosed) return;
   roomClosed = true;
+  // 两个 interval 以前只在回调里靠 roomClosed 空转，从不释放；重建房间时
+  // startXxx() 的 if (timer) return 又让新计时器挂不上。收尾时必须真的停掉。
+  if (hostBeatTimer) { clearInterval(hostBeatTimer); hostBeatTimer = null; }
+  if (connScanTimer) { clearInterval(connScanTimer); connScanTimer = null; }
+  revokeLocalUrls();
   // 云房间没有后端：房间结束就在本地清库，别把历史和文件留在浏览器里
   if (CHANNEL === 'cloud') { try { Cloud.dissolve(); } catch (e) {} }
   applyDevicePrivacy();
@@ -2178,6 +2428,10 @@ function onRoomClosed(tip) {
   }
   hostConns.clear();
   recvBuf.clear();
+  chunkChains.clear();
+  // 房间结束：正在落盘的缓冲不许再补发旧 id 的回执
+  for (const b of finishingRecv.values()) b.__superseded = true;
+  finishingRecv.clear();
   failAllFileAcks();
   if (pcPeer) {
     const p = pcPeer;
@@ -2395,8 +2649,14 @@ function startHostPeer(roomCode) {
       if (hostRetry < cap) {
         hostRetry++;
         showHostHint('正在重新接入房间…（第 ' + hostRetry + ' 次）');
+        const stale = pcPeer;
         setTimeout(() => {
-          try { pcPeer.destroy(); } catch (e) {}
+          // 排队这几秒里 Peer 可能已经注册成功、或已被别处换掉。
+          // 不看一眼就 destroy() 会把可用的房主 Peer 拆掉重建，重注册期间
+          // 所有访客连不上——这正是「房间里突然集体掉线」的来源之一。
+          if (pcPeer !== stale) return;
+          if (stale && stale.open && !stale.destroyed) return;
+          try { if (stale) stale.destroy(); } catch (e) {}
           startHostPeer(roomCode);
         }, 1000 * Math.min(hostRetry, 3));
       } else if (hostGraceful || hasGuests) {
@@ -2406,7 +2666,11 @@ function startHostPeer(roomCode) {
       } else {
         hostRetry = 0;
         showHostHint('这个房间码被别的页面占着，正在换一个新码…');
-        setTimeout(renewRoom, 1200);
+        setTimeout(() => {
+          // 换码会把已发出去的邀请链接全作废。等待期间有人进房就别换了。
+          if (hostConns.size > 0) { showHostHint('已有设备在房间里，保留原房间码'); return; }
+          renewRoom();
+        }, 1200);
       }
     } else if (t === 'network' || t === 'server-error' || t === 'socket-error') {
       showHostHint('信令服务器连不上（' + t + '）：检查网络，或让设备改走局域网地址。局域网功能不受影响');
@@ -2781,6 +3045,15 @@ function syncFileEntry() {
 function dropHostConnById(id, byPeer) {
   const e = hostConns.get(id);
   if (!e) return;
+  // 还在等握手超时的连接被摘掉后，那个定时器 20 秒后仍会再触发一次
+  // dropHostConnQuiet，白白刷新一次界面 / 误删同名新连接。
+  if (e.regTimer) { clearTimeout(e.regTimer); e.regTimer = null; }
+  const half = recvBuf.get(id);
+  const busy = finishingRecv.get(id);
+  if (busy) busy.__superseded = true;
+  if (half && !half.__superseded && half.received < half.size && e.conn.open) {
+    try { e.conn.send('FILE_NAK:' + half.id); } catch (err) {}
+  }
   hostConns.delete(id);
   recvBuf.delete(id);
   if (!byPeer) { try { e.conn.send('BYE'); } catch (err) {} }
@@ -2837,6 +3110,9 @@ function scanHostConns() {
       e.failedAt = 0;
     }
     if (hidden) continue;
+    // 房主正在把刚收全的文件落盘（POST /upload / 写 IndexedDB），这是本地耗时操作，
+    // 期间连接上没有任何字节流动，绝不能因此判死。
+    if (e.conn.__finishing) { e.lastPong = now; continue; }
     // ── 传输中不判死 ──────────────────────────────────────────────
     // DataChannel 是「可靠 + 有序」的：PING 会排在几千条文件分片后面，
     // PONG 得等这些分片全部送达才回得来。传 1 GB 时这个延迟远超 60 秒，
@@ -2876,7 +3152,9 @@ function dropStaleConn(id) {
   // 不回的话对端要干等到 20~90 秒的回执超时才报错，用户看到的就是
   // 「进度条卡住不动，过很久才说失败」。
   const half = recvBuf.get(id);
-  if (half && half.received < half.size && c && c.open) {
+  const busy = finishingRecv.get(id);
+  if (busy) busy.__superseded = true;
+  if (half && !half.__superseded && half.received < half.size && c && c.open) {
     try { c.send('FILE_NAK:' + half.id); } catch (err) {}
   }
   hostConns.delete(id);
@@ -3013,7 +3291,12 @@ function initGuest(room, existing) {
   setStatus('正在连接房间…');
   refreshReady();
   renderAll();
-  window.addEventListener('beforeunload', () => { if (guestPeer) guestPeer.destroy(); });
+  // 每次 initGuest 都挂一个会累积：退出再加入、换房间、刷新恢复都会多一份。
+  // 用一次性守卫，监听器只装一次，回调读的是当前的 guestPeer。
+  if (!window.__guestUnloadWired) {
+    window.__guestUnloadWired = true;
+    window.addEventListener('beforeunload', () => { if (guestPeer) guestPeer.destroy(); });
+  }
   if (existing && existing.conn && existing.conn.open) {
     currentRoom = room;
     guestPeer = existing.peer;
@@ -3046,6 +3329,7 @@ let guestPhase = 'idle';     // signaling / calling / connected / recovering
 const TIP_CONNECT = '未能与对方设备建立直连，多为 NAT 限制或信令不通。建议两台设备连同一 WiFi 用局域网模式，或点右上角的网络图标配一台 TURN 中继服务器。';
 let guestTimer = null;
 let guestAutoTimer = null;   // 断线后的自动重连定时器
+let guestRetryTimer = null;  // fail() 里排的短退避 / 房间确认轮询，也必须能被收尾清掉
 let guestAutoTry = 0;        // 自动重连已尝试次数
 let currentRoom = '';
 function guestConnect(roomArg) {
@@ -3154,6 +3438,9 @@ function dropGuestConn() {
   }, 100);
 }
 function resetToGate() {
+  if (guestRetryTimer) { clearTimeout(guestRetryTimer); guestRetryTimer = null; }
+  revokeLocalUrls();
+  watchAsked.clear();         // 换房间后历史里仍直播的共享卡要能重新请求补推
   applyDevicePrivacy();       // 退出房间后一律按「其他设备」处理
   dropBusy = false;           // 允许下一次进房重新点「断开连接」
   setGuestActions('connecting');  // 回起始页，按钮整排复位为隐藏
@@ -3163,9 +3450,15 @@ function resetToGate() {
   guestAutoTry = 0;
   guestGoneHits = 0;
   pullInFlight.clear(); pullQueue.length = 0; pullStartAt.clear();   // 清掉没完成的下载任务
+  partialPulls.clear();       // 换了房间，上一间房的残片再也接不上，直接放掉
+  pullRestarts = 0;
   failAllFileAcks();          // 等回执的传输立刻判失败，别把发送队列挂住
   peerAck = false;            // 下一间房的房主可能是旧版，能力要重新协商
   recvBuf.clear();            // 残片不带进下一间房
+  chunkChains.clear();
+  // 房间结束：正在落盘的缓冲不许再补发旧 id 的回执
+  for (const b of finishingRecv.values()) b.__superseded = true;
+  finishingRecv.clear();
   serverMsgs = []; localMsgs = [];
   seenIds = new Set();
   myName = '';
@@ -3218,6 +3511,12 @@ function guestReturnToGate(msg, kind) {
   if (msg) gateMsg(msg, kind || 'warn');
 }
 function connectOnce(room) {
+  // 已经退出房间 / 换了房间 / 主动断开了：迟到一次的重试回调绝不许再建 Peer。
+  // 以前只有 fail() 和 call() 有守卫，connectOnce 自身没有，导致「断开连接」
+  // 之后那条排队中的 setTimeout 照样重建信令、改写入口页状态，且新的 peer
+  // 因为 resetToGate 已把 guestPeer 置空而永远销毁不掉（僵尸连接）。
+  if (peerBye || MODE !== 'guest' || !currentRoom) return;
+  if (guestRetryTimer) { clearTimeout(guestRetryTimer); guestRetryTimer = null; }
   if (guestTimer) { clearTimeout(guestTimer); guestTimer = null; }
   guestCallSoft = 0;
   // 这条旧通道是自己关的，别让它的 close 事件又触发一轮重连
@@ -3271,13 +3570,17 @@ function connectOnce(room) {
       // 以前只给 3 次（约 12 秒），弱网下经常还没握上就报失败。
       const wait = gone ? ([1200, 2500, 4000, 5000, 5000][guestRetry - 1] || 5000)
                         : ([800, 1600, 3200, 4000, 4000][guestRetry - 1] || 4000);
-      setTimeout(() => connectOnce(room), wait);
+      guestRetryTimer = setTimeout(() => {
+        guestRetryTimer = null;
+        if (!peerBye && MODE === 'guest' && currentRoom === room) connectOnce(room);
+      }, wait);
     } else if (gone) {
       // 重试次数用完了还在「找不到房主」：继续按 3 秒一轮确认，别提前离场
       setStatus('正在确认房间是否还在…');
       showGuestTip('房主可能正在刷新，稍等几秒。');
-      setTimeout(() => {
-        if (MODE === 'guest' && !peerBye && currentRoom) connectOnce(room);
+      guestRetryTimer = setTimeout(() => {
+        guestRetryTimer = null;
+        if (MODE === 'guest' && !peerBye && currentRoom === room) connectOnce(room);
       }, 3000);
     } else {
       failGuest(msg, tip);
@@ -3322,7 +3625,9 @@ function connectOnce(room) {
     try {
       if (guestConn && !guestConn.open) { guestConn.__ignoreClose = true; guestConn.close(); }
     } catch (e) {}
-    guestConn = peer.connect('pc-' + room, { reliable: true, metadata: identityMeta() });
+    guestConn = peer.connect('pc-' + room, {
+      reliable: true, serialization: 'raw', metadata: identityMeta()
+    });
     const unlock = () => { callInFlight = false; };
     try { guestConn.on('close', unlock); guestConn.on('error', unlock); } catch (e) {}
     wireGuestConn(guestConn, (msg, tip) => { unlock(); fail(msg, tip, true); }, () => {
@@ -3519,29 +3824,36 @@ function wireGuestConn(conn, onFail, onOpen) {
 // 访客从自己的 P2P 连接里读本机地址：取「选中候选对」的本地候选——
 // 同 WiFi 是 192.168.x.x 内网地址，跨网是 STUN 反射出的公网地址，
 // 和房主端设备清单里看到的是同一个，方便两边对号定位。
+// 顺带回答「这次为什么慢」：选中候选对两端只要有一头是 relay，说明打洞没成、
+// 数据在绕公共 TURN 转发，带宽由中继方决定。房主端侧栏本来就有「中继」标签，
+// 访客这一侧以前完全看不到——同一件事两边信息不对称。
 async function refreshSelfIp() {
   if (MODE !== 'guest') return;
-  let ip = '';
+  let ip = '', relay = false;
   try {
     const pc = guestConn && guestConn.peerConnection;
     if (pc && pc.getStats) {
       const stats = await pc.getStats();
-      let localId = '';
+      let pair = null;
+      const cands = {};
       stats.forEach(s => {
+        if (s.type === 'local-candidate' || s.type === 'remote-candidate') cands[s.id] = s;
         if (s.type === 'candidate-pair' && s.localCandidateId &&
-            (s.nominated || s.state === 'succeeded') && !localId) localId = s.localCandidateId;
+            (s.nominated || s.state === 'succeeded') && !pair) pair = s;
       });
-      if (localId) {
-        stats.forEach(s => {
-          if (s.type === 'local-candidate' && s.id === localId) {
-            const a = s.address || s.ip || '';
-            if (a && looksLikeAddr(a)) ip = a;
-          }
-        });
+      if (pair) {
+        const lc = cands[pair.localCandidateId], rc = cands[pair.remoteCandidateId];
+        const a = (lc && (lc.address || lc.ip)) || '';
+        if (a && looksLikeAddr(a)) ip = a;
+        relay = !!((lc && lc.candidateType === 'relay') ||
+                   (rc && rc.candidateType === 'relay'));
       }
     }
   } catch (e) {}
   if (ip) setSelfIp(ip);
+  if (relay) {
+    showGuestTip('本次连接经中继转发（双方网络都打不通直连），速度受中继带宽限制，文件仍可正常传完。');
+  }
 }
 function markGuestConnected() {
   if (guestTimer) { clearTimeout(guestTimer); guestTimer = null; }
@@ -3586,7 +3898,18 @@ function itemProgress(it, frac) {
   if (now - (it._uiT || 0) >= 90 || it.pct >= 100) { it._uiT = now; updateItemUI(it); }
 }
 
+// 发送互斥：Enter、点发送按钮、点失败重试三条路径都能触发 sendAll。
+// 文本分支里的 `await apiFetch` 会让出主线程，第二次调用会抓到同一批 items，
+// 而此时 it.status 还没被置成 sending —— 两个 sendFileTo 同时发 FILE_META，
+// 接收端单槽 recvBuf 被顶掉、分片互相穿插，文件静默损坏。
+// 用一层包装做互斥，比在每个 return 点补标志可靠。
+let sendAllBusy = false;
 async function sendAll() {
+  if (sendAllBusy) { notify('正在发送中，请稍候'); return; }
+  sendAllBusy = true;
+  try { await sendAllInner(); } finally { sendAllBusy = false; }
+}
+async function sendAllInner() {
   const v = textInput.value.trim();
   const items = pendingFiles.filter(x => x.status === 'wait' || x.status === 'fail');
   if (!v && !items.length) return;

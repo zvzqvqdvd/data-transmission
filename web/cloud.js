@@ -59,6 +59,29 @@ async function cloudSet(key, value) {
   });
 }
 
+async function cloudSetMany(entries) {
+  // 多个 key 写进同一个事务：要么全成功，要么全不写。
+  // 分开两个事务时，两次写之间刷新页面会读到「新 meta + 旧 msgs」的半截状态。
+  const db = await cloudOpenDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(CLOUD_DB_STORE, 'readwrite');
+    const store = tx.objectStore(CLOUD_DB_STORE);
+    for (const [k, v] of entries) store.put(v, k);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function cloudDel(key) {
+  const db = await cloudOpenDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(CLOUD_DB_STORE, 'readwrite');
+    tx.objectStore(CLOUD_DB_STORE).delete(key);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
 async function cloudKeys() {
   const db = await cloudOpenDB();
   return new Promise((resolve, reject) => {
@@ -138,10 +161,15 @@ function cloudJSON(obj, status) {
 // 一直挂着会把「创建房间」卡在 10%。所有持久化操作都套一层超时：
 // 超时就当没存上，房间退回纯内存运行（刷新会丢），但绝不阻塞建房与收发。
 function cloudGuard(p, ms) {
+  // 以前那个 1500ms 的 setTimeout 从不 clear：每次持久化都留一个悬挂定时器。
+  let t = null;
+  const timeout = new Promise(resolve => {
+    t = setTimeout(() => resolve(null), ms || 1500);
+  });
   return Promise.race([
     Promise.resolve(p).catch(() => null),
-    new Promise(resolve => setTimeout(() => resolve(null), ms || 1500))
-  ]);
+    timeout
+  ]).finally(() => { if (t) clearTimeout(t); });
 }
 
 function cloudPathOf(url) {
@@ -166,6 +194,8 @@ const Cloud = {
   fileMax: 0,                       // 单文件上限 = 总量 × 10%
   waiters: [],
   _timer: null,
+  _persistChain: null,              // 持久写串行链，保证「后一次调用后落盘」
+  _dissolving: null,                // dissolve 并发锁：同一轮只清一次库
 
   totalBytes() {
     let n = 0;
@@ -206,8 +236,7 @@ const Cloud = {
     cloudRemember(Cloud.room);
     // 清完库再探测：usage 此刻最干净，算出来的可用空间才是真的可用
     await cloudGuard(Cloud.probeQuota(), 3000);
-    await cloudGuard(cloudSet('meta', Cloud.meta()));
-    await cloudGuard(cloudSet('msgs', []));
+    await cloudGuard(cloudSetMany([['meta', Cloud.meta()], ['msgs', []]]));
     Cloud.startIdleWatch();
     return Cloud.room;
   },
@@ -260,6 +289,9 @@ const Cloud = {
   },
 
   async dissolve() {
+    // onRoomClosed() 和空闲看门狗会在同一轮里各调一次。以前清两次库，
+    // 中间若正好 createRoom()，第二次 clearAll 会把刚建好的房间抹掉。
+    if (Cloud._dissolving) return Cloud._dissolving;
     Cloud.stopIdleWatch();
     const room = Cloud.room;
     Cloud.room = '';
@@ -268,17 +300,46 @@ const Cloud = {
     Cloud.nums = {};
     Cloud.devices = [];
     cloudForget();
-    try { await cloudClearAll(); } catch (e) {}
-    return room;
+    Cloud._dissolving = (async () => {
+      // 先等排队中的持久写落地（房间码已变，它们会自行丢弃），再清库，
+      // 否则迟到的写入会把刚清空的库又填回旧房间的 meta / msgs。
+      try { await (Cloud._persistChain || Promise.resolve()); } catch (e) {}
+      try { await cloudClearAll(); } catch (e) {}
+      Cloud._persistChain = null;
+      return room;
+    })();
+    try { return await Cloud._dissolving; }
+    finally { Cloud._dissolving = null; }
+  },
+
+  // 所有持久写排成一条链：并发调用时快照顺序与落盘顺序必须一致，
+  // 否则慢的那次最后完成，会把新消息覆盖回旧列表。
+  persistWrite(fn) {
+    const next = (Cloud._persistChain || Promise.resolve())
+      .catch(() => {}).then(fn);
+    Cloud._persistChain = next;
+    return next;
   },
 
   persistMeta() {
-    return cloudGuard(cloudSet('meta', Cloud.meta()));
+    const room = Cloud.room;
+    const meta = Cloud.meta();
+    return Cloud.persistWrite(() => {
+      // 房间已换 / 已销毁：这次写属于上一个房间，直接丢弃
+      if (!room || Cloud.room !== room) return false;
+      return cloudGuard(cloudSet('meta', meta));
+    });
   },
 
   persist() {
-    Cloud.persistMeta();
-    return cloudGuard(cloudSet('msgs', Cloud.msgs));
+    const room = Cloud.room;
+    const meta = Cloud.meta();
+    const msgs = Cloud.msgs.slice();
+    return Cloud.persistWrite(() => {
+      if (!room || Cloud.room !== room) return false;
+      // meta 与 msgs 同一事务：分两次写时，中间刷新会读到半截状态
+      return cloudGuard(cloudSetMany([['meta', meta], ['msgs', msgs]]));
+    });
   },
 
   payload() {
@@ -325,9 +386,12 @@ const Cloud = {
       if (!Cloud.room) return;
       if (CHANNEL !== 'cloud') return;
       if (Date.now() - Cloud.lastActive > CLOUD_IDLE_MS) {
+        Cloud.stopIdleWatch();      // 先停表：这一轮只收尾一次
         try { broadcast('ROOM_CLOSED'); } catch (e) {}
         try { onRoomClosed('房间 60 分钟无通信，已自动结束。'); } catch (e) {}
-        Cloud.dissolve();
+        // onRoomClosed 内部已经 dissolve 过；再调一次只会拿到同一个 promise，
+        // 但 roomClosed 早被置位时它会直接 return，这里必须兜底清库。
+        try { Cloud.dissolve(); } catch (e) {}
       }
     }, 15000);
   },
@@ -379,19 +443,40 @@ const Cloud = {
     let wantId = String(fd.get('id') || '').slice(0, 32);
     const ids = [];
     const names = [];
+    // 先整体校验再落库：以前边校验边写，第 N 个触发 413 时前 N-1 个已经
+    // 写进 IndexedDB 却没有消息卡片，成为「占着配额、看不见」的孤儿，
+    // 之后每次都会误报空间不足。
+    let need = 0, count = 0;
     for (const f of files) {
       if (!f || typeof f.size !== 'number') continue;
+      count++;
       if (f.size > Cloud.fileMax) {
         return cloudJSON({ ok: false,
           msg: '单个文件不能超过 ' + fmtSize(Cloud.fileMax) }, 413);
       }
-      if (Cloud.totalBytes() + f.size > Cloud.totalMax) {
-        return cloudJSON({ ok: false,
-          msg: '房间存储空间不够了（上限 ' + fmtSize(Cloud.totalMax) + '）' }, 413);
-      }
+      need += f.size;
+    }
+    if (Cloud.totalBytes() + need > Cloud.totalMax) {
+      return cloudJSON({ ok: false,
+        msg: '房间存储空间不够了（上限 ' + fmtSize(Cloud.totalMax) + '）' }, 413);
+    }
+    const written = [];
+    for (const f of files) {
+      if (!f || typeof f.size !== 'number') continue;
       const name = cloudUniqueName(f.name);
-      Cloud.files.set(name, f);
-      await cloudGuard(cloudSet('file:' + name, f));
+      Cloud.files.set(name, f);   // 先占名：cloudUniqueName 靠这个 Map 给同名文件加序号
+      written.push(name);
+      // cloudGuard 把「写库抛错」和「超时」都变成 null。以前这个返回值被丢掉，
+      // 于是用户看到「发送成功」，刷新后 resume() 恢复不到 Blob、文件凭空消失。
+      const r = await cloudGuard(cloudSet('file:' + name, f));
+      if (r !== true) {
+        for (const w of written) {
+          Cloud.files.delete(w);
+          try { await cloudGuard(cloudDel('file:' + w)); } catch (e) {}
+        }
+        return cloudJSON({ ok: false,
+          msg: '浏览器存储写入失败，文件未保存（可能是空间不足或隐私模式）' }, 507);
+      }
       const id = wantId || uid();
       wantId = '';
       names.push(name);
@@ -402,16 +487,41 @@ const Cloud = {
     Cloud.lastActive = Date.now();
     Cloud.persist();
     Cloud.emit();
-    return cloudJSON({ ok: true, count: files.length, ids: ids, names: names });
+    return cloudJSON({ ok: true, count: count, ids: ids, names: names });
   },
 
-  async handleDownload(query) {
+  async handleDownload(query, opts) {
     const name = String(query.get('name') || '');
     const blob = Cloud.files.get(name);
     if (!blob) return cloudJSON({ ok: false, msg: '文件不存在' }, 404);
+    const type = mimeOf(name) || 'application/octet-stream';
+    // 断点续传：访客会带 Range 只取后半段。以前这里一律整份返回，纯网页房间
+    // （外网的主场景）里续传等于没做——房主照样从 0 发一遍。按 HTTP 语义补齐。
+    const hdrs = (opts && opts.headers) || {};
+    const range = String(
+      (hdrs.get && hdrs.get('Range')) || hdrs['Range'] || hdrs['range'] || '');
+    const m = /bytes=(\d+)-(\d*)/i.exec(range);
+    if (m) {
+      const start = Number(m[1]);
+      if (start >= blob.size) {
+        return new Response(null, {
+          status: 416,
+          headers: { 'Content-Range': 'bytes */' + blob.size }
+        });
+      }
+      const end = m[2] ? Math.min(Number(m[2]), blob.size - 1) : blob.size - 1;
+      return new Response(blob.slice(start, end + 1), {
+        status: 206,
+        headers: {
+          'Content-Type': type,
+          'Content-Range': 'bytes ' + start + '-' + end + '/' + blob.size,
+          'Content-Length': String(end - start + 1)
+        }
+      });
+    }
     return new Response(blob, {
       status: 200,
-      headers: { 'Content-Type': mimeOf(name) || 'application/octet-stream' }
+      headers: { 'Content-Type': type, 'Content-Length': String(blob.size) }
     });
   },
 
@@ -477,6 +587,9 @@ const Cloud = {
   // 云房主登记新成员：更新活跃时间并广播，人数上限与局域网房间共用一套判断
   touch() {
     Cloud.lastActive = Date.now();
+    // 只改内存的话，房主刷新后 resume() 读到旧 lastActive，倒计时会偏，
+    // 极端情况下房间被误判成「60 分钟空闲」提前销毁。
+    try { Cloud.persistMeta(); } catch (e) {}
   }
 };
 
@@ -504,6 +617,14 @@ const CloudStore = {
         return cloudJSON({ ok: true, messages: [], rev: '', room: '', peers: 0,
                            p2p: 0, devices: [], nums: {}, closed: true });
       }
+      // 房间已结束时，在途的写请求不能再落库：否则会往已销毁房间的
+      // IndexedDB 里写数据、刷新 lastActive，让 cleanupOrphans() 误判「刚活跃」
+      // 而不清理，残留一直滞留到下次建房。读接口照常放行，避免收尾页面报错。
+      const WRITES = ['/text', '/upload', '/screen', '/api/devices', '/api/stats',
+                      '/api/room/p2p', '/api/room/renew', '/api/room/dissolve', '/delete'];
+      if (WRITES.indexOf(path) >= 0) {
+        return cloudJSON({ ok: false, code: 'NO_ROOM', msg: '房间已结束' }, 409);
+      }
     }
 
     switch (path) {
@@ -514,7 +635,7 @@ const CloudStore = {
       case '/upload':
         return Cloud.handleUpload(opts);
       case '/download':
-        return Cloud.handleDownload(query);
+        return Cloud.handleDownload(query, opts);
       case '/screen':
         return Cloud.handleScreen(opts);
       case '/api/devices':
