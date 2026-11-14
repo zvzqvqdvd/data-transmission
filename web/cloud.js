@@ -343,7 +343,11 @@ const Cloud = {
   },
 
   payload() {
-    const msgs = Cloud.msgs.filter(m => m.type !== 'file' || Cloud.files.has(m.name));
+    // 文件字节没了就标 gone，不删消息：删了以后对方连“曾经有过这个文件”
+    // 都看不到，只能来问——记录留着才是诚实的做法。
+    const msgs = Cloud.msgs.map(m =>
+      (m && m.type === 'file' && !Cloud.files.has(m.name))
+        ? Object.assign({}, m, { gone: 1 }) : m);
     return {
       ok: true,
       room: Cloud.room,
@@ -362,14 +366,18 @@ const Cloud = {
   waitChange(ms) {
     return new Promise(resolve => {
       let done = false;
+      // timer 必须先声明再使用：finish 里要 clearTimeout 它，而 finish 有可能
+      // 在 setTimeout 赋值之前就被 waiters 里的别人调用（同步触发），
+      // 那时 const timer 还在暂时性死区里，会抛 ReferenceError。
+      let timer = null;
       const finish = () => {
         if (done) return;
         done = true;
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
         Cloud.waiters = Cloud.waiters.filter(w => w !== finish);
         resolve();
       };
-      const timer = setTimeout(finish, ms);
+      timer = setTimeout(finish, ms);
       Cloud.waiters.push(finish);
     });
   },
@@ -490,10 +498,34 @@ const Cloud = {
     return cloudJSON({ ok: true, count: count, ids: ids, names: names });
   },
 
+  // 房主清理文件：删掉 Blob，立刻把配额还回来；消息记录保留并标 gone。
+  // 只删 Blob 不删消息，会留下“点了没反应”的卡片——所以卡片必须知道自己是
+  // 已清理态（前端按 gone 渲染成灰卡），而不是靠“删掉记录”来避免死卡片。
+  async deleteFiles(names) {
+    const set = new Set((names || []).filter(n => typeof n === 'string' && n));
+    if (!set.size) return { freed: 0, gone: 0 };
+    let freed = 0, gone = 0;
+    for (const n of set) {
+      const b = Cloud.files.get(n);
+      if (b) freed += (b.size || 0);
+      Cloud.files.delete(n);
+      try { await cloudGuard(cloudDel('file:' + n)); } catch (e) {}
+    }
+    for (const m of Cloud.msgs) {
+      if (m && m.type === 'file' && set.has(m.name) && !m.gone) { m.gone = 1; gone++; }
+    }
+    Cloud.lastActive = Date.now();
+    try { await Cloud.persist(); } catch (e) {}
+    Cloud.emit();
+    return { freed: freed, gone: gone };
+  },
+
   async handleDownload(query, opts) {
     const name = String(query.get('name') || '');
     const blob = Cloud.files.get(name);
-    if (!blob) return cloudJSON({ ok: false, msg: '文件不存在' }, 404);
+    // 410 而不是 404：文件曾经在、是房主主动清理掉的。前端据此说“已清理”，
+    // 404 更像是“名字打错了”，两种情况的引导完全不同。
+    if (!blob) return cloudJSON({ ok: false, msg: '文件已被房主清理' }, 410);
     const type = mimeOf(name) || 'application/octet-stream';
     // 断点续传：访客会带 Range 只取后半段。以前这里一律整份返回，纯网页房间
     // （外网的主场景）里续传等于没做——房主照样从 0 发一遍。按 HTTP 语义补齐。

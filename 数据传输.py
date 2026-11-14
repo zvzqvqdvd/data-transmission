@@ -938,21 +938,28 @@ def parse_multipart_stream(rfile, boundary, length, room_code=None):
       fields —— 普通文本字段（from / id 等），用来标注是谁发的、对应哪条消息
     """
     saved, fields = [], {}
+    stream = _MultipartStream(rfile, length)
     try:
-        _parse_multipart_into(rfile, boundary, length, room_code, saved, fields)
+        _parse_multipart_into(stream, boundary, room_code, saved, fields)
     except Exception:
         # 第 N 个文件超限 / 解析中断时，前 N-1 个已经落盘却没有消息记录，
         # 会变成占着磁盘、界面上看不见、房间清理也清不掉的孤儿。整单删掉。
         _rollback_saved(saved, room_code)
         raise
+    # 客户端中途取消（fetch 被 abort）时 socket 会提前变空，解析循环正常退出，
+    # 但请求体还剩一大截没读——这种情况绝不能当成上传成功，否则落盘的是
+    # 一个截断文件，用户还能正常下载、打开才发现坏了。留 1 KiB 余量给收尾的
+    # 分隔符与 CRLF。
+    if stream.remaining > 1024:
+        _rollback_saved(saved, room_code)
+        raise ValueError('上传被中断')
     return saved, fields
 
 
-def _parse_multipart_into(rfile, boundary, length, room_code, saved, fields):
+def _parse_multipart_into(stream, boundary, room_code, saved, fields):
     """实现体：saved / fields 由外层传入，异常时外层才能拿到已写文件清单"""
-    if length <= 0:
+    if stream.remaining <= 0:
         return
-    stream = _MultipartStream(rfile, length)
     marker = b'--' + boundary
     sep = b'\r\n' + marker
     keep = len(sep) - 1
@@ -1251,7 +1258,7 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         self.send_response(204)
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
         # Range 不是 CORS 安全头：断点续传拉 /download 时会带它，跨源时要放行，
         # 否则预检直接失败、续传只能退回整份重下
         self.send_header('Access-Control-Allow-Headers', 'Content-Type, Range')
@@ -1261,18 +1268,78 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Length', '0')
         self.end_headers()
 
+    def do_DELETE(self):
+        """房主清理文件：删掉磁盘上那份，立刻把空间还回来。
+
+        消息**不删**，只标 gone——记录留着，卡片在页面上灰掉并显示「已清理」，
+        点下载才提示原因。只允许本机（房主）调用，局域网设备与在线访客一律 403。
+        与「销毁房间」不同：房间码、聊天记录、其他文件都不动。
+        """
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        qs = urllib.parse.parse_qs(parsed.query)
+        track_client(self, joined=(is_self_client(self.client_address[0])
+                                   or self._join_cookie_ok()))
+        if not self._origin_ok():
+            self._json({'ok': False, 'msg': '访问被拒绝'}, 403)
+            return
+        if path != '/file':
+            self._json({'ok': False, 'msg': '未知接口'}, 404)
+            return
+        if not is_self_client(self.client_address[0]):
+            self._json({'ok': False, 'msg': '只有房主能清理文件'}, 403)
+            return
+        if not has_room():
+            self._json({'ok': False, 'code': 'NO_ROOM', 'msg': '房间还没创建'}, 409)
+            return
+        raw = (qs.get('name', [''])[0] or '')
+        safe = os.path.basename(raw.replace('\\', '/'))
+        # 与 /download 同一条规则：空名 / 控制字符（含 NUL）一律拒绝
+        if not safe or any(ord(c) < 32 for c in safe):
+            self._json({'ok': False, 'msg': '文件名非法'}, 400)
+            return
+        room = ROOM
+        fpath = os.path.join(upload_dir(room), safe)
+        freed = 0
+        if os.path.isfile(fpath):
+            try:
+                freed = os.path.getsize(fpath)
+                os.remove(fpath)
+            except OSError as e:
+                # Windows 上文件正被下载线程打开时会失败：如实报错，让房主稍后再试
+                self._json({'ok': False, 'msg': '删除失败：%s' % e}, 500)
+                return
+        with DATA_LOCK:
+            gone = 0
+            for m in MESSAGES:
+                if (m.get('type') == 'file' and m.get('name') == safe
+                        and not m.get('gone')):
+                    m['gone'] = 1
+                    gone += 1
+        if not freed and not gone:
+            self._json({'ok': False, 'msg': '文件不存在或已清理'}, 404)
+            return
+        bump_messages()      # 内容版本号变了，长轮询立刻把「文件已清理」推给所有设备
+        touch_activity()
+        self._json({'ok': True, 'freed': freed, 'gone': gone})
+
     def _messages_snapshot(self):
-        """消息列表 + 内容指纹。这是重活（过滤丢失的文件、算 md5），
-        长轮询每 150ms 检查一次时不能每次都做，所以单独拆出来复用。"""
+        """消息列表 + 内容指纹。这是重活（标记丢失的文件、算 md5），
+        长轮询每 150ms 检查一次时不能每次都做，所以单独拆出来复用。
+
+        文件不在磁盘上（房主清理过、或有人手动删了）时**不删消息**，只标 gone：
+        记录留着，卡片自己灰掉并说明「已清理」。删掉消息等于抹掉「曾经有过这个
+        文件」这个事实，对方只会觉得没收到东西，还要来问你一遍。
+        """
         with DATA_LOCK:
             snapshot = [dict(m) for m in MESSAGES]
         result = []
         updir = upload_dir()
         for m in snapshot:
-            if m.get('type') == 'file':
+            if m.get('type') == 'file' and not m.get('gone'):
                 fpath = os.path.join(updir, m.get('name', ''))
                 if not os.path.isfile(fpath):
-                    continue
+                    m['gone'] = 1
             result.append(m)
         # 内容指纹：删一条加一条导致数量不变时，前端也能感知变化
         payload = json.dumps(result, ensure_ascii=False, sort_keys=True)
@@ -1297,6 +1364,9 @@ class Handler(BaseHTTPRequestHandler):
         devices = (p2p_devices() + lan_devices()) if owner_view else []
         status = {'room': ROOM, 'peers': lan_peer_count(),
                   'p2p': p2p_report_count(), 'devices': devices,
+                  # 单文件上限：加入者侧栏的「上传限制」卡要用它，
+                  # 否则只能等传大了才被 413 拒绝
+                  'max_file': MAX_FILE_SIZE,
                   # 每台设备自己的来源 IP：加入方页面上显示「本机 IP」用，
                   # 谁请求就是谁的，不泄露别人地址
                   'self_ip': self.client_address[0],
@@ -1347,6 +1417,7 @@ class Handler(BaseHTTPRequestHandler):
                 'peers': lan_peer_count() if has_room() else 0,
                 'members': room_member_count() if has_room() else 0,
                 'max_members': ROOM_MAX_MEMBERS,
+                'max_file': MAX_FILE_SIZE,   # 单文件上限：加入者要在页面上看到这条
                 'idle_left': idle_left() if has_room() else 0,
                 'data_dir': room_dir() if has_room() else ROOM_ROOT,
                 'closed': not has_room(),

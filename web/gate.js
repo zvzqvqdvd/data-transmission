@@ -6,12 +6,28 @@
 // ===== 加入房间前的探活：房主真的把名字分配下来才放行进入主页面 =====
 // 光「数据通道打开」不算：房主那边可能还没登记、或者页面正在关闭。
 // 探活自己发 HELLO，等到 WELCOME 才算进得去。
-function probeRoom(room, timeoutMs) {
+//
+// 整轮探活拆成 4 段，每段都通过 onStage 回报一次给入口页：
+//   signal（连上信令）→ call（已呼叫）→ wait（通道打开、等房主登记）→ welcome（进入）
+// 以前只有一句「正在连接房间…」顶满 12 秒，用户分不清是信令没连上、房主没回应，
+// 还是网络根本打不通——现在卡在哪一段，界面上就写着哪一段，还带着已经花了多久。
+// 失败时返回的 cost 记着每段完成时刻，用来解释「停在哪儿」，比一句「连接失败」有用得多。
+function probeRoom(room, timeoutMs, onStage, ctl) {
   return new Promise(resolve => {
     let done = false, peer = null, conn = null, timer = null, guestName = '';
     let fallbackTimer = null, freshTried = false;
-    const pending = [];      // 探活期间收到的消息（主要是房间历史），进房后补处理
-    const finish = (okFlag, msg, tip) => {
+    let fresh = null;          // 先声明：error 回调里可能要换一条新信令，那时还没走到赋值
+    let unavailableHits = 0;   // 连续「信令说查不到这个房主」的次数
+    const t0 = Date.now();
+    const cost = {};           // 各阶段完成时刻（相对 t0 的 ms）
+    const pending = [];        // 探活期间收到的消息（主要是房间历史），进房后补处理
+    const stage = name => {
+      const ms = Date.now() - t0;
+      // 只记第一次到达的时刻：重探会把 call 再走一遍，覆盖了就算不出分段耗时
+      if (cost[name] === undefined) cost[name] = ms;
+      try { if (onStage) onStage(name, {}, ms); } catch (e) {}
+    };
+    const finish = (okFlag, msg, tip, code) => {
       if (done) return;
       done = true;
       if (timer) clearTimeout(timer);
@@ -20,25 +36,77 @@ function probeRoom(room, timeoutMs) {
         try { if (conn) conn.close(); } catch (e) {}
         try { if (peer) peer.destroy(); } catch (e) {}
       }
-      resolve({ ok: okFlag, msg: msg || '', tip: tip || '',
-                peer: peer, conn: conn, name: guestName, pending: pending });
+      resolve({ ok: okFlag, msg: msg || '', tip: tip || '', code: code || '',
+                cost: cost, peer: peer, conn: conn, name: guestName, pending: pending });
+    };
+    // 把「中止」交给调用方：输错房间码的用户不必干等满 12 秒的超时。
+    // 放在 finish 定义之后赋值，保证点下去的那一刻一定拿得到函数。
+    if (ctl) ctl.cancel = () => finish(false, '已取消', '', 'canceled');
+    // 打洞失败是「当下就能确定」的事实：ICE 一旦进 failed，再等 10 秒也不会自己好。
+    // 立刻收手并给出可执行的说法，比让用户对着进度条干等到超时强得多。
+    // peer.connect() 返回时 peerConnection 有可能还没建好（内部要等 createOffer），
+    // 所以这里短暂轮询几次再挂监听，而不是假定它一定在。
+    const watchIce = c => {
+      let pc = null, tries = 0;
+      const bind = () => {
+        if (done || conn !== c) return;
+        try { pc = c.peerConnection; } catch (e) { pc = null; }
+        if (!pc) { if (++tries < 40) setTimeout(bind, 50); return; }
+        const onChange = () => {
+          if (done || conn !== c) return;
+          if (pc.iceConnectionState === 'failed') {
+            finish(false, '直连打不通',
+                   '双方都连上了信令，但网络连不通（公司网 / 校园网 / 双 NAT 常见）。同一 WiFi 请改用局域网房间；否则换手机热点再试一次。',
+                   'ice-failed');
+          }
+        };
+        try { pc.addEventListener('iceconnectionstatechange', onChange); } catch (e) {}
+        onChange();          // 挂上时可能已经是 failed
+      };
+      bind();
     };
     // 呼叫房主：这一步才是真正的 P2P 握手
     const call = () => {
       if (done || !peer || peer.destroyed) return;
       if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
-      conn = peer.connect('pc-' + room, {
-        reliable: true, serialization: 'raw', metadata: identityMeta()
+      let c;
+      try {
+        c = peer.connect('pc-' + room, {
+          reliable: true, serialization: 'raw', metadata: identityMeta()
+        });
+      } catch (e) {
+        finish(false, '无法发起连接', String(e && e.message ? e.message : e), 'conn-error');
+        return;
+      }
+      conn = c;
+      stage('call');
+      // 旧通道被换掉后，它迟到的 close / error 不许再判一次失败
+      const isCurrent = () => !done && conn === c;
+      c.on('open', () => {
+        if (!isCurrent()) return;
+        try { c.send('HELLO:' + PROTOCOL + ':' + myNick() + ':' + devId()); } catch (e) {}
+        stage('wait');
       });
-      conn.on('open', () => {
-        try { conn.send('HELLO:' + PROTOCOL + ':' + myNick() + ':' + devId()); } catch (e) {}
-      });
-      conn.on('data', d => {
-        if (done) return;                        // 进了房间之后由 wireGuestConn 接管
-        if (typeof d !== 'string') return;      // 探活期间不会有文件过来
+      c.on('data', d => {
+        if (!isCurrent()) return;                // 进了房间之后由 wireGuestConn 接管
+        if (typeof d !== 'string') return;       // 探活期间不会有文件过来
         // 房主把「外网加入」关了：门还没开就被回绝，别再等 12 秒超时
         if (d === 'P2P_OFF') {
-          finish(false, '外网已关闭，请让房主打开「外网加入」。');
+          finish(false, '外网已关闭',
+                 '房主把「外网加入」关掉了。请房主在侧栏拨开它，或改用局域网地址进来。', 'p2p-off');
+          return;
+        }
+        // 满员：房主说得很明确，别把「满了」翻译成「没有回应」
+        if (d.startsWith('FULL:')) {
+          let mx = 0;
+          try { mx = (JSON.parse(d.slice(5)) || {}).max || 0; } catch (e) {}
+          finish(false, '房间已满',
+                 '这间房最多 ' + (mx || 6) + ' 人（含房主）。等有人退出再进，或让房主清掉闲置设备。', 'full');
+          return;
+        }
+        if (d === 'BYE') {
+          finish(false, '房主关闭了这条连接',
+                 '常见于房间已满、或房主刚把「外网加入」拨回去。过几秒再试一次。', 'bye');
           return;
         }
         if (d.startsWith('WELCOME:')) {
@@ -49,13 +117,47 @@ function probeRoom(room, timeoutMs) {
             // 所以房主的「支持文件回执」能力必须在这里也读一次
             if (w.ack) peerAck = true;
           } catch (e) {}
+          stage('welcome');
           finish(true);
           return;
         }
         if (pending.length < 300) pending.push(d);
       });
-      conn.on('close', () => finish(false, '房间没有回应，请确认房主页面还开着。'));
-      conn.on('error', e => finish(false, '连接出错：' + String(e && e.message ? e.message : e)));
+      c.on('close', () => {
+        if (!isCurrent()) return;
+        finish(false, '房间没有回应',
+               '房主页面可能正在关闭或刷新。确认房间码没错，过两秒再试一次。', 'closed');
+      });
+      c.on('error', e => {
+        if (!isCurrent()) return;
+        finish(false, '连接出错', String(e && e.message ? e.message : e), 'conn-error');
+      });
+      watchIce(c);
+    };
+    // 找不到房主后重探一次：不动 Peer（信令连接还是好的），只重新呼叫。
+    // 900ms 是权衡出来的——房主刷新页面时 Peer 注销到重新注册通常 1~3 秒，
+    // 太短没用，太长又把「房间真的没了」的结论拖慢。
+    const reProbe = () => {
+      const old = conn;
+      conn = null;
+      if (old) { try { old.__ignoreClose = true; old.close(); } catch (e) {} }
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => finish(false, '连接超时：请核对房间码和双方网络。',
+                                      '', 'timeout'), timeoutMs || 12000);
+      setTimeout(() => {
+        if (done) return;
+        if (peer && peer.open) { call(); return; }
+        // 这 900ms 里信令正好断了：等它回来再呼，别傻等到超时
+        if (peer && !peer.destroyed) {
+          const onOpen = () => {
+            try { peer.off('open', onOpen); } catch (e) {}
+            if (!done) call();
+          };
+          try { peer.on('open', onOpen); return; } catch (e) {}
+        }
+        finish(false, '信令连接已断开',
+               '换个网络再试，或让房主确认「外网加入」还开着。', 'no-signal');
+      }, 900);
     };
     const attach = pp => {
       peer = pp;
@@ -63,30 +165,44 @@ function probeRoom(room, timeoutMs) {
         if (done) return;
         const t = (err && err.type) || 'unknown';
         if (t === 'peer-unavailable') {
-          // 两种可能：房间码不对／房间已关，或者房主把「外网加入」关了（关着不注册 Peer）
-          finish(false, '找不到房间：核对房间码，或让房主开启外网。');
+          // 两种可能：房间码不对／房间已关，或者房主把「外网加入」关了（关着不注册 Peer）。
+          // 但房主刷新页面、切网络时 Peer 会先注销再注册，那几秒里连过去必然是这个错——
+          // 当场判死就会把「房主刷个新」误报成「房间不存在」，用户只能白等一下再手动重试。
+          // 所以第一次不结论：立刻回报「正在再确认」，900ms 后重探一次，两次都查不到才算没了。
+          unavailableHits++;
+          if (unavailableHits === 1) {
+            stage('retry');
+            reProbe();
+            return;
+          }
+          finish(false, '找不到房间 ' + room,
+                 '核对房间码：共 10 位，不含 0 / 1 / I / O。房主刚刷新的话，过两秒再试。', 'not-found');
+          return;
         } else if (t === 'network' || t === 'server-error' || t === 'socket-error') {
-          finish(false, '连不上信令服务器，换个网络再试。');
+          finish(false, '连不上信令服务器',
+                 '当前网络访问不了公共信令（PeerJS）。换个网络（比如手机热点）再试。', 'no-signal');
         } else if (t === 'unavailable-id') {
-          finish(false, '连接被占用，请稍后重试。');
+          finish(false, '连接被占用', '上一次的会话还没释放，稍等两秒重试。', 'busy-id');
         } else if (!freshTried && !pp.open) {
           // 预热的那条长连接已经废了（放太久、切了网络）：换一条新的，别直接判失败
           freshTried = true;
           try { pp.destroy(); } catch (e) {}
           fresh();
         } else {
-          finish(false, '连接失败（' + t + '），请核对房间码。');
+          finish(false, '连接失败（' + t + '）',
+                 '核对房间码；如果一直这样，让房主确认「外网加入」还开着。', 'unknown');
         }
       });
-      if (pp.open) call();
-      else pp.on('open', () => { if (!done) call(); });
+      if (pp.open) { stage('signal'); call(); }
+      else pp.on('open', () => { if (!done) { stage('signal'); call(); } });
     };
-    const fresh = () => {
+    fresh = () => {
       freshTried = true;
       try { attach(new Peer(guestPeerId(), peerOpts())); }
-      catch (e) { finish(false, '无法发起连接：' + (e && e.message ? e.message : e)); }
+      catch (e) { finish(false, '无法发起连接', String(e && e.message ? e.message : e), 'no-peer'); }
     };
-    timer = setTimeout(() => finish(false, '连接超时：请核对房间码和双方网络。'), timeoutMs || 12000);
+    timer = setTimeout(() => finish(false, '连接超时：请核对房间码和双方网络。',
+                                    '', 'timeout'), timeoutMs || 12000);
     // 入口页预热好的信令连接能直接用：跳过 WebSocket 握手，少等 0.3～1.5 秒
     const warm = takeWarmPeer();
     if (warm) {
@@ -110,11 +226,32 @@ function probeRoom(room, timeoutMs) {
 // ===== 入口页：创建房间 / 加入房间 =====
 // 提示和底部那一栏叠在同一格里：只切 visibility，不切 display。
 // 隐藏的那块照样撑格子，所以出提示、清提示，卡片高度一分都不动。
-function gateMsg(text, kind) {
+// sub 是第二行小字（现在用来放「信令 0.8s · 呼叫 1.2s · 共 2.0s」这种耗时诊断）。
+// 这个函数在探活期间每 200ms 被调一次，所以只改文本节点、不重建 DOM——
+// 每次 innerHTML 重来会让那一行字闪过一下，看起来像在抖。
+function gateMsg(text, kind, sub) {
   const el = document.getElementById('gateMsg');
   const foot = document.querySelector('.gate-foot');
   el.className = kind || 'err';
-  el.textContent = text;
+  let main = el.querySelector('.gm-main');
+  if (!main) {
+    el.textContent = '';
+    main = document.createElement('span');
+    main.className = 'gm-main';
+    el.appendChild(main);
+  }
+  if (main.textContent !== text) main.textContent = text;
+  let subEl = el.querySelector('.gm-sub');
+  if (sub) {
+    if (!subEl) {
+      subEl = document.createElement('span');
+      subEl.className = 'gm-sub';
+      el.appendChild(subEl);
+    }
+    if (subEl.textContent !== sub) subEl.textContent = sub;
+  } else if (subEl) {
+    subEl.remove();
+  }
   // 同格叠着：提示上来，说明就藏起来，免得浅红底色压不干净两层字
   if (foot) foot.classList.add('hide');
 }
@@ -590,6 +727,8 @@ async function resumeHostFromWeb() {
     return;
   }
   if (info.client_url) applyClientUrl(info.client_url);
+  // 单文件上限：房主侧栏的「上传限制」卡要用它；拿不到就等 /messages 补
+  if (info && info.max_file) lanFileMax = info.max_file;
   if (!info.has_room || !info.room) {
     try { history.replaceState(null, '', location.pathname); } catch (e2) {}
     showGate();
@@ -759,6 +898,7 @@ async function gateCreateLan() {
     }
     // 邀请链接以本机程序当前的 client_url.txt 为准（在线页那份是导出时的旧值）
     applyClientUrl(info.client_url);
+    if (info && info.max_file) lanFileMax = info.max_file;
     const j = await r.json();
     if (!j || !j.ok || !j.room) throw new Error((j && j.msg) || '创建房间失败');
     ROOM = j.room;
@@ -800,6 +940,33 @@ async function gateCreateLan() {
     if (sub) sub.textContent = '网页直连 / 局域网';
   }
 }
+// 探活进行中时的「取消」句柄。非空即表示「连接」按钮此刻语义是「取消」。
+let gateJoinCtl = null;
+// 失败时那行小字：分段耗时。公益项目没有日志服务，用户说一句「连不上」，
+// 你只能靠猜。有了这行——「信令 4.2s · 呼叫 0.0s · 共 4.2s」一眼就能看出
+// 是信令慢、还是信令通了但没人接。截图过来就能定位，比问十句都准。
+function probeDiag(res, totalMs) {
+  const c = (res && res.cost) || {};
+  const at = k => (typeof c[k] === 'number' ? c[k] : null);
+  const sec = ms => (ms / 1000).toFixed(1) + 's';
+  const seg = (a, b) => {
+    const s = at(a);
+    if (s === null) return '';
+    const e = b === null ? totalMs : at(b);
+    if (e === null || e < s) return '';
+    return sec(e - s);
+  };
+  const parts = [];
+  const sig = seg('signal', 'call');
+  if (sig) parts.push('信令 ' + sig);
+  if (at('signal') === null) parts.push('没连上信令');
+  const call = seg('call', 'wait');
+  if (call) parts.push('呼叫 ' + call);
+  const wait = seg('wait', null);
+  if (wait) parts.push('等待 ' + wait);
+  parts.push('共 ' + sec(totalMs));
+  return parts.join(' · ');
+}
 // 加入房间：先真连一次，房间不存在或连不上就停在入口页。
 // 复选框没勾（非默认状态）时点连接：展开声明区并提示，不往下走。
 async function gateJoin() {
@@ -807,8 +974,23 @@ async function gateJoin() {
   const box = document.getElementById('gateRoom');
   const btn = document.getElementById('gateJoinBtn');
   const label = btn.querySelector('b');
+  // 探活进行中再点这个按钮 = 取消。以前探活期间按钮是 disabled 的，
+  // 房间码输错只能干等满 12 秒才拿到「找不到房间」——那 12 秒纯属白耗。
+  if (gateJoinCtl) {
+    const c = gateJoinCtl;
+    gateJoinCtl = null;
+    try { c.cancel(); } catch (e) {}
+    return;
+  }
   const room = box.value.trim().toUpperCase().replace(/[^A-Z2-9]/g, '');
-  if (room.length < 4) { gateMsg('房间码不对，请重输。'); box.focus(); return; }
+  // 房间码固定 10 位（字母去掉 I/O，数字去掉 0/1）。本地就能判的事，不该让用户
+  // 发一次网络请求、等十几秒之后才被告知「找不到房间」——位数不对当场就说。
+  if (room.length !== 10) {
+    gateMsg('房间码是 10 位，现在输的是 ' + room.length + ' 位。', 'err');
+    box.focus();
+    try { box.select(); } catch (e) {}
+    return;
+  }
   if (btn.disabled) return;
   btn.disabled = true;
 
@@ -835,14 +1017,49 @@ async function gateJoin() {
     return;
   }
 
-  if (label) label.textContent = '连接中…';
+  if (label) label.textContent = '取消';
+  btn.classList.add('cancel');
+  btn.title = '点这里中止这次连接';
   gateMsg('正在连接房间 ' + room + '…', 'info');
-  const res = await probeRoom(room, 12000);
+  const t0 = Date.now();
+  // 提示行一直挂着「现在做到哪一步 + 已经等了多久」。
+  // 用户最难受的不是慢，是不知道慢在哪：同样等 8 秒，「在动」和「像卡死」
+  // 是完全两种感受。这行字不改变速度，只把过程变透明。
+  const STAGE_MSG = {
+    signal: '① 正在连接信令服务器',
+    call: '② 信令已就绪，正在呼叫房主设备',
+    wait: '③ 已呼叫房主，等待对方回应',
+    retry: '房主暂时没响应，正在再确认一次',
+    welcome: '④ 房主已确认，正在进入房间'
+  };
+  let curStage = 'signal', joinTick = null;
+  const paint = ms => {
+    gateMsg((STAGE_MSG[curStage] || '正在连接…') + ' · ' + (ms / 1000).toFixed(1) + 's', 'info');
+  };
+  paint(0);
+  joinTick = setInterval(() => paint(Date.now() - t0), 200);
+  // 探活期间按钮保持可点（语义是「取消」）。ctl 由 probeRoom 填上 cancel。
+  const ctl = {};
+  gateJoinCtl = ctl;
   btn.disabled = false;
+  let res;
+  try {
+    res = await probeRoom(room, 12000, st => { curStage = st; paint(Date.now() - t0); }, ctl);
+  } finally {
+    gateJoinCtl = null;
+    if (joinTick) { clearInterval(joinTick); joinTick = null; }
+  }
+  btn.disabled = false;
+  btn.classList.remove('cancel');
+  btn.title = '';
   if (label) label.textContent = '连接';
   if (!res.ok) {
-    // 不跳转：留在入口页，明确告诉用户失败原因
-    gateMsg(res.msg, 'err');
+    if (res.code === 'canceled') { gateClearMsg(); return; }
+    // 不跳转：主行说原因，副行给「接下来怎么办」+ 分段耗时。
+    // 只报错不给出路，用户还是只能再来问你一次。
+    const soft = res.code === 'full' || res.code === 'p2p-off' || res.code === 'bye';
+    const diag = probeDiag(res, Date.now() - t0);
+    gateMsg(res.msg, soft ? 'warn' : 'err', res.tip ? res.tip + '（' + diag + '）' : diag);
     box.focus();
     try { box.select(); } catch (e) {}
     prewarmSignal();      // 这次的信令连接已经销毁了，先建好下一条，重试时不用再等

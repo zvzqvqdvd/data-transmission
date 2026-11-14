@@ -247,6 +247,12 @@ const ANON_AVATAR =
 function renderMsg(msg) {
   const self = isSelfMsg(msg);
   let bubble='';
+  // 「已清理」= 记录还在、字节被房主删了。旧做法是连消息一起删，结果对方
+  // 连“这里曾经有过一个文件”都看不到，只能跑来问你要。
+  // 这个判断必须放在分支外面：下面「下载进度条」那行也在用它，写在 else
+  // 块里会让块外那行抛 ReferenceError——访客每收到一条文件消息就崩一次，
+  // 而崩的位置正好在「文件已经发送成功、正在画卡片」之后。
+  const gone = msg.type === 'file' && !!msg.gone && !msg.url;
   if (msg.type==='text') {
     bubble = '<div class="bubble'+(self?' me':'')+'">'+esc(msg.content)+'</div>';
   } else if (msg.type==='screen') {
@@ -294,9 +300,10 @@ function renderMsg(msg) {
     // 按钮用内联 SVG 而不是 ⬇ emoji：emoji 在手机 / 电脑 / iOS 上是三种形状。
     const nm = esc(msg.name), sz = esc(msg.size || '');
     const ext = String(msg.name || '').split('.').pop().toUpperCase().slice(0, 4);
+    const sizeLine = sz + (gone ? '<span class="file-gone-tag">已清理</span>' : '');
     const inner = '<div class="file-icon">' + esc(ext) + '</div>' +
       '<div class="file-info"><div class="file-name">' + nm + '</div>' +
-      '<div class="file-size">' + sz + '</div></div>';
+      '<div class="file-size">' + sizeLine + '</div></div>';
     const dlSvg = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"' +
       ' stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
       '<path d="M12 3.6v10.2"/><path d="M7.7 10 12 14.3 16.3 10"/><path d="M4.6 18.6h14.8"/></svg>';
@@ -306,7 +313,13 @@ function renderMsg(msg) {
       '<rect x="7" y="5.5" width="3.6" height="13" rx="1.2"/><rect x="13.4" y="5.5" width="3.6" height="13" rx="1.2"/></svg>';
     const playSvg = '<svg class="dl-ico-play" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">' +
       '<path d="M8.5 5.6c0-.8.9-1.3 1.6-.9l9 6.4c.6.4.6 1.4 0 1.8l-9 6.4c-.7.4-1.6-.1-1.6-.9z"/></svg>';
-    if (MODE === 'guest' && msg.id) {
+    if (gone) {
+      // 按钮留着但不可点：直接藏掉会让人以为卡片坏了，点了还应该说明原因
+      bubble = '<div class="file-card gone">' + inner +
+        '<button type="button" class="file-dl" title="文件已被房主清理" aria-label="文件已被房主清理"' +
+        ' onclick="notify(\'这个文件已被房主清理，无法再下载。可以让发送方重传一份。\')">' +
+        dlSvg + '</button></div>';
+    } else if (MODE === 'guest' && msg.id) {
       bubble = '<div class="file-card">' + inner +
         '<button type="button" class="file-dl" title="下载" aria-label="下载"' +
         ' onclick="pullFile(\'' + esc(msg.id) + '\')">' + dlSvg + '</button></div>';
@@ -318,7 +331,7 @@ function renderMsg(msg) {
     }
   }
   // 访客文件卡片正下方的下载进度条（平时隐藏，下载中由 txRender 填充）
-  const bar = (msg.type === 'file' && MODE === 'guest' && msg.id)
+  const bar = (msg.type === 'file' && MODE === 'guest' && msg.id && !gone)
     ? '<div class="pull-wrap" id="pullwrap-' + esc(msg.id) + '">'+
       '<div class="pull-bar"><i></i></div><div class="pull-text"></div></div>'
     : '';
@@ -382,7 +395,12 @@ async function downloadLocal(card) {
   if (CHANNEL === 'cloud') {
     try {
       const res = await apiFetch('/download?name=' + encodeURIComponent(name));
-      if (!res || !res.ok) { notify('「' + name + '」已不存在，无法下载'); return; }
+      if (!res || !res.ok) {
+        notify(res && res.status === 410
+          ? '「' + name + '」已被房主清理，无法再下载。'
+          : '「' + name + '」已不存在，无法下载');
+        return;
+      }
       const blob = await res.blob();
       const u = URL.createObjectURL(blob);
       saveBlob(u, name);
@@ -611,6 +629,12 @@ async function loadMessages(wait, gen) {
     if (!d.ok) return true;
     // 本机 client_url.txt 改了：这份页面（尤其是线上那份）跟着换成新地址
     if (d.client_url) applyClientUrl(d.client_url);
+    // 局域网单文件上限：以前只有后端知道，页面上完全看不到，加入者传大了才失败
+    if (typeof d.max_file === 'number' && d.max_file > 0 && d.max_file !== lanFileMax) {
+      lanFileMax = d.max_file;
+      renderRoomStat();
+      sendQuota();          // 房主拿到后立刻告诉房里的外网设备
+    }
     // 房间已被解散：本机页面和局域网设备都退回入口页
     if (d.closed) {
       if (!dissolving) {
@@ -766,6 +790,9 @@ function waitDrain(c) {
   if (buffered(c) <= MAX_BUFFERED) return Promise.resolve();
   return new Promise((resolve, reject) => {
     let done = false, ticks = 0, iv = null;
+    // wake 先声明：finish 里要拿它和 dc.__drainWait 比对，而 finish 可能在
+    // 赋值之前被 bufferedamountlow 事件同步触发
+    let wake = null;
     const finish = ok => {
       if (done) return;
       done = true;
@@ -773,7 +800,7 @@ function waitDrain(c) {
       if (iv) clearInterval(iv);
       if (ok) resolve(); else reject(new Error('连接已断开'));
     };
-    const wake = () => { if (buffered(c) <= MAX_BUFFERED) finish(true); };
+    wake = () => { if (buffered(c) <= MAX_BUFFERED) finish(true); };
     dc.__drainWait = wake;
     iv = setInterval(() => {
       if (!c.open) { finish(false); return; }
@@ -845,8 +872,12 @@ function chunkSizeFor(c) {
 // baseOff / totalSize 是断点续传用的：baseOff 表示「这份 file 的内容从整份文件的
 // 第几个字节开始」，totalSize 是整份文件的长度。两个都缺省时行为和以前完全一样
 // （从头整份发），所以老调用点一个字都不用改。
-async function sendFileTo(c, file, name, onProgress, mid, from, baseOff, totalSize) {
+async function sendFileTo(c, file, name, onProgress, mid, from, baseOff, totalSize, ctl) {
   if (!c || !c.open) throw new Error('连接已断开');
+  // ctl 是可选的「暂停 / 取消」控制器（就是一个普通对象，带 paused / canceled）：
+  // 只在发送队列里点暂停时传进来，历史文件续传那条路径不传。
+  const aborted = () => { const e = new Error('已取消'); e.canceled = true; return e; };
+  if (ctl && ctl.canceled) throw aborted();
   const base = Math.max(0, Number(baseOff) || 0);
   const span = file.size;                       // 这次实际要发的字节数
   const total = Math.max(0, Number(totalSize) || (base + span));
@@ -877,6 +908,25 @@ async function sendFileTo(c, file, name, onProgress, mid, from, baseOff, totalSi
   c.__sending = true;
   try {
     while (reads.length) {
+      // 取消：立刻告诉对端「这条作废」，否则房主那边会留着一份半截缓冲
+      // 干等到超时；然后抛出带 canceled 标记的错误，让队列知道这不是失败。
+      if (ctl && ctl.canceled) {
+        try { c.send('FILE_ABORT:' + id); } catch (e) {}
+        throw aborted();
+      }
+      // 暂停：只是不再取下一片。已经塞进 SCTP 缓冲的数据照常发完，
+      // 所以“暂停”不会让对端收到半条消息，继续时从下一片接着走，不用重传。
+      while (ctl && ctl.paused && !ctl.canceled) {
+        // 暂停期间连接可能断掉（房主关了房间、切了网络）。这里只等「继续」
+        // 的话，循环永远不退出，sendAllBusy 会一直是 true——下一间房连文件
+        // 都发不出去，按钮点了只回一句「正在发送中」。
+        if (!c || !c.open) throw new Error('连接已断开，发送已停止');
+        await new Promise(r => setTimeout(r, 120));
+      }
+      if (ctl && ctl.canceled) {
+        try { c.send('FILE_ABORT:' + id); } catch (e) {}
+        throw aborted();
+      }
       const buf = await reads.shift();
       fill();
       if (!buf || !buf.byteLength) break;
@@ -885,6 +935,10 @@ async function sendFileTo(c, file, name, onProgress, mid, from, baseOff, totalSi
       c.send(buf);
       offset += buf.byteLength;
       if (onProgress) onProgress(total ? (base + offset) / total : 1);
+    }
+    if (ctl && ctl.canceled) {
+      try { c.send('FILE_ABORT:' + id); } catch (e) {}
+      throw aborted();
     }
     c.send('FILE_END:' + id);
   } finally {
@@ -976,11 +1030,54 @@ function handleData(data, ctx) {
     if (data.startsWith('PEERS:')) {
       try {
         const p = JSON.parse(data.slice(6));
-        // nf=1：房主的浏览器探测不到配额，整个房间都不收文件（文件最终存在房主侧）
-        hostNoFile = !!(p && p.nf);
+        // nf=1：房主的浏览器探测不到配额，整个房间都不收文件（文件最终存在房主侧）。
+        // 新版房主会紧随其后单独发 QUOTA，这个分支只为兜住旧版房主。
+        if (p && p.nf) {
+          hostLimits = { kind: 'cloud', ok: false, total: 0, used: 0, max: 0 };
+          renderRoomStat();
+        }
         syncFileEntry();
         // 人数由右侧外网卡片 / 局域网卡片各自显示，这里不报合并总数
         renderAll();
+      } catch (e) {}
+      return;
+    }
+    // 房主同步的存储 / 上传限制：加入者靠它决定「能传多大、还剩多少」
+    if (data.startsWith('QUOTA:')) {
+      if (MODE !== 'guest') return;
+      try {
+        const q = JSON.parse(data.slice(6)) || {};
+        hostLimits = {
+          kind: q.kind === 'cloud' ? 'cloud' : 'lan',
+          ok: q.ok !== 0 && q.ok !== false,
+          total: Math.max(0, Number(q.total) || 0),
+          used: Math.max(0, Number(q.used) || 0),
+          max: Math.max(0, Number(q.max) || 0)
+        };
+        renderRoomStat();
+        syncFileEntry();
+      } catch (e) {}
+      return;
+    }
+    // 房主清理了文件：记录留着，只把这条标成「已清理」。
+    // 以前这里是直接把卡片删掉，结果对方连“曾经有过这个文件”都不知道，
+    // 只记得自己没收到东西，最后只能来问——记录本身就是沟通的一部分。
+    if (data.startsWith('FILE_GONE:')) {
+      if (MODE !== 'guest') return;
+      try {
+        const d = JSON.parse(data.slice(10)) || {};
+        const names = new Set(Array.isArray(d.names) ? d.names : []);
+        const ids = new Set(Array.isArray(d.ids) ? d.ids : []);
+        if (names.size || ids.size) {
+          let hit = 0;
+          for (const m of localMsgs) {
+            if (!m || m.type !== 'file' || m.gone) continue;
+            // 自己发的文件本地记的是原始名，房主存的可能是加了序号的名字，
+            // 所以 id 也要认：同一条传输在两边是同一个 mid
+            if ((m.id && ids.has(m.id)) || names.has(m.name)) { m.gone = 1; hit++; }
+          }
+          if (hit) renderAll();
+        }
       } catch (e) {}
       return;
     }
@@ -1089,7 +1186,11 @@ function handleData(data, ctx) {
     // 探活：房主每 5 秒敲一次，收到就回 PONG。手机切后台、进程被系统冻结时
     // 数据通道看着还是开的，但对面已经不响应了，只有主动敲才知道人还在不在。
     if (data === 'PING') {
-      try { if (ctx && ctx.conn) ctx.conn.send('PONG'); } catch (e) {}
+      // 访客这条以前从来没回过：它的 handleData 没有 ctx，拿不到 conn，
+      // 于是房主每轮都收不到 PONG，安静的访客 60 秒后被当成死连接摘掉
+      // （表现就是「在房间里待一会儿突然被踢」）。访客自己有 guestConn。
+      const c = (ctx && ctx.conn) || (MODE === 'guest' ? guestConn : null);
+      try { if (c && c.open) c.send('PONG'); } catch (e) {}
       return;
     }
     if (data === 'PONG') {
@@ -1180,6 +1281,16 @@ function handleData(data, ctx) {
       if (MODE !== 'guest' || !screenStream || !guestPeer) return;
       try { const c = guestPeer.call('pc-' + currentRoom, screenStream);
             if (c) tuneScreenSender(c); } catch (e) {}
+      return;
+    }
+    // 房主说「房间满了」：这是一条明确的拒绝，不是掉线。重连多少次都一样，
+    // 所以直接退回入口页并说明，别让访客对着「正在重新连接」白等。
+    if (data.startsWith('FULL:')) {
+      if (MODE === 'guest') {
+        let mx = 0;
+        try { mx = (JSON.parse(data.slice(5)) || {}).max || 0; } catch (e) {}
+        guestReturnToGate('房间已满（最多 ' + (mx || 6) + ' 人，含房主），等有人退出再进。', 'warn');
+      }
       return;
     }
     // 房主关掉了「外网加入」：这不是掉线，是门被锁了，重连多少次都进不来。
@@ -1292,6 +1403,17 @@ function handleData(data, ctx) {
       // FILE_END 晚一步才交上来。这里给它 2.5 秒的宽限，别一看到不齐就整包丢掉
       // （以前这里是立刻丢弃，手机端图片全废、电脑端时好时坏就是这个原因）
       waitRecvComplete(key, buf, Date.now());
+    } else if (data.startsWith('FILE_ABORT:')) {
+      // 发送方主动取消：把这条的残片丢掉，别等超时、也别当成传输失败
+      const buf = recvBuf.get(key);
+      if (!buf || data.slice(11) !== buf.id) return;
+      recvBuf.delete(key);
+      if (MODE === 'guest' && buf.mid) {
+        pullInFlight.delete(buf.mid);
+        pullStartAt.delete(buf.mid);
+        txEnd();
+      }
+      if (MODE === 'host') notify('对方取消了「' + buf.name + '」的发送');
     }
     return;
   }
@@ -1859,6 +1981,11 @@ function pullWatchdogTick() {
 function pullFile(mid) {
   const m = localMsgs.find(x => x.id === mid);
   if (!m || m.type !== 'file') return;
+  // 房主的字节已经清理掉了：本地有副本（m.url）还能再存一份，没有就只能直说
+  if (m.gone && !m.url) {
+    notify('这个文件已被房主清理，无法再下载。可以让发送方重传一份。');
+    return;
+  }
   if (m.url) { saveBlob(m.url, m.name); return; }   // 本体已在手上：直接再存一份
   if (!canP2P() || !guestConn || !guestConn.open) { notify('未连接房间，无法下载'); return; }
   if (pullInFlight.has(mid) || pullQueue.some(x => x.mid === mid)) { notify('这个文件已在下载队列里'); return; }
@@ -1932,6 +2059,8 @@ async function onFileReceived(blob, name, mid, from) {
     if (!d.ok) throw new Error(d.msg || '保存失败');
     // 收到文件不弹提示：消息列表里会出现这张卡，落盘位置固定是「接收文件」
     loadMessages();
+    // 云房间的已用空间变了：房主卡片与房里所有人的数字一起更新
+    if (CHANNEL === 'cloud') { renderRoomStat(); sendQuota(); }
   } catch (e) {
     toast('保存失败: ' + e.message);
     updateHostRoomHint();
@@ -2065,10 +2194,14 @@ document.addEventListener('keydown', e => {
 });
 // 点遮罩的空白处也能关：只有「销毁房间」例外 —— 那颗红色按钮必须显式点，
 // 免得手一滑点在旁边就当成了确认。
-['netModal', 'helpModal', 'ttlModal'].forEach(id => {
+['netModal', 'helpModal', 'ttlModal', 'cleanModal'].forEach(id => {
   const m = document.getElementById(id);
   if (!m) return;
-  m.addEventListener('click', e => { if (e.target === m) m.classList.remove('show'); });
+  m.addEventListener('click', e => {
+    if (e.target !== m) return;
+    m.classList.remove('show');
+    if (id === 'cleanModal') cleanSel.clear();
+  });
 });
 
 // 局域网二维码：地址后面带上房间码，扫码进来房间码已经填好，不用手输
@@ -2728,7 +2861,10 @@ function registerGuest(ctx, nick, dev) {
   const live = [...hostConns.values()].filter(x => x && x.registered && x.conn && x.conn.open).length +
     (CHANNEL === 'lan' ? lanPeers : 0);
   if (live >= CLOUD_MAX_GUESTS) {
-    try { e.conn.send('NOTE:' + JSON.stringify({ t: '房间人数已满（最多 6 人，含房主）' })); } catch (err) {}
+    // 说清是「满了」，别让人只看到「没有回应」：探活阶段的访客收到 FULL 能当场
+    // 显示「房间已满（最多 6 人）」，而不是等通道被关掉再猜是不是房间码错了。
+    // BYE 保留给旧版访客——它们不认 FULL，至少还能从 BYE 知道被拒了。
+    try { e.conn.send('FULL:' + JSON.stringify({ max: CLOUD_MAX_GUESTS + 1, total: live })); } catch (err) {}
     try { e.conn.send('BYE'); } catch (err) {}
     setTimeout(() => { try { e.conn.close(); } catch (err) {} }, 300);
     dropHostConnQuiet(ctx.id);
@@ -2753,6 +2889,7 @@ function registerGuest(ctx, nick, dev) {
   pushHistoryTo(e.conn);
   updateNums();   // 新设备入房：编号表跟着变（重连设备沿用原号）
   sendPeers();
+  sendQuota();    // 同一份存储 / 单文件上限：让新进来的人立刻知道能传多大
   refreshReady();
   renderAll();
 }
@@ -2783,10 +2920,25 @@ function sendPeers() {
   renderAll();
 }
 
+// 把房间的存储 / 上传限制同步给所有外网设备。
+// 文件都存在房主侧，加入者不可能自己问出「还剩多少」——只能由房主推。
+// 与 PEERS 分开：这个帧会在每次落盘 / 清理后单独发，不必重算成员名单。
+function sendQuota() {
+  if (MODE !== 'host' || isLanClient) return;
+  const lim = roomLimits();
+  if (!lim) return;
+  broadcast('QUOTA:' + JSON.stringify({
+    kind: lim.kind,
+    ok: lim.ok ? 1 : 0,
+    total: lim.total,
+    used: lim.used,
+    max: lim.max
+  }));
+}
+
 // ===== 设备通道与 IP：外网走 PeerJS 直连，局域网走本机 HTTP =====
 let roomDevices = [];        // 后端给出的房间成员（外网由房主上报、局域网由后端记录）
 let reportedDevices = '';    // 上次上报的内容，没变就不重复发
-let hostNoFile = false;      // 房主探测不到浏览器配额时由 PEERS 广播过来：本房间禁止传文件
 
 // 判断一个候选地址是不是真地址（浏览器会把本地地址伪装成 xxxx.local）
 function looksLikeAddr(v) {
@@ -2988,26 +3140,54 @@ function renderRoomStat() {
   const host = MODE === 'host' && !isLanClient;     // 房间卡只挂在房主页面上
   const idleRow = document.getElementById('roomIdle');
   if (idleRow) idleRow.style.display = host ? '' : 'none';
-  // 存储卡只有云房主有：局域网房间的文件落本机磁盘，没有浏览器配额这回事
-  const cloudHost = CHANNEL === 'cloud' && host;
+  // 存储 / 上传限制卡：房主看自己的真值，加入者看房主同步过来的同一份数字。
+  // 云房间有「总量 + 已用 + 单文件」；局域网房间文件落磁盘，只有单文件上限。
+  const lim = roomLimits();
   const box = document.getElementById('roomStat');
-  if (box) box.style.display = cloudHost ? '' : 'none';
-  if (cloudHost) {
-    const used = Cloud.totalBytes();
-    const total = Cloud.totalMax || 0;
-    const ok = Cloud.quotaOk !== false && total > 0;
-    const files = document.getElementById('stFiles');
-    if (files) files.textContent = ok ? fmtSize(used) + ' / ' + fmtSize(total) : '—';
-    const fmax = document.getElementById('stFileMax');
-    if (fmax) fmax.textContent = ok ? fmtSize(Cloud.fileMax) : '禁止上传';
-    const bar = document.getElementById('stBar');
-    if (bar) bar.style.width = ok ? Math.min(100, used / total * 100).toFixed(2) + '%' : '0%';
-    // 探测失败时的红字说明：这张卡不能只显示「—」，得说清为什么
-    const warn = document.getElementById('stWarn');
-    if (warn) warn.style.display = ok ? 'none' : '';
-    if (box) box.classList.toggle('no-quota', !ok);
-    syncFileEntry();
+  // 访客的房号在 currentRoom 里（ROOM 是模板量，guest 页为空字符串），
+  // 两种身份都要判到，否则加入者的卡片永远不显示
+  const code = MODE === 'guest' ? currentRoom : ROOM;
+  const show = !!lim && !!code && !roomClosed;
+  if (box) box.style.display = show ? '' : 'none';
+  if (!show) return;
+  const cloud = lim.kind === 'cloud';
+  const ok = cloud ? (lim.ok && lim.total > 0) : true;
+  const title = document.getElementById('stTitle');
+  if (title) title.textContent = cloud ? (host ? '存储空间' : '房主的存储空间') : '上传限制';
+  // 局域网没有「已用 / 总量」这回事，把整行与进度条收起来，别摆两个破折号
+  const usedRow = document.getElementById('stUsedRow');
+  if (usedRow) usedRow.style.display = cloud ? '' : 'none';
+  const barWrap = document.getElementById('stBarWrap');
+  if (barWrap) barWrap.style.display = cloud ? '' : 'none';
+  const files = document.getElementById('stFiles');
+  if (files) files.textContent = (cloud && ok) ? fmtSize(lim.used) + ' / ' + fmtSize(lim.total) : '—';
+  const fmax = document.getElementById('stFileMax');
+  if (fmax) {
+    fmax.textContent = (cloud && !ok) ? '禁止上传' : (lim.max > 0 ? fmtSize(lim.max) : '—');
   }
+  const bar = document.getElementById('stBar');
+  if (bar) bar.style.width = (cloud && ok) ? Math.min(100, lim.used / lim.total * 100).toFixed(2) + '%' : '0%';
+  // 探测失败时的红字说明：这张卡不能只显示「—」，得说清为什么
+  const warn = document.getElementById('stWarn');
+  if (warn) {
+    warn.style.display = ok ? 'none' : '';
+    if (!ok) {
+      warn.textContent = (host ? '浏览器' : '房主的浏览器') +
+        '没给出可用存储空间，本房间已禁止上传。' + CLOUD_FILE_HINT;
+    }
+  }
+  if (box) box.classList.toggle('no-quota', !ok);
+  const foot = document.getElementById('stFoot');
+  if (foot) {
+    if (!cloud) foot.textContent = '文件直接存到房主电脑的接收文件夹';
+    else if (!ok) foot.textContent = '';
+    else if (host) foot.textContent = '还可上传 ' + fmtSize(Math.max(0, lim.total - lim.used)) + ' · 刷新页面可恢复历史';
+    else foot.textContent = '还可上传 ' + fmtSize(Math.max(0, lim.total - lim.used)) + ' · 文件存在房主浏览器';
+  }
+  // 清理只给房主：加入者删不了房主的东西
+  const clean = document.getElementById('stClean');
+  if (clean) clean.style.display = host ? '' : 'none';
+  syncFileEntry();
   if (!host) return;
   // 倒计时：剩不到 5 分钟就把这一行标成告警色，别等房间没了才发现
   const left = idleLeftMs();
@@ -3040,6 +3220,133 @@ function syncFileEntry() {
   const why = cloudFileBlockReason();
   btn.classList.toggle('blocked', !!why);
   btn.title = why || '发送文件';
+}
+
+// ===== 清理文件（仅房主）：空间不够时删掉旧文件，不必销毁重建房间 =====
+// 云房间删的是 IndexedDB 里的 Blob，局域网房间删的是磁盘上「接收文件」里的那份。
+// 注意：只删字节，不删聊天记录——记录留着并标成「已清理」，卡片变成点了会解释
+// 原因的灰态，而不是整条消失。删记录等于抹掉「这里曾经有过一个文件」这个事实。
+let cleanSel = new Set();
+function cleanEntries() {
+  const out = [];
+  for (const m of serverMsgs) {
+    if (!m || m.type !== 'file' || !m.name) continue;
+    if (m.gone) continue;          // 已经清理过的没有字节可删，不再列出来
+    out.push({ name: m.name, size: m.size || '', id: m.id || '' });
+  }
+  return out;
+}
+// 云房间能精确算出释放多少字节；局域网的消息里只有格式化后的字符串，
+// 具体字节数由后端删除时回传。
+function cleanBytes(name) {
+  if (CHANNEL === 'cloud' && Cloud && Cloud.files) {
+    const b = Cloud.files.get(name);
+    if (b) return b.size || 0;
+  }
+  return 0;
+}
+function openClean() {
+  if (!isRoomOwner()) return;
+  cleanSel = new Set();
+  renderCleanList();
+  const box = document.getElementById('cleanModal');
+  if (box) box.classList.add('show');
+}
+function hideClean() {
+  const box = document.getElementById('cleanModal');
+  if (box) box.classList.remove('show');
+  cleanSel.clear();
+}
+function cleanToggle(name, on) {
+  if (on) cleanSel.add(name); else cleanSel.delete(name);
+  renderCleanSummary();
+}
+function cleanToggleAll(on) {
+  const all = cleanEntries();
+  cleanSel = on ? new Set(all.map(x => x.name)) : new Set();
+  renderCleanList();
+}
+function renderCleanSummary() {
+  const sum = document.getElementById('cleanSum');
+  const btn = document.getElementById('cleanBtn');
+  const all = cleanEntries();
+  let bytes = 0;
+  for (const n of cleanSel) bytes += cleanBytes(n);
+  if (sum) {
+    sum.textContent = cleanSel.size
+      ? '已选 ' + cleanSel.size + ' 个' + (bytes > 0 ? ' · 释放 ' + fmtSize(bytes) : '')
+      : '未选择';
+  }
+  if (btn) {
+    btn.disabled = !cleanSel.size;
+    btn.textContent = cleanSel.size ? '删除所选（' + cleanSel.size + '）' : '删除所选';
+  }
+  const allBox = document.getElementById('cleanAllBox');
+  if (allBox) {
+    allBox.checked = !!all.length && cleanSel.size === all.length;
+    allBox.indeterminate = cleanSel.size > 0 && cleanSel.size < all.length;
+  }
+}
+function renderCleanList() {
+  const box = document.getElementById('cleanList');
+  if (!box) return;
+  const all = cleanEntries();
+  if (!all.length) {
+    box.innerHTML = '<div class="clean-empty">房间里还没有文件，没有可清理的内容。</div>';
+    renderCleanSummary();
+    return;
+  }
+  box.innerHTML = all.map(x =>
+    '<label class="clean-row"><input type="checkbox" data-name="' + esc(x.name) + '"' +
+    (cleanSel.has(x.name) ? ' checked' : '') + '>' +
+    '<span class="cn" title="' + esc(x.name) + '">' + esc(x.name) + '</span>' +
+    '<span class="cs">' + esc(x.size || '') + '</span></label>'
+  ).join('');
+  // 事件委托到每个复选框：文件名可能带引号，不拼进 onclick 字符串
+  box.querySelectorAll('input[data-name]').forEach(el => {
+    el.onchange = () => cleanToggle(el.getAttribute('data-name'), el.checked);
+  });
+  renderCleanSummary();
+}
+async function cleanConfirm() {
+  const names = Array.from(cleanSel);
+  if (!names.length) return;
+  const btn = document.getElementById('cleanBtn');
+  if (btn) btn.disabled = true;
+  let freed = 0;
+  try {
+    if (CHANNEL === 'cloud') {
+      // id 必须在删除前取：删完这些消息就标上 gone，cleanEntries 会把它们过滤掉。
+      // 名字之外再带 id —— 对方自己发的文件本地记的是原始名，
+      // 房主存的可能是加了序号的名字，只按名字会漏掉。
+      const ids = cleanEntries().filter(x => cleanSel.has(x.name) && x.id).map(x => x.id);
+      const r = await Cloud.deleteFiles(names);
+      freed = (r && r.freed) || 0;
+      // 让房里的外网设备同步把卡片标成「已清理」（不是删掉）
+      broadcast('FILE_GONE:' + JSON.stringify({ names: names, ids: ids }));
+      await loadMessages();
+      renderRoomStat();
+      sendQuota();
+    } else {
+      for (const n of names) {
+        try {
+          const r = await apiFetch(API + '/file?name=' + encodeURIComponent(n),
+                                   { method: 'DELETE', cache: 'no-store' });
+          const d = await r.json();
+          if (d && d.ok && d.freed) freed += d.freed;
+        } catch (e) {}
+      }
+      await loadMessages();
+      renderRoomStat();
+    }
+    hideClean();
+    toast(freed > 0
+      ? '已清理 ' + names.length + ' 个文件，释放 ' + fmtSize(freed)
+      : '已清理 ' + names.length + ' 个文件');
+  } catch (e) {
+    notify('清理失败：' + ((e && e.message) || e));
+    if (btn) btn.disabled = false;
+  }
 }
 // 只断开某一条连接；byPeer=true 表示是对方主动发 BYE 过来的
 function dropHostConnById(id, byPeer) {
@@ -3277,6 +3584,7 @@ function initGuest(room, existing) {
   applyDevicePrivacy();       // 访客只看得到自己的连接状态，看不到设备数 / IP
   guestGoneHandled = false;   // 重新进房，允许下一次「房间已不存在」再触发收尾
   peerAck = false;            // 每次进房重新协商，绝不继承上一间房的能力
+  hostLimits = null;          // 上一间房的存储数字不能带进新房间，等房主重发 QUOTA
   showOtherDeviceCard('外网直连', room || '');
   setGuestActions('connecting');   // 连接中先不给按钮
 
@@ -3326,6 +3634,12 @@ let guestRetry = 0;
 let guestSignAt = 0;         // 上一次信令重连的时间：防止 disconnected 连环触发打成限流
 let guestCallSoft = 0;       // 本次尝试内「只重发呼叫、不重建信令」的次数
 let guestPhase = 'idle';     // signaling / calling / connected / recovering
+// 第一次「信令明确说查不到房主」的时刻。判房间结束必须以它为起点封顶：
+// 以前只数「连续」次数，一次超时就把计数清零，「查不到 → 超时 → 查不到」
+// 可以无限循环，用户就永远停在「② 已经呼叫对方设备」上，房间都没了也不回起始页。
+let guestGoneAt = 0;
+const GUEST_GONE_MS = 20000;   // 从第一次查不到起，最多再确认 20 秒就判房间结束
+const GUEST_MAX_RETRY = 5;     // 一轮完整重连的次数上限（每次按退避表等）
 const TIP_CONNECT = '未能与对方设备建立直连，多为 NAT 限制或信令不通。建议两台设备连同一 WiFi 用局域网模式，或点右上角的网络图标配一台 TURN 中继服务器。';
 let guestTimer = null;
 let guestAutoTimer = null;   // 断线后的自动重连定时器
@@ -3341,6 +3655,7 @@ function guestConnect(roomArg) {
   peerBye = false;
   guestAutoTry = 0;
   guestGoneHits = 0;
+  guestGoneAt = 0;      // 新的一轮连接：重新给「房主只是刷新一下」留机会
   setGuestActions('connecting');
   if (guestAutoTimer) { clearTimeout(guestAutoTimer); guestAutoTimer = null; }
   showGuestTip('');
@@ -3439,6 +3754,8 @@ function dropGuestConn() {
 }
 function resetToGate() {
   if (guestRetryTimer) { clearTimeout(guestRetryTimer); guestRetryTimer = null; }
+  stopGuestPing();            // 回起始页了，别再敲心跳
+  guestGoneAt = 0;
   revokeLocalUrls();
   watchAsked.clear();         // 换房间后历史里仍直播的共享卡要能重新请求补推
   applyDevicePrivacy();       // 退出房间后一律按「其他设备」处理
@@ -3453,7 +3770,17 @@ function resetToGate() {
   partialPulls.clear();       // 换了房间，上一间房的残片再也接不上，直接放掉
   pullRestarts = 0;
   failAllFileAcks();          // 等回执的传输立刻判失败，别把发送队列挂住
+  // 但「等回执」之外还有一条会挂住的路：点了暂停的分片循环在等「继续」，
+  // 回执这条路跟它无关。不在这里把标志位放开，它会一直停在半空中，
+  // 发送队列的 busy 标志也永远不释放，下一间房连发送按钮都点不动。
+  for (const it of pendingFiles) {
+    if (it.paused) { it.paused = false; it.canceled = true; }
+    if (it.status === 'sending') { it.status = 'fail'; it.err = '房间已结束'; }
+  }
+  try { renderPending(); } catch (e) {}
   peerAck = false;            // 下一间房的房主可能是旧版，能力要重新协商
+  hostLimits = null;          // 房间没了就别再显示上一间房的「还可上传多少」
+  stopRoomStat();             // 存储卡一起收掉，入口页不该留着上一个房间的数字
   recvBuf.clear();            // 残片不带进下一间房
   chunkChains.clear();
   // 房间结束：正在落盘的缓冲不许再补发旧 id 的回执
@@ -3547,20 +3874,22 @@ function connectOnce(room) {
     // 信令说「这个房主 Peer 不存在」= 可能房间没了。但房主刷新页面时 Peer ID
     // 也会先注销再注册，中间必然出现 peer-unavailable。以前累计 2 次（约 1 秒）
     // 就判定房间结束——房主只要刷新一下，全房间的人都被踢回起始页。
-    // 现在要连续 4 次、约 8 秒都找不到，才认定房间真的关了。
+    // 现在：连续 4 次（约 8 秒）都查不到，或者从第一次查不到起已过 20 秒，都算结束。
+    // 加时间上限是因为「连续」这件事靠不住：中间夹一次 18 秒的超时就把计数清零了，
+    // 于是「查不到 → 超时 → 查不到」能无限循环下去——房间早就没了，用户却永远
+    // 停在「② 已连到信令，正在呼叫对方设备…」上。
     if (gone) {
+      if (!guestGoneAt) guestGoneAt = Date.now();
       guestGoneHits++;
-      if (guestGoneHits >= 4) {
-        guestRoomGone('房间已不存在或房主已离开。');
+      if (guestGoneHits >= 4 || Date.now() - guestGoneAt >= GUEST_GONE_MS) {
+        guestRoomGone('房间已结束或房主已离开。');
         return;
       }
-    } else {
-      guestGoneHits = 0;
     }
-    if (retry && guestRetry < 5) {
+    if (retry && guestRetry < GUEST_MAX_RETRY) {
       guestRetry++;
       guestPhase = 'recovering';
-      setStatus(msg + '，正在自动重试…');
+      setStatus(gone ? '房间暂时没有响应，正在确认…' : (msg + '，正在自动重试…'));
       showGuestTip(tip);
       // 关键：信令还活着就绝不拆它。以前无条件 dropGuestSignal()，等于把刚握到
       // 一半的 ICE 扔掉、从「连接信令服务器」重来——界面在 ①② 之间来回闪就是这个。
@@ -3575,9 +3904,11 @@ function connectOnce(room) {
         if (!peerBye && MODE === 'guest' && currentRoom === room) connectOnce(room);
       }, wait);
     } else if (gone) {
-      // 重试次数用完了还在「找不到房主」：继续按 3 秒一轮确认，别提前离场
+      // 重试次数用完了还在「找不到房主」，但 20 秒的确认窗口还没到：
+      // 继续小步确认，界面如实写「正在确认」而不是「正在呼叫」——窗口一到就离场。
+      const left = Math.max(0, Math.ceil((GUEST_GONE_MS - (Date.now() - guestGoneAt)) / 1000));
       setStatus('正在确认房间是否还在…');
-      showGuestTip('房主可能正在刷新，稍等几秒。');
+      showGuestTip('房主可能正在刷新页面，最多再等 ' + left + ' 秒；房间确实没了会自动退回起始页。');
       guestRetryTimer = setTimeout(() => {
         guestRetryTimer = null;
         if (MODE === 'guest' && !peerBye && currentRoom === room) connectOnce(room);
@@ -3616,8 +3947,10 @@ function connectOnce(room) {
     if (guestConnState === 'connected' && guestConn && guestConn.open) return;
     if (callInFlight) return;
     callInFlight = true;
-    setStatus('② 已连到信令，正在呼叫对方设备…');
-    guestPhase = 'calling';
+    // 已经确认过「信令查不到房主」就不再写 ②：那句话会让用户以为在正常呼叫，
+    // 其实房间可能已经没了。此时如实说「正在确认」，等 20 秒窗口走完就离场。
+    setStatus(guestGoneAt ? '正在确认房间是否还在…' : '② 已连到信令，正在呼叫对方设备…');
+    guestPhase = guestGoneAt ? 'recovering' : 'calling';
     // 复用已有信令时，入口页那条没用上的预热连接顺手收掉，别白占一条 WebSocket
     const spare = takeWarmPeer();
     if (spare && spare !== peer) { try { spare.destroy(); } catch (e) {} }
@@ -3649,19 +3982,21 @@ function connectOnce(room) {
       setStatus('正在重新建立直连…');
       callInFlight = false;          // 上一轮可能卡在「已呼叫但没有任何事件」的状态
       call();
-      guestTimer = setTimeout(softRetry, 15000);
+      guestTimer = setTimeout(softRetry, guestGoneAt ? 6000 : 15000);
       return;
     }
     fail('连接超时', TIP_CONNECT, true);
   };
-  setStatus(peer.open ? '② 已连到信令，正在呼叫对方设备…'
+  setStatus(peer.open ? (guestGoneAt ? '正在确认房间是否还在…' : '② 已连到信令，正在呼叫对方设备…')
                       : (guestPhase === 'recovering' ? '正在恢复连接…' : '① 正在连接信令服务器…'));
-  guestPhase = peer.open ? 'calling' : 'signaling';
+  guestPhase = peer.open ? (guestGoneAt ? 'recovering' : 'calling') : 'signaling';
   // 分阶段超时：信令还没通给 24 秒（手机冷启动 + 弱网握手常见 10～20 秒），
   // 已通但通道没谈成给 18 秒。之前 15/12 秒在 4G 弱信号下会被反复误判，
   // 每误判一次就重发一轮呼叫——用户看到的「闪一下又连上」就是这么来的。
   // 超时只重发呼叫，不销毁信令，这是「不再闪」的关键。
-  guestTimer = setTimeout(softRetry, peer.open ? 18000 : 24000);
+  // 已经查不到房主的时候，信令是好的、对端根本没注册，18 秒纯属白等：
+  // 缩到 6 秒，让 20 秒的确认窗口真的能在 20 秒内走完。
+  guestTimer = setTimeout(softRetry, guestGoneAt ? 6000 : (peer.open ? 18000 : 24000));
   // 同一条信令连接只挂一次 open 监听，靠可替换钩子调用「最新一次」的 call：
   // 以前每次重试都新挂一个，open 一来会同时呼叫好几次，房主那边多出一堆幽灵连接
   peer.__callHook = call;
@@ -3791,7 +4126,12 @@ function wireGuestConn(conn, onFail, onOpen) {
     conn.send('HELLO:' + PROTOCOL + ':' + myNick() + ':' + devId());
     if (onOpen) onOpen();
   });
-  conn.on('data', d => handleData(d, null));
+  conn.on('data', d => {
+    // 有字节进来就说明这条链路是活的（心跳判活看它，见 startGuestPing）
+    guestLastRecv = Date.now();
+    if (d === 'PONG') guestPingMiss = 0;
+    handleData(d, null);
+  });
   conn.on('close', () => {
     if (conn.__ignoreClose || peerBye) return;  // 自己换掉 / 主动断开的，不自动恢复
     // 还没拿到 WELCOME 就被关掉：房主那句 WELCOME 没发过来（页面卡住、正在刷新、
@@ -3855,11 +4195,56 @@ async function refreshSelfIp() {
     showGuestTip('本次连接经中继转发（双方网络都打不通直连），速度受中继带宽限制，文件仍可正常传完。');
   }
 }
+// ===== 访客侧心跳：房主走了要能自己发现 =====
+// 以前只有房主 PING 访客，访客被动回 PONG。房主关掉页面 / 断网时，
+// ROOM_CLOSED 发不出来，而 DataChannel 在访客这一侧还会「open」很久
+// （SCTP 自己要 30 秒以上才发现对端没了）——结果就是房主早走了，加入者
+// 还留在房间里，状态行停在「已连接」。用户看到的「房间都没了回去不了」
+// 就是这么来的。
+// 现在访客自己每 15 秒敲一次：连续两次（约 30 秒）静默就判这条链路死了，
+// 走正常断线重连——重连查不到房主，20 秒内自动退回起始页。
+let guestPingTimer = null;
+let guestPingMiss = 0;
+let guestLastRecv = 0;        // 最近一次收到任何字节的时刻
+const GUEST_PING_MS = 15000;
+function stopGuestPing() {
+  if (guestPingTimer) { clearInterval(guestPingTimer); guestPingTimer = null; }
+  guestPingMiss = 0;
+}
+function startGuestPing() {
+  stopGuestPing();
+  guestLastRecv = Date.now();
+  guestPingTimer = setInterval(() => {
+    if (MODE !== 'guest' || peerBye) { stopGuestPing(); return; }
+    if (!guestConn || !guestConn.open) return;
+    // 页面在后台时浏览器会冻结定时器和 JS，这时的静默不代表对端走了
+    if (document.hidden) return;
+    // 正在传文件、或 15 秒内还收到过字节：链路是活的，不用敲
+    if (guestConn.__sending || Date.now() - guestLastRecv < GUEST_PING_MS) {
+      guestPingMiss = 0;
+      return;
+    }
+    try { guestConn.send('PING'); } catch (e) {}
+    guestPingMiss++;
+    if (guestPingMiss < 2) return;
+    // 连敲两次都没回音：这条链路已经死了，别等 SCTP 自己发现
+    stopGuestPing();
+    if (guestTimer) { clearTimeout(guestTimer); guestTimer = null; }
+    const c = guestConn;
+    guestConn = null;
+    try { if (c) { c.__ignoreClose = true; c.close(); } } catch (e) {}
+    setGuestActions('connecting');
+    setStatus('连接已断开，正在重连…');
+    if (!scheduleGuestRetry()) guestReturnToGate('房主已经没有响应，请重新加入。', 'err');
+  }, GUEST_PING_MS);
+}
+
 function markGuestConnected() {
   if (guestTimer) { clearTimeout(guestTimer); guestTimer = null; }
   if (guestAutoTimer) { clearTimeout(guestAutoTimer); guestAutoTimer = null; }
   guestAutoTry = 0;
   guestGoneHits = 0;
+  guestGoneAt = 0;                 // 真连上了：把「查不到房主」的窗口清零
   peerBye = false;
   guestPhase = 'connected';
   guestRetry = 0;
@@ -3873,6 +4258,7 @@ function markGuestConnected() {
   // 不清的话 pullInFlight 会一直占着位，后面的下载全被堵死
   resetPullsForReconnect();
   ensurePullWatchdog();      // 连着的时候看门狗常开着：卡住的下载会被自动放行
+  startGuestPing();          // 连着的时候也要看着房主还在不在（见 startGuestPing）
   refreshReady();
   renderAll();
   setTimeout(() => { refreshSelfIp(); }, 1200);   // ICE 收敛后再读本机地址
@@ -3907,7 +4293,19 @@ let sendAllBusy = false;
 async function sendAll() {
   if (sendAllBusy) { notify('正在发送中，请稍候'); return; }
   sendAllBusy = true;
-  try { await sendAllInner(); } finally { sendAllBusy = false; }
+  try {
+    await sendAllInner();
+  } catch (e) {
+    // 队列自身出意外（不是某一条文件失败）：以前这个异常会被 finally 之后
+    // 直接抛进 onclick，变成一个没人处理的 Promise 拒绝——界面停在「发送中」，
+    // 用户完全不知道发生了什么，只能刷新页面。
+    try { console.error('[send] 发送队列异常', e); } catch (e2) {}
+    try { notify('发送队列出错，请刷新页面后重试（页面版本 ' + PAGE_BUILD + '）'); } catch (e2) {}
+  } finally {
+    sendAllBusy = false;
+    // 不管怎么结束，待发送列表都要回到可操作的状态，否则按钮永远是灰的
+    try { renderPending(); } catch (e) {}
+  }
 }
 async function sendAllInner() {
   const v = textInput.value.trim();
@@ -3944,10 +4342,23 @@ async function sendAllInner() {
 
   // 文件：房主先落盘再逐台直传；访客传给房主，由房主转给其他人
   if (items.length) {
-    let failed = 0, done = 0;
+    let failed = 0, done = 0, canceled = 0;
     for (const it of items) {
+      if (it.canceled) continue;      // 排队期间就被取消了，一个字节都别发
       it.status = 'sending'; it.pct = 0; it.speed = 0; it.err = ''; it._t = 0;
-      updateItemUI(it);
+      // 「字节和回执都到位了」的标记。一旦它为 true，后面无论抛什么错，
+      // 都只能是本地界面代码的问题，绝不能再把这条文件判成「发送失败」——
+      // 对方明明已经收到，用户却看到红字，只能再发一遍。这个标记就是为了
+      // 让这类误判在结构上不可能发生，而不是靠每一处都记得包 try/catch。
+      let delivered = false;
+      // 只有「访客 → 房主」这条 P2P 分片循环能真正暂停 / 取消；
+      // 房主那条是一次 HTTP 上传，浏览器不给中途停再续的能力。
+      it.pausable = (MODE !== 'host');
+      it.paused = false;
+      // 用整行重绘而不是 updateItemUI：这一下按钮的「个数」变了
+      // （排队时只有 ✕，发送中多出暂停键），改文字改不出新按钮。
+      // 重绘失败不能连累这一条：它只是界面，还没开始发呢。
+      try { renderPending(); } catch (e) {}
       try {
         if (MODE === 'host') {
           const fd = new FormData();
@@ -3956,35 +4367,85 @@ async function sendAllInner() {
           const r = await apiFetch(API + '/upload', {method:'POST', body: fd});
           const d = await r.json();
           if (!d.ok) throw new Error(d.msg || '上传失败');
+          delivered = true;          // 文件已经落进接收文件夹了
           const mid = (d.ids && d.ids[0]) || uid();
           it.savedName = (d.names && d.names[0]) || it.file.name;
           pushedIds.add(mid);
-          // 不向其他设备推送文件本体：广播一张卡片，谁需要谁点下载
-          broadcast('FILE_CARD:' + JSON.stringify({
-            id: mid, name: it.savedName, size: fmtSize(it.file.size), f: myName || '房主'
-          }));
+          // 不向其他设备推送文件本体：广播一张卡片，谁需要谁点下载。
+          // 文件这时已经落盘了，下面只是「把卡片发给别人 / 刷新界面」——
+          // 这些失败绝不能反过来把一次成功的上传标成失败。
+          try {
+            broadcast('FILE_CARD:' + JSON.stringify({
+              id: mid, name: it.savedName, size: fmtSize(it.file.size), f: myName || '房主'
+            }));
+            // 房主自己传完也占空间：同步给自己的卡片和房里的其他设备
+            if (CHANNEL === 'cloud') { renderRoomStat(); sendQuota(); }
+          } catch (e) { try { console.warn('[send] 上传成功但卡片没发出去', e); } catch (e2) {} }
         } else {
           if (!canP2P()) throw new Error('还没有连上房间');
           const mid = uid();
           await sendFileTo(guestConn, it.file, it.file.name,
-            p => itemProgress(it, p), mid, myName || '访客');
-          pushMsg({ type:'file', name:it.file.name, size:fmtSize(it.file.size),
-                    url:URL.createObjectURL(it.file), ip: myName || '我', id: mid });
+            // 进度回调只是画界面：它抛错不能把一次正在进行的传输打断，
+            // 否则文件其实发出去了，用户看到的却是「失败」
+            p => { try { itemProgress(it, p); } catch (e) {} },
+            mid, myName || '访客', 0, 0, it);
+          // sendFileTo 正常返回 = 字节发完 + 房主回了 FILE_ACK。从这一行起
+          // 房主手里已经有完整文件了，剩下的全是画界面。
+          delivered = true;
+          if (it.canceled) {
+            const e2 = new Error('已取消'); e2.canceled = true; throw e2;
+          }
+          // 走到这里字节和回执都已经到位：房主那边文件已经在手上了。
+          // 后面只是把这张卡画进自己的列表，界面出错不能反过来说「发送失败」——
+          // 以前这里任何一个渲染异常都会让用户看到一条红色的「失败」，
+          // 而对方其实已经收到了，用户只能再发一遍，白占一遍空间。
+          try {
+            pushMsg({ type:'file', name:it.file.name, size:fmtSize(it.file.size),
+                      url:URL.createObjectURL(it.file), ip: myName || '我', id: mid });
+          } catch (e) { try { console.warn('[send] 已送达，但本地回声失败', e); } catch (e2) {} }
         }
-        it.status = 'done'; it.pct = 100; it.speed = 0;
-        updateItemUI(it);
+        it.status = 'done'; it.pct = 100; it.speed = 0; it.paused = false;
+        try { renderPending(); } catch (e) {}
         done++;
       } catch(e) {
-        failed++;
-        it.status = 'fail'; it.err = (e && e.message) || '发送失败';
-        updateItemUI(it);
-        notify(it.file.name + ' 发送失败: ' + it.err);
+        // 已经送达的，界面出错也不改判：这是「房主收到了、用户却说失败」的唯一来源。
+        // 只留一条控制台记录，队列项照常标成已发送。
+        if (delivered) {
+          try { console.warn('[send] 已送达，界面收尾出错', e); } catch (e2) {}
+          it.status = 'done'; it.pct = 100; it.speed = 0;
+          try { renderPending(); } catch (e2) {}
+          done++;
+        } else if ((e && e.canceled) || it.canceled) {
+          // 自己取消的不算失败：不弹红条、不留 ↻，直接从队列里消失
+          canceled++;
+          it.status = 'canceled';
+          it.paused = false;
+          renderPending();
+        } else {
+          failed++;
+          it.status = 'fail';
+          // 程序错误（不是网络问题）把页面版本一起写出来：只看一句
+          // 「X is not defined」根本判断不了用户手里是哪一版脚本。
+          // 这类错误多半是浏览器缓存了旧版页面——刷新一下就好。
+          const hard = e && (e.name === 'ReferenceError' || e.name === 'TypeError');
+          // 硬错误一律翻译成用户能照做的动作：把原始报错（「X is not defined」）
+          // 塞给用户没有任何意义，它只能告诉开发者「这版脚本有笔误」。
+          it.err = hard
+            ? '页面脚本出错，请按 Ctrl+Shift+R 强制刷新后重试（页面版本 ' + PAGE_BUILD + '）'
+            : ((e && e.message) || '发送失败');
+          if (hard) { try { console.error('[send] 页面脚本出错', e); } catch (e2) {} }
+          renderPending();
+          notify(it.file.name + ' 发送失败: ' + it.err);
+        }
+      } finally {
+        it.pausable = false;
+        it.paused = false;
       }
     }
     txEnd();
     // 发送完成的项立刻从列表清掉，不再留一栏「已完成」等手动清空；
-    // 失败的项保留，方便点右侧 ↻ 重试
-    pendingFiles = pendingFiles.filter(x => x.status !== 'done');
+    // 失败的项保留，方便点右侧 ↻ 重试；取消的也没必要留着
+    pendingFiles = pendingFiles.filter(x => x.status !== 'done' && x.status !== 'canceled' && !x.canceled);
     renderPending();
     // 发送完成不弹提示：成没成看聊天里那张卡就知道，成功的项直接从列表消失。
     // 只有失败才弹——那是要用户处理的，不是「通知」。

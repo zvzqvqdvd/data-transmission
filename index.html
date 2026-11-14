@@ -1920,7 +1920,7 @@ body[data-channel="lan"] [data-channel="cloud"] { display: none !important; }
       · 房主点「销毁房间」（立即生效）<br>
       销毁时房间码作废；<b>聊天记录一律不落盘</b>，局域网房间的接收文件随房间一起删除，不做保留。</p>
     <div class="modal-btns"><button class="btn-plain" onclick="hideTtl()">知道了</button></div>
-    <p style="text-align:center;font-size:11px;color:#b0b3b8;margin:10px 0 0;">页面版本 693d53e3b0（反馈问题时请带上这一行）</p>
+    <p style="text-align:center;font-size:11px;color:#b0b3b8;margin:10px 0 0;">页面版本 66bb7c6f0b（反馈问题时请带上这一行）</p>
   </div>
 </div>
 
@@ -2055,7 +2055,7 @@ let CLIENT_URL = 'https://zvzqvqdvd.github.io/data-transmission/';
 // 页面源文件指纹（由程序按 web/ 源文件现算，在线页 = 导出那一刻的值）。
 // 邀请链接 / 二维码 / 复制的访问地址都带 ?v=<指纹>：手机浏览器对页面缓存
 // 非常顽固，URL 不变就拿旧缓存页连新程序，轻则变慢、重则连不上。
-const PAGE_BUILD = '693d53e3b0';
+const PAGE_BUILD = '66bb7c6f0b';
 let lastRev = null;
 let pollGen = 0;             // 轮询代际：换代 / 停止时让在途请求的结果作废
 let pollAbort = null;        // 在途长轮询的 AbortController
@@ -3088,14 +3088,18 @@ const Cloud = {
   waitChange(ms) {
     return new Promise(resolve => {
       let done = false;
+      // timer 必须先声明再使用：finish 里要 clearTimeout 它，而 finish 有可能
+      // 在 setTimeout 赋值之前就被 waiters 里的别人调用（同步触发），
+      // 那时 const timer 还在暂时性死区里，会抛 ReferenceError。
+      let timer = null;
       const finish = () => {
         if (done) return;
         done = true;
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
         Cloud.waiters = Cloud.waiters.filter(w => w !== finish);
         resolve();
       };
-      const timer = setTimeout(finish, ms);
+      timer = setTimeout(finish, ms);
       Cloud.waiters.push(finish);
     });
   },
@@ -3685,6 +3689,12 @@ const ANON_AVATAR =
 function renderMsg(msg) {
   const self = isSelfMsg(msg);
   let bubble='';
+  // 「已清理」= 记录还在、字节被房主删了。旧做法是连消息一起删，结果对方
+  // 连“这里曾经有过一个文件”都看不到，只能跑来问你要。
+  // 这个判断必须放在分支外面：下面「下载进度条」那行也在用它，写在 else
+  // 块里会让块外那行抛 ReferenceError——访客每收到一条文件消息就崩一次，
+  // 而崩的位置正好在「文件已经发送成功、正在画卡片」之后。
+  const gone = msg.type === 'file' && !!msg.gone && !msg.url;
   if (msg.type==='text') {
     bubble = '<div class="bubble'+(self?' me':'')+'">'+esc(msg.content)+'</div>';
   } else if (msg.type==='screen') {
@@ -3732,10 +3742,6 @@ function renderMsg(msg) {
     // 按钮用内联 SVG 而不是 ⬇ emoji：emoji 在手机 / 电脑 / iOS 上是三种形状。
     const nm = esc(msg.name), sz = esc(msg.size || '');
     const ext = String(msg.name || '').split('.').pop().toUpperCase().slice(0, 4);
-    // 「已清理」= 记录还在、字节被房主删了。旧做法是连消息一起删，结果对方
-    // 连“这里曾经有过一个文件”都看不到，只能跑来问你要——凭空多一轮沟通。
-    // 有本地副本（msg.url，访客已经下过）就不算“下不了”，照常可再存一份。
-    const gone = !!msg.gone && !msg.url;
     const sizeLine = sz + (gone ? '<span class="file-gone-tag">已清理</span>' : '');
     const inner = '<div class="file-icon">' + esc(ext) + '</div>' +
       '<div class="file-info"><div class="file-name">' + nm + '</div>' +
@@ -4226,6 +4232,9 @@ function waitDrain(c) {
   if (buffered(c) <= MAX_BUFFERED) return Promise.resolve();
   return new Promise((resolve, reject) => {
     let done = false, ticks = 0, iv = null;
+    // wake 先声明：finish 里要拿它和 dc.__drainWait 比对，而 finish 可能在
+    // 赋值之前被 bufferedamountlow 事件同步触发
+    let wake = null;
     const finish = ok => {
       if (done) return;
       done = true;
@@ -4233,7 +4242,7 @@ function waitDrain(c) {
       if (iv) clearInterval(iv);
       if (ok) resolve(); else reject(new Error('连接已断开'));
     };
-    const wake = () => { if (buffered(c) <= MAX_BUFFERED) finish(true); };
+    wake = () => { if (buffered(c) <= MAX_BUFFERED) finish(true); };
     dc.__drainWait = wake;
     iv = setInterval(() => {
       if (!c.open) { finish(false); return; }
@@ -4350,6 +4359,10 @@ async function sendFileTo(c, file, name, onProgress, mid, from, baseOff, totalSi
       // 暂停：只是不再取下一片。已经塞进 SCTP 缓冲的数据照常发完，
       // 所以“暂停”不会让对端收到半条消息，继续时从下一片接着走，不用重传。
       while (ctl && ctl.paused && !ctl.canceled) {
+        // 暂停期间连接可能断掉（房主关了房间、切了网络）。这里只等「继续」
+        // 的话，循环永远不退出，sendAllBusy 会一直是 true——下一间房连文件
+        // 都发不出去，按钮点了只回一句「正在发送中」。
+        if (!c || !c.open) throw new Error('连接已断开，发送已停止');
         await new Promise(r => setTimeout(r, 120));
       }
       if (ctl && ctl.canceled) {
@@ -7199,6 +7212,14 @@ function resetToGate() {
   partialPulls.clear();       // 换了房间，上一间房的残片再也接不上，直接放掉
   pullRestarts = 0;
   failAllFileAcks();          // 等回执的传输立刻判失败，别把发送队列挂住
+  // 但「等回执」之外还有一条会挂住的路：点了暂停的分片循环在等「继续」，
+  // 回执这条路跟它无关。不在这里把标志位放开，它会一直停在半空中，
+  // 发送队列的 busy 标志也永远不释放，下一间房连发送按钮都点不动。
+  for (const it of pendingFiles) {
+    if (it.paused) { it.paused = false; it.canceled = true; }
+    if (it.status === 'sending') { it.status = 'fail'; it.err = '房间已结束'; }
+  }
+  try { renderPending(); } catch (e) {}
   peerAck = false;            // 下一间房的房主可能是旧版，能力要重新协商
   hostLimits = null;          // 房间没了就别再显示上一间房的「还可上传多少」
   stopRoomStat();             // 存储卡一起收掉，入口页不该留着上一个房间的数字
@@ -7714,7 +7735,19 @@ let sendAllBusy = false;
 async function sendAll() {
   if (sendAllBusy) { notify('正在发送中，请稍候'); return; }
   sendAllBusy = true;
-  try { await sendAllInner(); } finally { sendAllBusy = false; }
+  try {
+    await sendAllInner();
+  } catch (e) {
+    // 队列自身出意外（不是某一条文件失败）：以前这个异常会被 finally 之后
+    // 直接抛进 onclick，变成一个没人处理的 Promise 拒绝——界面停在「发送中」，
+    // 用户完全不知道发生了什么，只能刷新页面。
+    try { console.error('[send] 发送队列异常', e); } catch (e2) {}
+    try { notify('发送队列出错，请刷新页面后重试（页面版本 ' + PAGE_BUILD + '）'); } catch (e2) {}
+  } finally {
+    sendAllBusy = false;
+    // 不管怎么结束，待发送列表都要回到可操作的状态，否则按钮永远是灰的
+    try { renderPending(); } catch (e) {}
+  }
 }
 async function sendAllInner() {
   const v = textInput.value.trim();
@@ -7889,6 +7922,7 @@ function probeRoom(room, timeoutMs, onStage, ctl) {
   return new Promise(resolve => {
     let done = false, peer = null, conn = null, timer = null, guestName = '';
     let fallbackTimer = null, freshTried = false;
+    let fresh = null;          // 先声明：error 回调里可能要换一条新信令，那时还没走到赋值
     let unavailableHits = 0;   // 连续「信令说查不到这个房主」的次数
     const t0 = Date.now();
     const cost = {};           // 各阶段完成时刻（相对 t0 的 ms）
@@ -8068,7 +8102,7 @@ function probeRoom(room, timeoutMs, onStage, ctl) {
       if (pp.open) { stage('signal'); call(); }
       else pp.on('open', () => { if (!done) { stage('signal'); call(); } });
     };
-    const fresh = () => {
+    fresh = () => {
       freshTried = true;
       try { attach(new Peer(guestPeerId(), peerOpts())); }
       catch (e) { finish(false, '无法发起连接', String(e && e.message ? e.message : e), 'no-peer'); }

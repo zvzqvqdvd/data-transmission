@@ -145,19 +145,22 @@
   </div>
 </div>
 
-<!-- 纯网页房间的存储卡：本房间能用多少、单文件多大、已用多少。
-     容量由建房时的浏览器配额算出（可用空间 × 80%，单文件取其中 10%），
-     只有云房主看得到，由 renderRoomStat() 按 CHANNEL+MODE 控制显隐 -->
-<div id="roomStat" data-channel="cloud" style="display:none;">
-  <div class="st-h">存储空间</div>
+<!-- 存储 / 上传限制卡：本房间能用多少、单文件多大、已用多少。
+     云房主按自己的浏览器配额算（可用空间 × 80%，单文件取其中 10%）；
+     加入者看到的是房主经 QUOTA 帧同步过来的同一份数字（只读），
+     局域网房间没有配额概念，只显示后端给的单文件上限。
+     显隐由 renderRoomStat() 按「房间类型 + 身份」控制 -->
+<div id="roomStat" style="display:none;">
+  <div class="st-h" id="stTitle">存储空间</div>
   <div class="st-grid">
-    <span>已用 <b id="stFiles">—</b></span>
+    <span id="stUsedRow">已用 <b id="stFiles">—</b></span>
     <span>单文件上限 <b id="stFileMax">—</b></span>
   </div>
-  <div class="mini-bar"><i id="stBar"></i></div>
+  <div class="mini-bar" id="stBarWrap"><i id="stBar"></i></div>
   <!-- 探测不到配额时的红字：不是「0 B」，是「这台浏览器给不出数字」 -->
   <div class="st-warn" id="stWarn" style="display:none;">浏览器没给出可用存储空间，本房间已禁止上传。传输文件请使用任意最新版浏览器，并且不要开启无痕（隐私）访问。</div>
-  <div class="st-foot">刷新页面可恢复历史与文件</div>
+  <div class="st-foot" id="stFoot">刷新页面可恢复历史与文件</div>
+  <button class="st-clean" id="stClean" type="button" onclick="openClean()">清理文件，释放空间…</button>
 </div>
 
 <div id="lanBanner" style="display:none;">
@@ -366,6 +369,21 @@
     <div class="modal-btns">
       <button class="btn-plain" onclick="hideP2POff()">取消</button>
       <button class="btn-danger" onclick="confirmP2POff()">关闭外网</button>
+    </div>
+  </div>
+</div>
+<div class="modal-mask" id="cleanModal">
+  <div class="modal wide">
+    <h3>清理文件释放空间</h3>
+    <p class="modal-tip" style="text-align:left;" id="cleanTip">删除后文件从房主这边移除，其他设备也下载不到，<b>不可恢复</b>。只想腾地方时清理大文件即可，房间不用重建。</p>
+    <div class="clean-head">
+      <label class="clean-all"><input type="checkbox" id="cleanAllBox" onchange="cleanToggleAll(this.checked)"> 全选</label>
+      <span class="clean-sum" id="cleanSum">未选择</span>
+    </div>
+    <div class="clean-list" id="cleanList"></div>
+    <div class="modal-btns">
+      <button class="btn-plain" onclick="hideClean()">取消</button>
+      <button class="btn-danger" id="cleanBtn" onclick="cleanConfirm()" disabled>删除所选</button>
     </div>
   </div>
 </div>

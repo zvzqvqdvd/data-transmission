@@ -402,6 +402,28 @@ a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 .file-dl:hover { background: var(--brand); border-color: var(--brand); color: #fff; }
 .file-dl:active { transform: scale(.93); }
 
+/* 已清理的文件：记录留着（知道谁在什么时候发过什么），但字节没了。
+   卡片整体压灰、图标去色，按钮变成不可点的“已清理”态——不删记录，
+   否则对方会以为这件事根本没发生过。 */
+.file-card.gone { background: var(--surface-2); border-color: var(--line); box-shadow: none; }
+.file-card.gone .file-icon {
+  background: var(--surface-3); border-color: var(--line); color: var(--t3);
+}
+.file-card.gone .file-name { color: var(--t2); }
+.file-card.gone .file-size { color: var(--t3); }
+.file-card.gone .file-dl {
+  cursor: not-allowed; background: var(--surface-3);
+  border-color: var(--line); color: var(--t3);
+}
+.file-card.gone .file-dl:hover { background: var(--surface-3); border-color: var(--line); color: var(--t3); }
+.file-card.gone .file-dl:active { transform: none; }
+/* “已清理”小标：跟着文件大小走在同一行，一眼看出这条记录为什么下不了 */
+.file-gone-tag {
+  display: inline-block; margin-left: 6px; padding: 0 5px;
+  border-radius: 4px; background: var(--surface-3); color: var(--t2);
+  font-size: 10.5px; line-height: 16px; vertical-align: 1px;
+}
+
 /* 文件卡片下方的拉取进度条（访客端） */
 .pull-wrap { display: none; margin-top: 7px; }
 .pull-bar { height: 4px; border-radius: 2px; overflow: hidden; background: var(--surface-3); }
@@ -563,6 +585,11 @@ body.fs-locked { overflow: hidden; }
 }
 .pq-item:last-child { margin-bottom: 0; }
 .pq-item.sending { background: var(--brand-soft); border-color: var(--brand-line); }
+/* 暂停：颜色退成中性，进度条留在原地不动 —— 让人一眼看出“是我按停的” */
+.pq-item.paused { background: var(--surface-2); border-color: var(--line-2); }
+.pq-item.paused .pq-bar { display: block; }
+.pq-item.paused .pq-fill { background: var(--t4); }
+.pq-item.paused .pq-state { color: var(--t2); }
 .pq-item.done { background: var(--surface-2); box-shadow: none; }
 .pq-item.done .pq-name { color: var(--t2); }
 .pq-item.err { background: var(--danger-soft); border-color: var(--danger-line); }
@@ -603,7 +630,7 @@ body.fs-locked { overflow: hidden; }
   position: absolute; left: 0; right: 0; bottom: 0; height: 2px;
   background: var(--surface-3);
 }
-.pq-item:not(.sending):not(.err) .pq-bar { display: none; }
+.pq-item:not(.sending):not(.paused):not(.err) .pq-bar { display: none; }
 .pq-fill { height: 100%; width: 0; background: var(--brand); transition: width .18s linear; }
 .pq-item.err .pq-fill { background: #E57373; }
 
@@ -687,6 +714,7 @@ body.fs-locked { overflow: hidden; }
 .btn-plain:hover { background: var(--line-2); }
 .btn-danger { background: var(--danger); color: #fff; }
 .btn-danger:hover { background: #C4292E; filter: none; }
+.btn-danger:disabled { background: var(--danger-line); color: #fff; cursor: not-allowed; }
 .modal-tip { font-size: 12.5px; line-height: 1.8; color: var(--t2); margin: -4px 0 4px; }
 
 .toast {
@@ -838,6 +866,20 @@ body.booting #hostView { visibility: hidden; animation: none; }
 .gate-btn.primary .gate-txt b { color: #fff; }
 .gate-btn.primary .gate-txt i { color: rgba(255, 255, 255, .85); }
 
+/* 探活进行中：同一颗按钮换成「取消」。绿底白字的「取消」容易被当成「确认」，
+   所以退回次要操作的观感（白底绿字 + 描边）——但保留 hover 的手感，
+   让人一眼看出它还能点，而不是又卡住了一个灰按钮 */
+.gate-btn.primary.cancel {
+  background: var(--surface);
+  border: 1px solid var(--brand-line);
+  box-shadow: none;
+}
+.gate-btn.primary.cancel .gate-txt b { color: var(--brand-700); }
+.gate-btn.primary.cancel:hover {
+  background: var(--brand-soft);
+  box-shadow: 0 10px 20px -14px rgba(16, 24, 40, .45);
+}
+
 /* 创建房间：等本机程序回应时把 ＋ 换成转圈，进度画在副标题位置 */
 .gate-btn.busy { pointer-events: none; cursor: default; }
 .gate-btn.busy .gate-ico { position: relative; color: transparent; font-size: 0; }
@@ -903,10 +945,16 @@ body.booting #hostView { visibility: hidden; animation: none; }
    隐藏的那块照样撑格子，所以出提示、清提示卡片高度一分都不动 */
 #gateMsg {
   grid-area: 1 / 1; visibility: hidden;
-  display: flex; align-items: center; justify-content: center;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 1px;
   padding: 6px 10px; border-radius: var(--r-md);
   font-size: 11.5px; line-height: 1.5; text-align: center;
   overflow-wrap: anywhere;      /* 长房间码 / 错误类型也别撑破卡片 */
+}
+/* 第二行：分段耗时诊断。等宽数字，秒数跳动时那一行不会左右抖 */
+#gateMsg .gm-sub {
+  font-size: 10px; line-height: 1.4; opacity: .72;
+  font-variant-numeric: tabular-nums;
 }
 #gateMsg.err { visibility: visible; background: var(--danger-soft); color: #C4292E; }
 /* 房间结束 / 被请出：不是错误，但要比过程提示醒目 */
@@ -1266,9 +1314,10 @@ body.booting #hostView { visibility: hidden; animation: none; }
 .room-idle.warn::before { background: var(--warn); }
 .room-idle.warn b { color: var(--warn); }
 
-/* ===== 纯网页房间存储卡 =====
-   已用 / 总量、单文件上限、进度条。只在云房主侧栏出现，
-   总量由建房时的浏览器配额决定（可用空间 × 80%），进度条 = 已用 / 总量。 */
+/* ===== 存储 / 上传限制卡 =====
+   云房主：已用 / 总量、单文件上限、进度条（总量 = 可用空间 × 80%）；
+   加入者：同一份数字的只读版，由房主经 QUOTA 帧同步；
+   局域网房间：没有配额，只显示后端给的单文件上限。 */
 #roomStat {
   flex-shrink: 0;
   margin: 10px 20px 0;
@@ -1324,6 +1373,51 @@ body.booting #hostView { visibility: hidden; animation: none; }
   background: #07C160; transition: width .3s ease;
 }
 .st-foot { margin-top: 8px; font-size: 10.5px; color: var(--t3); line-height: 1.5; }
+/* 清理入口：只在房主页面上出现（加入者看不到，也没有权限）。
+   做成有底色的轻按钮，不用下划线——下划线像正文里的链接，和旁边的小字说明混在一起。 */
+.st-clean {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-top: 10px; padding: 5px 10px; border: 1px solid var(--brand-line);
+  border-radius: var(--r-sm); background: var(--brand-soft);
+  font: inherit; font-size: 11px; line-height: 1.2; color: var(--brand-700);
+  cursor: pointer; text-decoration: none;
+  transition: background .15s ease, border-color .15s ease;
+}
+.st-clean:hover { background: #DFF4E8; border-color: #B7E2C9; }
+.st-clean:active { background: #D5EFE1; }
+
+/* ===== 清理文件弹窗 =====
+   房主勾选聊天里的文件卡片，删掉后立即释放房间空间。
+   列表用固定最大高度 + 内部滚动：文件多时弹窗不会顶出屏幕。 */
+.clean-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-top: 12px; font-size: 12px; color: var(--t2);
+}
+.clean-all { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.clean-all input { width: 14px; height: 14px; accent-color: var(--brand); }
+.clean-sum { font-size: 11.5px; color: var(--t3); }
+.clean-list {
+  margin-top: 8px; max-height: 46vh; overflow-y: auto;
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--surface);
+}
+.clean-row {
+  display: flex; align-items: center; gap: 9px;
+  padding: 9px 11px; border-top: 1px solid var(--line);
+  font-size: 12px; color: var(--t1); cursor: pointer;
+}
+.clean-row:first-child { border-top: 0; }
+.clean-row:hover { background: var(--surface-2); }
+.clean-row input { width: 14px; height: 14px; accent-color: var(--brand); flex-shrink: 0; }
+.clean-row .cn {
+  flex: 1; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.clean-row .cs { flex-shrink: 0; font-size: 11px; color: var(--t3); }
+.clean-empty {
+  padding: 22px 12px; text-align: center;
+  font-size: 12px; color: var(--t3);
+}
 
 /* ===== v2：入口页视图切换的过渡 =====
    三块视图本来就同格叠放、靠 visibility 切换，卡片长宽不变（D-04）。

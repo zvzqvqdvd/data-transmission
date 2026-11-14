@@ -40,6 +40,12 @@ let ROOM = '__ROOM__';
 // 人数上限：与后端 ROOM_MAX_MEMBERS 对齐；有本机程序时用 /api/host 回传的真值覆盖，
 // 云房间没有后端，就用这个默认值。
 let ROOM_MAX = 6;
+// 房间的存储 / 上传限制。房主这边是本地真值，加入者这边靠房主推来的 QUOTA 帧。
+//   kind: cloud = 文件存房主浏览器（有总量、已用、单文件上限）
+//         lan   = 文件存房主磁盘（只有单文件上限）
+//   ok:   false 表示房主拿不到浏览器配额，全房禁传
+let hostLimits = null;       // 访客侧：房主广播的同一份数字（null = 还没收到）
+let lanFileMax = 0;          // 局域网房间单文件上限，由后端 max_file 下发
 const PROTOCOL = 4;          // v4：连接元数据带上昵称与设备 ID，房主分配名字时不用等 HELLO
 // 邀请链接用的域名：本机页面由程序每次请求时按 client_url.txt 现填；
 // 在线页（GitHub 上那份）写的是导出那一刻的值，只能靠运行时从本机接口拿最新值覆盖，
@@ -420,19 +426,35 @@ function protoMismatch(v, ctx) {
 
 // 顶栏地址由 startHostUI 里按「本机 / 局域网设备」分别填充
 
-// 纯网页房间：文件最终存在房主的浏览器里，房主拿不到配额就整个房间都不收文件。
-// 房主自己看 Cloud.quotaOk，访客看房主经 PEERS 广播来的 nf 标记——两边都拦，
-// 免得访客把几十 MB 传完才在房主那边收到一句「存不下」。
+// 房间的存储 / 上传限制：房主这边取本地真值，加入者取房主推来的 QUOTA 帧。
+// 文件最终都存在房主侧（云房间是浏览器，局域网房间是磁盘），所以「能传多大、
+// 还剩多少」必须由房主说了算——加入者不该在传完几十 MB 之后才收到一句「存不下」。
+// 访客的 CHANNEL 恒为 'lan'（它没有后端可问），因此判断不了房间类型，
+// 只能看 hostLimits.kind：这就是 QUOTA 帧必须带 kind 的原因。
+function roomLimits() {
+  if (MODE === 'host') {
+    // 局域网设备：没有配额、也没有房主权限，只知道后端给的单文件上限
+    if (isLanClient) return { kind: 'lan', ok: true, total: 0, used: 0, max: lanFileMax || 0 };
+    if (CHANNEL === 'cloud') {
+      const total = (Cloud && Cloud.totalMax) || 0;
+      return { kind: 'cloud', ok: !!(Cloud && Cloud.quotaOk !== false && total > 0),
+               total: total, used: Cloud ? Cloud.totalBytes() : 0,
+               max: (Cloud && Cloud.fileMax) || 0 };
+    }
+    return { kind: 'lan', ok: true, total: 0, used: 0, max: lanFileMax || 0 };
+  }
+  return hostLimits;          // 访客：还没收到 QUOTA 就是 null（不拦，保持旧行为）
+}
+// 云房间：文件最终存在房主的浏览器里，房主拿不到配额就整个房间都不收文件。
+// 房主看 Cloud.quotaOk，访客看房主同步来的 ok 标记——两边都拦。
 const CLOUD_FILE_HINT = '传输文件请使用任意最新版浏览器，并且不要开启无痕（隐私）访问。';
 function cloudFileBlockReason() {
-  if (CHANNEL !== 'cloud') return '';
-  if (MODE === 'host' && !(Cloud && Cloud.quotaOk)) {
+  const lim = roomLimits();
+  if (!lim || lim.ok) return '';
+  if (MODE === 'host') {
     return '浏览器没给出可用存储空间（无痕模式或版本过旧），本房间已禁止上传。' + CLOUD_FILE_HINT;
   }
-  if (MODE === 'guest' && hostNoFile) {
-    return '房主的浏览器无法确认可用存储空间，本房间已禁止上传。' + CLOUD_FILE_HINT;
-  }
-  return '';
+  return '房主的浏览器无法确认可用存储空间，本房间已禁止上传。' + CLOUD_FILE_HINT;
 }
 // 点「发送文件」：先判一次，不能传就当场把原因说清楚，别把选择框弹出来让人白挑一通
 function pickFiles() {
@@ -448,12 +470,33 @@ function addFiles(list) {
   // 选择框、拖拽、Ctrl+V 三条路都汇到这里，拦一处就全拦住了
   const why = cloudFileBlockReason();
   if (why) { notify(why); return 0; }
-  let n = 0;
+  // 单文件上限 + 房间剩余空间：两者都由房主侧给出（局域网房间只有前者）
+  const lim = roomLimits();
+  const max = (lim && lim.max > 0) ? lim.max : 0;
+  let budget = null, avail0 = 0;
+  if (lim && lim.kind === 'cloud' && lim.total > 0) {
+    const queued = pendingFiles.reduce((s, x) => s + ((x.file && x.file.size) || 0), 0);
+    avail0 = Math.max(0, lim.total - lim.used - queued);
+    budget = avail0;
+  }
+  let n = 0, noRoom = 0;
+  const over = [];
   for (const f of Array.from(list || [])) {
     if (!f || typeof f.size !== 'number') continue;
+    if (max && f.size > max) { over.push(f); continue; }
+    if (budget !== null && f.size > budget) { noRoom++; continue; }
+    if (budget !== null) budget -= f.size;
     pendingFiles.push({ uid: 'q' + (++pendingSeq), file: f, status: 'wait',
-                        pct: 0, speed: 0, err: '' });
+                        pct: 0, speed: 0, err: '',
+                        pausable: false, paused: false, canceled: false });
     n++;
+  }
+  if (over.length) {
+    notify(over[0].name + ' 超过单文件上限 ' + fmtSize(max) +
+           (over.length > 1 ? '（另有 ' + (over.length - 1) + ' 个同样超限）' : ''));
+  }
+  if (noRoom) {
+    notify('房间剩余空间不足：还可上传 ' + fmtSize(avail0) + '。');
   }
   if (n) {
     // 不弹「已加入队列」：底部列表立刻出现在眼前，再顶一个黑条是打扰
@@ -529,32 +572,47 @@ textInput.addEventListener('keydown', e => {
 
 function itemState(it) {
   if (it.status === 'sending') {
+    if (it.canceled) return '正在取消…';
+    if (it.paused) return '已暂停 · ' + (it.pct || 0).toFixed(0) + '%';
     const parts = [(it.pct || 0).toFixed(0) + '%'];
     if (it.speed > 1024) parts.push(fmtSpeed(it.speed));
     return parts.join(' · ');
   }
+  if (it.status === 'canceled') return '已取消';
   if (it.status === 'done') return '已发送';
   if (it.status === 'fail') return '失败' + (it.err ? '：' + it.err : '');
   return fmtSize(it.file.size);
 }
 const PQ_X = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6.6 6.6l10.8 10.8M17.4 6.6 6.6 17.4"/></svg>';
 const PQ_RETRY = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19.2 12a7.2 7.2 0 1 1-2.1-5.1"/><path d="M19.6 4.4v4.3h-4.3"/></svg>';
+const PQ_PAUSE = '<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><rect x="7" y="5.6" width="3.4" height="12.8" rx="1.1"/><rect x="13.6" y="5.6" width="3.4" height="12.8" rx="1.1"/></svg>';
+const PQ_PLAY = '<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M8.4 5.6c0-.8.9-1.3 1.6-.9l8.7 6.4c.6.4.6 1.4 0 1.8l-8.7 6.4c-.7.4-1.6-.1-1.6-.9z"/></svg>';
 function itemHTML(it) {
-  const cls = it.status === 'sending' ? ' sending'
+  const sending = it.status === 'sending';
+  const cls = sending ? (it.paused ? ' paused' : ' sending')
             : it.status === 'fail' ? ' err'
             : it.status === 'done' ? ' done' : '';
   const sCls = it.status === 'done' ? ' ok' : it.status === 'fail' ? ' err' : '';
   const ext = String(it.file.name || '').split('.').pop().toUpperCase().slice(0, 4) || 'FILE';
   const retry = it.status === 'fail'
     ? '<button class="pq-btn" title="重试" aria-label="重试" onclick="retryOne(\'' + it.uid + '\')">' + PQ_RETRY + '</button>' : '';
+  // 暂停只有 P2P 发送才做得到：浏览器上传是一个 fetch，HTTP 没有“暂停一半”。
+  // 那种情况只给取消，不摆一个按了没反应的暂停键。
+  const pauseBtn = (sending && it.pausable)
+    ? '<button class="pq-btn" data-pause title="' + (it.paused ? '继续发送' : '暂停发送') +
+      '" aria-label="' + (it.paused ? '继续发送' : '暂停发送') +
+      '" onclick="togglePause(\'' + it.uid + '\')">' + (it.paused ? PQ_PLAY : PQ_PAUSE) + '</button>'
+    : '';
+  const xTitle = sending ? (it.pausable ? '取消发送' : '上传中，无法中断') : '移除';
   return '<div class="pq-item' + cls + '" data-uid="' + it.uid + '">' +
       '<span class="pq-ico">' + esc(ext) + '</span>' +
       '<span class="pq-meta">' +
         '<span class="pq-name" title="' + esc(it.file.name) + '">' + esc(it.file.name) + '</span>' +
         '<span class="pq-state' + sCls + '">' + esc(itemState(it)) + '</span>' +
       '</span>' +
-      retry +
-      '<button class="pq-btn" title="移除" aria-label="移除" onclick="removePending(\'' + it.uid + '\')">' + PQ_X + '</button>' +
+      retry + pauseBtn +
+      '<button class="pq-btn" title="' + xTitle + '" aria-label="' + xTitle +
+      '" onclick="cancelSend(\'' + it.uid + '\')">' + PQ_X + '</button>' +
       '<div class="pq-bar"><div class="pq-fill" style="width:' + (it.pct || 0) + '%"></div></div>' +
     '</div>';
 }
@@ -576,7 +634,9 @@ function renderPending() {
 function updateItemUI(it) {
   const el = pendingArea.querySelector('[data-uid="' + it.uid + '"]');
   if (!el) return;
-  el.className = 'pq-item' + (it.status === 'sending' ? ' sending' : it.status === 'fail' ? ' err' : '');
+  el.className = 'pq-item' + (it.status === 'sending'
+    ? (it.paused ? ' paused' : ' sending')
+    : it.status === 'fail' ? ' err' : '');
   const fill = el.querySelector('.pq-fill');
   if (fill) fill.style.width = (it.pct || 0) + '%';
   const st = el.querySelector('.pq-state');
@@ -584,14 +644,41 @@ function updateItemUI(it) {
     st.textContent = itemState(it);
     st.className = 'pq-state' + (it.status === 'done' ? ' ok' : it.status === 'fail' ? ' err' : '');
   }
+  // 暂停 / 继续图标按状态换，别为了换个图标整行重绘：每 90ms 一次的
+  // 进度刷新里重建 DOM，会让正在看的进度条闪一下
+  const pb = el.querySelector('[data-pause]');
+  if (pb) {
+    pb.innerHTML = it.paused ? PQ_PLAY : PQ_PAUSE;
+    pb.title = it.paused ? '继续发送' : '暂停发送';
+    pb.setAttribute('aria-label', pb.title);
+  }
 }
-function removePending(uid) {
-  const i = pendingFiles.findIndex(x => x.uid === uid);
-  if (i < 0) return;
-  if (pendingFiles[i].status === 'sending') { toast('正在发送，等这一项完成再移除'); return; }
-  pendingFiles.splice(i, 1);
+// 暂停 / 继续：只对 P2P 发送有效（分片循环每一片之间检查一次标志位）
+function togglePause(uid) {
+  const it = pendingFiles.find(x => x.uid === uid);
+  if (!it || it.status !== 'sending' || !it.pausable) return;
+  it.paused = !it.paused;
+  updateItemUI(it);
+}
+// 取消 / 移除：发送中的先置标志位，真正的移除由发送循环做，
+// 否则队列还在跑、行已经从界面上消失，后面会冒出一条“发送失败”的怪提示。
+// 房主那条路是一次 HTTP 上传，浏览器不给“停下来再从中间续”的能力，
+// 所以这里如实说明，不假装配一个按了没反应的按钮。
+function cancelSend(uid) {
+  const it = pendingFiles.find(x => x.uid === uid);
+  if (!it) return;
+  if (it.status === 'sending') {
+    if (!it.pausable) { toast('本机上传不能中途打断，几秒后会自动完成'); return; }
+    it.canceled = true;
+    it.paused = false;              // 暂停中按取消：先解开等待，循环才看得到 canceled
+    updateItemUI(it);
+    return;
+  }
+  const i = pendingFiles.indexOf(it);
+  if (i >= 0) pendingFiles.splice(i, 1);
   renderPending();
 }
+function removePending(uid) { cancelSend(uid); }
 function clearDone() {
   pendingFiles = pendingFiles.filter(x => x.status !== 'done');
   renderPending();
@@ -600,6 +687,7 @@ function retryOne(uid) {
   const it = pendingFiles.find(x => x.uid === uid);
   if (!it || it.status === 'sending') return;
   it.status = 'wait'; it.err = ''; it.pct = 0; it.speed = 0;
+  it.canceled = false; it.paused = false;   // 重试就是重新来一遍
   updateItemUI(it);
   sendAll();
 }
